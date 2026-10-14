@@ -7,6 +7,7 @@ import {
 } from '../utils/theme'
 import { parseCloseAction, type CloseAction } from '../utils/shellState'
 import { EMOJI_BIG_DEFAULT } from '../utils/emojiSize'
+import { GROUP_BADGE_DEFAULT } from '../utils/groupBadgePref'
 
 /**
  * 界面偏好（R14b 起：主题；R18 起：关闭窗口语义）—— 一个 hook 管全部偏好。
@@ -53,6 +54,7 @@ export function usePrefs() {
         theme: 'light', close_action: 'ask',
         widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
         vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
+        group_badge: GROUP_BADGE_DEFAULT,
         ...r.values,
       })
       setSpecs(r.specs ?? [])

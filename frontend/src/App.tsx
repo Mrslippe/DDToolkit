@@ -14,6 +14,7 @@ import type { AgreementState } from './api/types'
 import { useIsMaximized } from './hooks/useIsMaximized'
 import { clearShellState, loadShellState, shouldRestoreFromTray } from './utils/shellState'
 import { useEmojiBigSize } from './utils/emojiSize'
+import { useGroupBadge } from './utils/groupBadgePref'
 import './styles/layout.css'
 import './styles/status-island.css'
 
@@ -29,6 +30,9 @@ export default function App() {
   /* 大表情尺寸（2026-10-14，`devlog/486`）：读一次用户偏好 → 写到根元素的 CSS 变量。
      挂在壳层**而不是**设置窗/详情页：它影响所有渲染正文的地方，必须全局一致。 */
   useEmojiBigSize()
+  /* 企划徽章的显示开关（2026-10-14，用户口径：做进设置里、默认关）：同一个位置读一次偏好 →
+     写到 `<html data-group-badge>`，左栏那一列由 CSS 决定显不显示。 */
+  useGroupBadge()
   // 最大化时给 html 挂 window-maximized 类，壳层圆角随之取消
   useEffect(() => {
     document.documentElement.classList.toggle('window-maximized', isMax)

@@ -29,6 +29,7 @@ import type {
 } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { applyEmojiBigSize, clampEmojiBig } from '../utils/emojiSize'
+import { GROUP_BADGE_DEFAULT, applyGroupBadge } from '../utils/groupBadgePref'
 import { PostTextInline, seedEmojiCache } from './common/PostText'
 
 /** 后端 `/emoji/sample` 给的一枚示例表情（`devlog/487`） */
@@ -529,8 +530,27 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
-  /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */
-  const onNavKey = (e: React.KeyboardEvent) => {
+  /**
+   * 企划徽章的显示开关（2026-10-14，用户口径：做进设置里、**默认关**）。
+   *
+   * 与 `pickEmojiBig` 同一套路：不只是记下来，还要**立刻改界面** —— `applyGroupBadge`
+   * 给根元素挂 `data-group-badge`，CSS 据此把整个徽章列 `display:none`。
+   * ⚠️ 落库失败要**把开关也退回去**：否则界面显示"开"、重启又变回"关"，
+   *    用户会以为"设置没保存"（其实连"看着生效了"都是假的）。
+   */
+  const pickGroupBadge = async (next: string) => {
+    setThemeError(null)
+    const prev = prefs.values.group_badge ?? GROUP_BADGE_DEFAULT
+    applyGroupBadge(next)
+    try {
+      await prefs.setPref('group_badge', next)
+    } catch (e) {
+      applyGroupBadge(prev)
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */  const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
     let next = i
     if (e.key === 'ArrowDown') next = Math.min(nav.length - 1, i + 1)
@@ -904,6 +924,40 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                   {/* 小窗三项开关（`widget_enabled` / `_click_through` / `_hide_fullscreen`）
                       随小窗整窗退役一起删掉（2026-10-01）。后端偏好键仍在（数据层留着以后
                       接线），但界面不再给出入口 —— 没有窗口可开时，这个开关只会骗人。 */}
+
+                  {/* 企划徽章的显示开关（2026-10-14，用户口径：「把企划图标显示开关做到设置里」，
+                      并明确**默认关**）。形态用 `.aps-switch`（用户说的是"开关"，而且这是个二值偏好）
+                      —— 取值仍是后端下发的 `options`，界面不写死 key。
+                      ⚠️ 与其它偏好**不同的一点**：它要**立刻改界面**（`applyGroupBadge` 给根元素挂
+                      `data-group-badge`，CSS 据此整块隐藏），落库失败要把开关也退回去。 */}
+                  {prefs.specOf('group_badge') && (() => {
+                    const sp = prefs.specOf('group_badge')!
+                    const on = prefs.values.group_badge === 'on'
+                    return (
+                      <div className="aps-row" data-setting="group_badge">
+                        <div className="aps-row-main">
+                          <span className="aps-label">{sp.label}</span>
+                          <span className="aps-note">{sp.note}</span>
+                        </div>
+                        <div className="aps-row-ctl">
+                          <button
+                            type="button"
+                            id="aps-group_badge"
+                            className={`aps-switch${on ? ' on' : ''}`}
+                            data-group-badge-switch="1"
+                            data-value={on ? '1' : '0'}
+                            role="switch"
+                            aria-checked={on}
+                            aria-label={sp.label}
+                            onClick={() => void pickGroupBadge(on ? 'off' : 'on')}
+                          >
+                            <i />
+                            {on ? '开' : '关'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
 

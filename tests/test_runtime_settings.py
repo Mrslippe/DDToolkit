@@ -572,6 +572,53 @@ def test_prefs_post_emoji_big_default_matches_the_frontend_fallback():
     assert "var(--post-emoji-big, 40px)" in css, "CSS 兜底值也得是 40px"
 
 
+def test_prefs_group_badge_defaults_off(client, db):
+    """企划徽章的显示开关（2026-10-14，用户口径：「把企划图标显示开关做到设置里」+ **默认关**）。
+
+    钉四件事：① 默认（`values` 与 `defaults`）都是 `off`；② spec 在「外观」组、两档（关闭/开启）；
+    ③ 白名单生效（怪值 400 且**不改脏**；空串 = 回默认）；④ 属于「外观」组
+    （探针逐字断言设置窗左侧只有 5 项，新开分组会当场红）。
+    """
+    body = client.get("/settings/prefs").json()
+    assert body["values"]["group_badge"] == "off"
+    assert body["defaults"]["group_badge"] == "off"
+    spec = [s for s in body["specs"] if s["key"] == "group_badge"]
+    assert spec, "后端没下发这个偏好 spec"
+    assert spec[0]["group"] == "外观"
+    assert [o["value"] for o in spec[0]["options"]] == ["off", "on"]
+    assert spec[0]["note"].strip(), "说明文案不能是空的（用户看不到这个开关是干什么的）"
+
+    for ok in ("off", "on"):
+        r = client.put("/settings/prefs", json={"values": {"group_badge": ok}})
+        assert r.status_code == 200, r.text
+        assert AppMetaRepo(db).get("prefs.group_badge") == ok
+    for bad in ("yes", "1", "ON", "open", " true"):
+        before = AppMetaRepo(db).get("prefs.group_badge")
+        r = client.put("/settings/prefs", json={"values": {"group_badge": bad}})
+        assert r.status_code == 400, f"{bad!r} 该被拒"
+        assert AppMetaRepo(db).get("prefs.group_badge") == before, "被改脏了"
+    r = client.put("/settings/prefs", json={"values": {"group_badge": ""}})
+    assert r.status_code == 200, r.text
+    assert AppMetaRepo(db).get("prefs.group_badge") is None, "空串 = 回默认（既有口径）"
+
+
+def test_prefs_group_badge_frontend_fallback_matches():
+    """前端兜底常量与后端默认必须一致（与 `post_emoji_big` 那条同一个理由）。
+
+    读不到后端时前端用自己那份兜底，而 CSS 的隐藏规则**只对 `off` 生效**（fail-open：
+    属性没挂上时徽章照常显示 = 改动前的老样子）—— 两边一漂，症状是
+    "设置里显示关、左栏却有徽章"这种只有肉眼能发现的错。
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    ts = (root / "frontend/src/utils/groupBadgePref.ts").read_text(encoding="utf-8")
+    assert re.search(r"GROUP_BADGE_DEFAULT\s*=\s*'off'", ts), "前端兜底值不是 off"
+    css = (root / "frontend/src/styles/layout.css").read_text(encoding="utf-8")
+    assert "html[data-group-badge='off']" in css, "CSS 里那条隐藏规则不见了"
+
+
 def test_user_facing_copy_has_no_markdown_markers():
     """后端下发的文案（label / unit / effect / note / why / option）是**纯文本**，
     前端原样渲染。

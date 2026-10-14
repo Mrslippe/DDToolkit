@@ -260,7 +260,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/settings` | 规格表（`specs`：默认/范围/单位/生效时机/当前值/是否改过）+ `readonly`（只读项**逐条带理由**）+ `info`（版本/数据目录/库/端口/迁移 head/日志/PID） |
 | PUT `/settings` | 部分更新：`{"values": {"KEY": 值}}`。白名单 + 类型 + 闭区间 + **跨字段**（上限 ≥ 下限）校验，任一不过 → **400**（detail 是中文原因，前端直接显示）；`null`/空串 = 删覆盖回默认。落库成功后才替换内存快照 |
 | POST `/settings/reset` | 全部恢复默认（删掉 `app_meta` 里所有 `settings.*` 行） |
-| GET `/settings/prefs` | 界面偏好（R14b：`theme`）+ 允许取值 + **当前能力说明**（"深色主题尚未实现…"由后端下发，界面不自己编）。每条 spec 还可带 **`kind`**：缺省是单选（`options`），`"range"` 是**滑杆**（带 `min/max/step/unit`，2026-10-14 起 —— `post_emoji_big`：大表情尺寸，默认 40，24–64 步 2） |
+| GET `/settings/prefs` | 界面偏好（R14b：`theme`）+ 允许取值 + **当前能力说明**（"深色主题尚未实现…"由后端下发，界面不自己编）。每条 spec 还可带 **`kind`**：缺省是单选（`options`），`"range"` 是**滑杆**（带 `min/max/step/unit`，2026-10-14 起 —— `post_emoji_big`：大表情尺寸，默认 40，24–64 步 2）。同批还加了 **`group_badge`**（左栏企划徽章显不显示，二值，**默认 `off`** —— 素材保持空缺，那一列默认不占那 54px） |
 | PUT `/settings/prefs` | 偏好部分更新（枚举白名单在后端：`light\|system`；`dark` 现在还写不进来 → 400；滑杆那种的**白名单就是它的每一个档位** ⇒ 越界/怪值同样 400）。`null`/空串 = 回默认。存 `app_meta` 的 `prefs.` 命名空间；库里存了白名单外的值 → 记 warning 并按默认值处理（**不覆盖用户数据、不让窗口打不开**） |
 | GET `/settings/agreement` | **用户协议（使用须知）闸门状态**（2026-10-06，`devlog/369`/`372`）：`{required, accepted, accepted_at, needed, app_version}` —— `required` 是**声明自己的版本**（`legal_notice.NOTICE_VERSION`，用生效日期，**不是应用版本**），`needed = accepted != required`。前端启动时取一次，`needed` 为真就**盖住整个应用**直到同意；设置 → 关于 那一栏也用它显示"同意到哪一版 / 何时同意" |
 | POST `/settings/agreement` | 记下"这一**声明**版本已同意"：`{"version": "2026-10-06"}`。**版本号必须正好是当次要求的那个**，否则 **400 且不改状态**（拿别的号来 = 想绕过闸门）；成功写 `app_meta` 的 `legal.accepted_version` / `legal.accepted_at` 并回新的状态。**幂等**（重复同意只刷新时刻） |

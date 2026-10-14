@@ -1187,6 +1187,16 @@ html.window-maximized body {
   display: none;
 }
 
+/* 企划徽章的显示开关（2026-10-14，用户口径：「把企划图标显示开关做到设置里」+ **默认关**）。
+   真源是后端 `/settings/prefs` 的 `group_badge`，由 `utils/groupBadgePref.ts` 写到
+   `<html data-group-badge="on|off">` 上（与 `--post-emoji-big` 同一套路：根元素 + CSS，不往 React 传）。
+   关掉时整块 `display:none` ⇒ **不占那 54px**，名字能占更宽。
+   ⚠️ 只对 `off` 写规则（不是"只在 on 时显示"）：属性没挂上时（首帧 / 后端读不到）**徽章照常显示**，
+   与这次改动之前的行为一致 —— 兜底要 fail-open 到"老样子"，不要 fail-closed 到"突然少了一列"。 */
+html[data-group-badge='off'] .vtuber-emblem {
+  display: none;
+}
+
 .vtuber-name-row {
   display: flex;
   /* 徽标整体居中于名字行（方案 C，2026-09-04）：pill 内部对齐见 .live-badge */
