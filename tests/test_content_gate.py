@@ -16,19 +16,31 @@ from app.services import capabilities, scheduler
 
 @pytest.fixture
 def logged_out(monkeypatch):
+    """**未登录**的前提 —— ⚠️ 两半都得造（2026-10-14 修 CI 时才看清）。
+
+    `capabilities` 的闸门读的是 `is_logged_in` **和** `needs_login()`：
+    前者动态读 `sessdata`/`bili_jct`（patch 属性即生效），后者读的是 `__init__` 里算好并
+    **缓存**下来的 `_needs_login`（`auth.py:151`）。只 patch 前两个的话 ——
+    本机 `.env` 里有真凭据 ⇒ 缓存本来就是 False ⇒ 用例**白捡绿灯**；
+    CI 上没有凭据 ⇒ 缓存是 True ⇒ 闸门不放行、用例红（2026-10-14 CI 连红两次就是这么来的）。
+    同类坑 `test_capabilities.py` 早踩过一次（那里从一开始就 patch 了缓存字段）。
+    """
     from app.services.auth import auth_manager
 
     monkeypatch.setattr(auth_manager, "sessdata", "")
     monkeypatch.setattr(auth_manager, "bili_jct", "")
+    monkeypatch.setattr(auth_manager, "_needs_login", True, raising=False)
     return auth_manager
 
 
 @pytest.fixture
 def logged_in(monkeypatch):
+    """**已登录**的前提（同上：两个动态字段 + 那个缓存字段，缺一半就是"本机永远绿"）。"""
     from app.services.auth import auth_manager
 
     monkeypatch.setattr(auth_manager, "sessdata", "s" * 20)
     monkeypatch.setattr(auth_manager, "bili_jct", "j" * 20)
+    monkeypatch.setattr(auth_manager, "_needs_login", False, raising=False)
     return auth_manager
 
 
