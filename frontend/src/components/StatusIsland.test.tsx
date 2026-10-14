@@ -564,11 +564,10 @@ describe('一键已读与自动已读的退场', () => {
     const flushed: string[] = []
     stubLayout(flushed)
     const a = message({ id: 'a', text: '第一条' })
-    // ⚠️ `createdAt` **必须错开**（原来这里 a 与 b 同为 `NOW`）：两条的排序键相等时，
-    //    `drawnGroups` 的 `[...live, ...mine]` 会把"已退场那条"排到活着的后面 ⇒
-    //    撤下 a 的那一拍**两行会换位**（都走 FLIP 的缓动），量到的 +40px 就成了"换位"，
-    //    而不是这条用例要钉的"a 走了 ⇒ b 顶上来"。（这版是老用例留下来的坑：
-    //    老口径下 a 当拍就浮起来、跳过 FLIP，所以那个换位看不见 —— 见最终报告的遗留点。）
+    // ⚠️ 这里 `createdAt` **故意错开**：本条用例钉的是"a 走了 ⇒ b 顶上来"这一下的位移量，
+    //    若两条排序键**打平**，"两行换位"也会走 FLIP 缓动，量到的 +40px 就变成"换位"而不是"补位"。
+    //    （打平本身**已由下面「排序键打平时不换位」那条单独钉住** —— 2026-10-14 修的，
+    //    在那之前这里只能靠错开 `createdAt` 绕开它。）
     const b = message({ id: 'b', text: '第二条', createdAt: NOW - 1000 })
     act(() => root.render(<StatusIsland notices={[a, b]} onAction={vi.fn()} now={NOW} />))
     const panel = openPanel()!
@@ -592,6 +591,54 @@ describe('一键已读与自动已读的退场', () => {
     act(() => root.render(<StatusIsland notices={[b]} onAction={vi.fn()} now={NOW + 1} />))
     expect(rowB().style.transform).toBe('')
     expect(rowB().style.transition).toBe('')
+  })
+})
+
+/**
+ * **排序键打平时不换位**（2026-10-14 修的 `devlog/378` 遗留项）。
+ *
+ * 根因：`drawnGroups` 把"活着的"与"已退场但还在屏幕上"两拨人拼起来重排
+ * （`[...live, ...mine]`），而 `sort` 是**稳定**的 ⇒ 两条排序键**打平**时
+ * （同 tier 且 `createdAt` 相同或缺失 —— 生产里少见，fixtures 与老后端会出现），
+ * 后拼进来的**退场那条被排到活着的后面** ⇒ 屏幕上两行**交换位置**，还都走 FLIP 缓动。
+ *
+ * 修法：打平时拿**上一拍的布局位置**（`geomRef` 的 `relTop`）当第二排序键 ——
+ * 即"保持它们在屏幕上的先后"。这条用例钉的就是"位置一个都不许动"。
+ */
+describe('排序键打平时不换位（2026-10-14）', () => {
+  it('★ 撤下上面那条之后，打平的两行**保持原位**（不许交换）', () => {
+    stubLayout()
+    // 两条**同组、同 tier、`createdAt` 完全相同** ⇒ 主键彻底打平
+    const a = message({ id: 'a', text: '第一条' })
+    const b = message({ id: 'b', text: '第二条' })
+    const onAction = render([a, b])
+    const panel = openPanel()!
+    const row = (id: string) =>
+      panel.querySelector<HTMLElement>(`.si-item[data-notice-id="${id}"]`)!
+    // 前提：a 在上、b 在下（正对照，免得下面那条空过）
+    expect([row('a').offsetTop, row('b').offsetTop]).toEqual([LIST_PAD, LIST_PAD + ROW_H])
+
+    // 撤下 a ⇒ 它进 `exiting` 但**还在屏幕上**，此刻两拨人拼起来重排
+    act(() => root.render(<StatusIsland notices={[b]} onAction={onAction} now={NOW} />))
+
+    expect(
+      [row('a').offsetTop, row('b').offsetTop],
+      '打平的两行换了位 —— 退场那条被拼到了活着的后面（没兜底就是这个结果）',
+    ).toEqual([LIST_PAD, LIST_PAD + ROW_H])
+    expect(row('a').classList.contains('is-sliding'), 'a 仍在场上滑（换位要在这段时间里看得见）')
+      .toBe(true)
+  })
+
+  it('第二排序键**不改变**主键的结论（不同 `createdAt` 时照旧按时间排）', () => {
+    stubLayout()
+    // 新的一条 `createdAt` 更近 ⇒ 主键就分出了先后，第二排序键不许插手
+    const older = message({ id: 'old', text: '旧的', createdAt: NOW - 5000 })
+    const newer = message({ id: 'new', text: '新的', createdAt: NOW })
+    render([older, newer])
+    const panel = openPanel()!
+    const order = [...panel.querySelectorAll<HTMLElement>('.si-item[data-notice-id]')]
+      .map((el) => el.getAttribute('data-notice-id'))
+    expect(order, '组内顺序被第二排序键搅了 —— 主键必须优先').toEqual(['new', 'old'])
   })
 })
 

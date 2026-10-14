@@ -166,17 +166,45 @@ interface Geom {
 }
 
 /**
- * 退场队列的**放行顺序**：**从上到下**（组序 `GROUP_ORDER` + 组内 `compareInGroup`）。
+ * **打平时的第二排序键**：上一拍的**布局位置**（`geomRef` 的快照）。
  *
- * ⚠️ 与 `drawnGroups` 必须用**同一把尺子**（同一个 `compareInGroup`）：不一致的话
+ * 为什么必须有它（`devlog/378` 记的遗留项，用户 2026-10-14 收口）：
+ * `drawnGroups` 把"活着的"与"已退场但还在屏幕上"两拨人拼起来重排（`[...live, ...mine]`），
+ * 而 `Array.prototype.sort` 是**稳定**的 ⇒ 两条排序键**打平**时（同 tier 且 `createdAt`
+ * 相同或缺失 —— 生产里少见，fixtures 与老后端会出现），后拼进来的**退场那条会被排到活着的后面**
+ * ⇒ 屏幕上**两行交换位置**，而且都走 FLIP 缓动，看得清清楚楚。
+ * 用上一拍的位置兜底之后，打平的两条**保持它们在屏幕上的先后**。
+ *
+ * 量不到（首帧 / 面板没开过）⇒ 返回 0（保持原序）：宁可不排序，也不要凭空造一个顺序。
+ */
+function tieByPrevTop(a: Row, b: Row, prev: Map<string, Geom>): number {
+  const ra = prev.get(a.id)?.relTop
+  const rb = prev.get(b.id)?.relTop
+  if (ra == null || rb == null) return 0
+  return ra - rb
+}
+
+/**
+ * **组内排序**（`drawnGroups` 与退场队列放行**共用同一把尺子**）：主键 `compareInGroup`，
+ * 打平由上一拍位置兜底（见 `tieByPrevTop`）。
+ *
+ * ⚠️ 只许有这一处分组内排序的实现 —— 两处各写一份的话，"第二条滑出去的"可能是屏幕上第三条。
+ */
+function orderedInGroup(rows: Row[], prev: Map<string, Geom>): Row[] {
+  return rows.slice().sort((a, b) => compareInGroup(a, b) || tieByPrevTop(a, b, prev))
+}
+
+/**
+ * 退场队列的**放行顺序**：**从上到下**（组序 `GROUP_ORDER` + 组内 `orderedInGroup`）。
+ *
+ * ⚠️ 与 `drawnGroups` 必须用**同一把尺子**（同一个 `orderedInGroup`）：不一致的话
  * "第二条滑出去的"可能是屏幕上第三条，观感立刻就散了。
  * ⚠️ 是模块级纯函数而不是组件内的闭包：泵那条 effect 声明在渲染体里那些 `const` 之前，
  * 放在组件里会变成"先用后定义"（能跑，但读起来像有坑）。
  */
-function queueOrder(rows: Row[]): Row[] {
-  return GROUP_ORDER.flatMap((g) => rows
-    .filter((r) => r.queued && groupOf(r) === g)
-    .sort(compareInGroup))
+function queueOrder(rows: Row[], prev: Map<string, Geom>): Row[] {
+  return GROUP_ORDER.flatMap((g) => orderedInGroup(
+    rows.filter((r) => r.queued && groupOf(r) === g), prev))
 }
 
 /**
@@ -512,7 +540,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    */
   useLayoutEffect(() => {
     if (pumpRef.current != null) return                    // 已经排好了 —— 别把它取消掉
-    const queue = queueOrder(rows)
+    const queue = queueOrder(rows, geomRef.current)
     if (queue.length === 0) return
     const first = queue[0]
     const start = () => {
@@ -835,7 +863,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    * 用的坐标（`exitTop`）**是相对它原来那个 `<ul>` 量的**，换个容器就整体错位
    * （整组只剩它一条时最明显 —— 兜底容器在面板最下面）。
    *
-   * ⚠️ 四拨人（活着的 / 排队中 / 滑出中 / 已让位）**必须按同一把尺子重排**（`compareInGroup`）：
+   * ⚠️ 四拨人（活着的 / 排队中 / 滑出中 / 已让位）**必须按同一把尺子重排**（`orderedInGroup`）：
    * 后面三拨已经**不是 live**、不再参与 `sectionNotices` 的排序，若不重排就会掉到
    * 组末尾 —— 观感是"点了全部已读，下面几条先跳个位置才开始滑"。这把尺子与
    * `sectionNotices` 用的是同一个导出函数（改一处即两处，不许各写一份）。
@@ -845,7 +873,9 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     const live: Row[] = s ? s.items : []
     const liveIds = new Set(live.map((n) => n.id))
     const mine = exiting.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
-    const rows = [...live, ...mine].sort(compareInGroup)
+    // 打平时靠**上一拍的布局位置**兜底（`tieByPrevTop`）：不兜底的话，退场那条会被拼到
+    // 活着的后面 ⇒ 两行当场换位（2026-10-14 修）
+    const rows = orderedInGroup([...live, ...mine], geomRef.current)
     return { group, label: s?.label ?? GROUP_LABEL[group], rows }
   })
 
