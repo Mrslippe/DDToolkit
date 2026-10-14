@@ -19,6 +19,7 @@
  * 按 A 路线决策「CSS 归属保持不动」，避免动到探针的选择器世界。
  */
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import type { CloudCell, CloudWord } from '../../utils/wordCloudLayout'
 import { MosaicPacker } from '../../utils/wordCloudLayout'
@@ -264,11 +265,20 @@ export default function MosaicCloud({
       {snap && snap.cells.length === 0 && (
         <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>
       )}
-      {tip && (
-        <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
-          {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
-        </span>
-      )}
+      {/* 词频 hover 提示：**必须 portal 到 `document.body`**（2026-10-14 用户报的
+          「胶囊和鼠标位置对不上」）。根因不是坐标算错，而是 `position: fixed` 的**包含块**
+          被祖先抢走了：Radix 的 `DialogContent` 上挂着 `translate-x-[-50%] translate-y-[-50%]`
+          与 `zoom-in-95` 动画，凡是带 transform/translate 的祖先都会成为 fixed 元素的包含块
+          ⇒ 这里的 `left/top`（视口坐标，来自 `clientX/clientY`）被当成"相对面板左上角"，
+          于是整体偏了一个面板原点。挂到 body 之后，任何容器怎么变换都不再影响它。
+          ⚠️ 别改回内联渲染 —— 那会让这个 bug 原样复活。 */}
+      {tip &&
+        createPortal(
+          <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
+            {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
+          </span>,
+          document.body,
+        )}
     </div>
   )
 }

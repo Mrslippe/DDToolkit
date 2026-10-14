@@ -4863,7 +4863,11 @@ img.hero-avatar {
 .lc-dlg-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* ⚠️ **不能**用 `space-between`（2026-10-14 用户报的居中 bug）：头部有**三个**孩子时
+     （标题组 / 铅笔 / ×），`space-between` 会把**中间那个**（铅笔）推到正中央 ——
+     截图里它就是孤零零悬在标题与 × 之间。改成"只有关闭钮往右推"
+     （见 `.lc-dlg-close` 的 `margin-left:auto`），铅笔于是紧接标题组。 */
+  justify-content: flex-start;
   gap: 10px;
 }
 
@@ -4895,6 +4899,9 @@ img.hero-avatar {
 
 .lc-dlg-close {
   flex: none;
+  /* 头部里**只有它**靠右（配合 `.lc-dlg-head` 的 `flex-start`，见那条注释：
+     铅笔要跟着标题，不许被 `space-between` 推到中间） */
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5624,7 +5631,13 @@ img.hero-avatar {
   cursor: pointer;
 }
 
-/* 词频 hover 提示（跟随鼠标） */
+/* 词频 hover 提示（跟随鼠标）。
+   ⚠️ `position: fixed` 的**包含块不一定是视口** —— 任何带 transform / translate /
+   filter 的祖先都会把它抢走。Radix 的 `DialogContent` 上挂着
+   `translate-x-[-50%] translate-y-[-50%]` 与 `zoom-in-95` 动画 ⇒ 这个 fixed 元素其实以
+   **面板左上角**为原点，而 `left/top` 来自 `clientX/clientY`（视口坐标）⇒ 整体偏一个面板原点
+   （2026-10-14 用户报的「胶囊和鼠标位置对不上」）。
+   解法是**把它挂到 `document.body`**（`MosaicCloud` 里走 `createPortal`），不是去改坐标换算。 */
 .lc-dlg-cloud-tip {
   position: fixed;
   z-index: 70;

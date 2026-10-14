@@ -1050,7 +1050,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 | └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px·宽度自适应**（ResizeObserver 实测内容区宽，user 2026-09-07：池子宽度不对→实测）；**增量摊铺加权 Voronoi 拼贴**（2026-09-07 user 定案）：power diagram λ 权重（面积∝词频）+ **力导向站点摊铺**（质量感 collide q=0.2、中心引力、矩形软墙，位置直推无速度积分）+ **逐个入池**（频次降序每 150ms 一个，站点=当前最大空腔）；**容器轮廓圆角**（roundedRectPolygon 16px 圆角边界）；全部入场后 alpha 冷却 → 静止即停 |
 | └ 破泡 | `removeWord` + 局部松弛 | 点击词 → cell **立即消失**（纯同步删，无卡顿）→ **局部闭合**（node 验证：缺口处 2 词挤入、远处位移 avg 6.5px/max 16px、偏差 15%、单调 100%）：α=0.15 起步 + kCenter=0（力场几乎不动、停中心引力）——**λ 修正把缺口面积重新分配给相邻 cell**（power 边界"鼓胀"塞住缺口，站点只微挪）；远处纹丝不动；段头「已破泡 N · 恢复」胶囊一键还原 |
 | └ 面积比例 | `utils/wordCloudLayout.ts` | 目标面积 = count 比例 **保底 0.05%**（画布 0.05%，小词仍可见分级）→ 归一化；**松弛手感**（user 定案 2026-09-07）：β=0.1（λ 面积修正慢速蠕动）+ α=0.994 慢冷却 + 碰撞质量感 q=0.2（大泡稳、小泡让）——node 验证：单调性 100%、终态偏差 2.01%、填满 100%、有效帧 <20ms |
-| └ 词云配色 | `CLOUD_COLORS` | **浅色填充**（10 色浅粉系：#ffc9c4/#a5e6ff/#dccff7/#bee9ec/#ffd5b8/#fff2a0/#fda5ff/#b2f3c0/#ffdfe8/#d8e8ff）+ **同色系深字**（HSL 压暗同色相 L=0.28，`cloudWordText`）——user 2026-09-07：填充浅色、文字深色；白缝 `stroke=--c-bg-card` 2px；hover：当前格 1/其余 0.4；hover 提示 = 黑玻璃胶囊「词 · N 次」（`.lc-dlg-cloud-tip`） |
+| └ 词云配色 | `CLOUD_COLORS` | **浅色填充**（10 色浅粉系：#ffc9c4/#a5e6ff/#dccff7/#bee9ec/#ffd5b8/#fff2a0/#fda5ff/#b2f3c0/#ffdfe8/#d8e8ff）+ **同色系深字**（HSL 压暗同色相 L=0.28，`cloudWordText`）——user 2026-09-07：填充浅色、文字深色；白缝 `stroke=--c-bg-card` 2px；hover：当前格 1/其余 0.4；hover 提示 = 黑玻璃胶囊「词 · N 次」（`.lc-dlg-cloud-tip`，**portal 挂到 `body`** —— 它是 `position: fixed`，而 `fixed` 的包含块会被 `DialogContent` 的 `translate-x/y-[-50%]` 抢走，`clientX/clientY` 于是被当成"相对面板"，2026-10-14 修） |
 | └ 数据 | `detail.data.danmaku.top_words` | 后端 `LiveDanmakuInfo.top_words`（top40 带次数）；前 40 按 count 降序；无词=「暂无热词数据」 |
 | 直播动态 | `.lc-dlg-evts` | 满宽区卡：**B 组事件**（type 7=直播中止·灰点 / 8=直播继续·粉点，`send_date` HH:MM）+ **A 组在线峰值高光**（`metrics.peaks` 前 3，「N 人在线」，金点）；空=「暂无动态数据」。**R36 起内容套 `.lc-dlg-slot--evts`（`min-height:150px`）**，未到位 = 三行骨架（点 + 两条 `.lc-skel`） |
 | 内容分析 | `.lc-dlg-sec--full` | 预留区块：`analysis.summary` 有值显示，否则「接口已预留（内容分析服务接入后展示）」——**接口字段已就位，服务未接入** |
@@ -1060,7 +1060,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 | 位置 | 类名 | 说明 |
 |---|---|---|
 | 头部标记 | `.lc-pop-manual` | 与「已校正」（`.lc-pop-corr`）同规格同位置（10px + `--c-accent`）：`manual===true` 时显示「手动记录」——判据是**服务端算的** `manual` 字段（前端不自己拆 `source` 组合串） |
-| 头部按钮 | `.lc-dlg-edit` | 铅笔，26×26 r8，与关闭钮同配方、在它左侧（`title`：手动场次「编辑这一场」/ 自动场次「补录播地址」）⇒ 打开 B4 弹窗 |
+| 头部按钮 | `.lc-dlg-edit` | 铅笔，26×26 r8，与关闭钮同配方、**紧接标题组之后**（不是右侧动作组 —— 2026-10-14 用户报的居中 bug 就是头部三个孩子撞上 `space-between`，中间那个被推到正中央；现在只有 `.lc-dlg-close` 靠 `margin-left:auto` 单独靠右）（`title`：手动场次「编辑这一场」/ 自动场次「补录播地址」）⇒ 打开 B4 弹窗 |
 | 封面录播钮 | `.lc-dlg-vodbtn`（`data-vod-action="add"｜"play"`） | **2026-10-13（用户 3.2）**：封面**左上角**的悬浮钮，30×30 圆形浮片。**静止 `opacity: 0`、`.lc-dlg-cover:hover` 或自身 `:focus-visible` 才显形**（只做 hover 等于把键盘用户关在门外）；无 `vod_url` ⇒ `＋` 开「添加录播」小窗（B3b），有 ⇒ `▶` 播放。两个回调都不传时**不渲染**（不摆点了没反应的图标） |
 | ~~右列「录播」行~~ | ~~`.lc-dlg-row` + `.lc-dlg-vod`~~ | **2026-10-13 退役**（用户 3.1：「录播文字行可以不需要」）—— 地址不再作为链接出现在右列，`.lc-dlg-vod` 这条 CSS 规则也一并删掉（posts.css 里留了一行墓碑注释）。原来挤在这一行里的三件事（填地址 / 找录播 / 记住录播号）全部收进 B3b 那个小窗 |
 

@@ -111,6 +111,7 @@ function render(detail: DetailState | null,
                   onSessionChanged?: () => void
                   onAddVod?: (s: LiveSession) => void
                   onPlayVod?: (s: LiveSession) => void
+                  onEditSession?: (s: LiveSession) => void
                 } = {}) {
   act(() => {
     root.render(
@@ -459,5 +460,41 @@ describe('弹幕数：只显示标准数，原始记录条数不上界面', () =
                                     raw_record_count: 39316 })
     expect(text).not.toContain('弹幕数（上游）')
     expect(text).not.toContain('39,316')
+  })
+})
+
+/**
+ * ⑦ 头部三件套的排布（2026-10-14 用户报：「日期格详情页红框中的编辑图标」要**紧接在左侧标题之后**）。
+ *
+ * **根因在 CSS，不在 DOM**：`.lc-dlg-head` 用了 `justify-content: space-between`，而头部有
+ * **三个**孩子（标题组 / 铅笔 / ×）⇒ `space-between` 把**中间那个**（铅笔）推到了正中央，
+ * 于是它孤零零悬在标题与 × 之间。只有两个孩子时（不给 `onEditSession`）看不出来 ——
+ * 这就是它一直没被发现的原因。
+ *
+ * jsdom 不加载 `posts.css`，所以这里读**真文件**断言（与 ⑥ 同一套办法：能测的测行为，
+ * 测不到的就把"声明本身"钉住，别退化成"没人看"）。
+ */
+describe('⑦ 头部排布：铅笔紧接标题（2026-10-14 用户报的居中 bug）', () => {
+  const css = readFileSync(resolve(__dirname, '../../styles/posts.css'), 'utf8')
+  /** 取某条规则整块（要求选择器后面直接跟 `{`，免得匹配到 `.lc-dlg-head-zone` 那类同前缀） */
+  const ruleOf = (sel: string) =>
+    css.match(new RegExp(`\\${sel}\\s*\\{[^}]*\\}`))?.[0] ?? ''
+
+  it('`.lc-dlg-head` 不许用 `space-between`（三个孩子时它把铅笔推到正中央）', () => {
+    const head = ruleOf('.lc-dlg-head')
+    expect(head, '`.lc-dlg-head` 规则没找到（选择器改名了？）').toBeTruthy()
+    expect(head).not.toMatch(/justify-content:\s*space-between/)
+  })
+
+  it('只有关闭钮靠右（`margin-left: auto`），铅笔因此跟着标题', () => {
+    expect(ruleOf('.lc-dlg-close'), '关闭钮没靠右 ⇒ 头部会散开').toMatch(/margin-left:\s*auto/)
+  })
+
+  it('DOM 顺序：标题 → 铅笔 → ×（铅笔属于标题那一组，不是右侧动作组）', () => {
+    render(detailOf(), { onEditSession: () => {} })
+    const head = panel()!.querySelector('.lc-dlg-head')!
+    expect([...head.children].map((el) => (el as HTMLElement).className)).toEqual([
+      'lc-dlg-title', 'lc-dlg-edit', 'lc-dlg-close',
+    ])
   })
 })
