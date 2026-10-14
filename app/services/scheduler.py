@@ -24,6 +24,7 @@ from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
                                          record_field_change)
 from app.services.vtuber_avatars import record_avatar_version
 from app.services import assets
+from app.services import bili_image
 from app.services import media_pin
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
@@ -937,8 +938,11 @@ async def _pin_account_covers(db: Session, acc: Account,
             key = assets.key_of(u)
             if not key or key in by_key:
                 continue                      # 已固化 ⇒ 不发请求（这是收益本身）
+            # 取数用**带规格的地址**（B 站图床降到 0.1%–14%，见 `bili_image` 的模块头），
+            # 但资产键与 `posts.cover_url` 仍按**原 URL** —— 换规格不能让已固化的封面失配。
+            fetch_url = bili_image.cover_fetch_url(u)
             try:
-                resp = await client.get(u)
+                resp = await client.get(fetch_url)
             except Exception as e:            # noqa: BLE001 —— 单张失败不该中断固化
                 logger.warning(f"封面固化下载失败 post#{post_id}: {type(e).__name__}: {e}")
                 continue

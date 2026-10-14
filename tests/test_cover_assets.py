@@ -192,7 +192,10 @@ def test_only_unarchived_posts_are_pinned(db, data_dir):
     client = _CountingClient()
 
     assert asyncio.run(sch._pin_account_covers(db, acc, client=client)) == 1
-    assert client.calls == ["https://i0.hdslb.com/bfs/archive/new.jpg"]
+    # ⚠️ 下载地址**带图床规格**（2026-10-14，`bili_image`）：B 站图床原图动辄几 MB，
+    #    加 `@672w_378h.webp` 后实测降到 0.1%–14%。判据是"发出去的那条"，
+    #    而资产键仍按**原 URL**（见下面那条专门的用例）。
+    assert client.calls == ["https://i0.hdslb.com/bfs/archive/new.jpg@672w_378h.webp"]
 
 
 def test_setting_off_sends_no_request(db, data_dir, monkeypatch):
@@ -212,13 +215,48 @@ def test_setting_off_sends_no_request(db, data_dir, monkeypatch):
     assert len(client.calls) == 1
 
 
+def test_bili_covers_are_fetched_with_the_spec(db, data_dir):
+    """⑦ B 站图床：**下载地址带规格**，而资产键与封面 URL 仍是**原文**。
+
+    两半都要钉：只钉"发了带规格的请求"是不够的 —— 万一键也跟着规格走，
+    已固化的封面会全部失配，列表里每一张都要重新下载一遍（收益直接归零）。
+    """
+    acc = _mk_acc(db)
+    original = "https://i0.hdslb.com/bfs/archive/spec.jpg"
+    _mk_post(db, acc, "p1", original)
+    client = _CountingClient()
+
+    assert asyncio.run(sch._pin_account_covers(db, acc, client=client)) == 1
+    assert client.calls == [original + "@672w_378h.webp"], "下载没走规格地址"
+
+    row = db.query(LocalAsset).filter(LocalAsset.kind == assets.KIND_COVER).one()
+    assert row.key == assets.key_of(original), "资产键跟着规格走了 ⇒ 列表按原 URL 查不到这张"
+    # 渲染侧就是按**原 URL** 查的（`routers/vtuber._post_outs` 那条批量派生）
+    assert assets.key_of(original) in assets.lookup_keys(
+        db, assets.KIND_COVER, [assets.key_of(original)]), "按原 URL 查不到已固化的封面"
+    # 第二轮：规格不影响"稳定键命中 ⇒ 零请求"
+    assert asyncio.run(sch._pin_account_covers(db, acc, client=client)) == 0
+    assert len(client.calls) == 1, "第二轮又下载了一遍 —— 规格后缀把稳定键弄变了"
+
+
+def test_non_bili_covers_keep_their_url(db, data_dir):
+    """⑦′ 非白名单图床（微博）**不加**规格 —— 加了也没用，只多一个没意义的后缀。"""
+    acc = _mk_acc(db)
+    url = "https://wx1.sinaimg.cn/large/0089C3d5gy1i1f7tnlcyej30j20vkgon.jpg"
+    _mk_post(db, acc, "p1", url)
+    client = _CountingClient()
+
+    assert asyncio.run(sch._pin_account_covers(db, acc, client=client)) == 1
+    assert client.calls == [url]
+
+
 def test_download_failure_does_not_break_the_round(db, data_dir):
     """单张失败只跳过（固化是顺路的小事，不许把整轮抓取拖垮）。"""
 
     class _Flaky(_CountingClient):
         async def get(self, url: str) -> _Resp:
             self.calls.append(url)
-            if url.endswith("bad.jpg"):
+            if "bad.jpg" in url:          # ⚠️ 不能用 endswith：下载地址现在带图床规格后缀
                 raise RuntimeError("图床挂了")
             return _Resp(200, b"COVER")
 
