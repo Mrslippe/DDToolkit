@@ -389,6 +389,9 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
     ⚠️ **构建必须跑在锁环境里**：`scripts/build_backend.py` 会拒绝在非 `.venv` 里构建，
     并用 `uv sync --frozen --dry-run` 复核"环境 = 锁文件"。原因是它**不装任何依赖**，
     用"当前解释器里装了什么"去冻结 exe —— 没有这道守卫时，发布产物装的是"跑构建那天的版本"。
+    ⚠️ **跑之前先把 venv 放进 PATH**：`npm run release` 里那三个脚本调的是**裸 `python`**，
+    而 PATH 上通常是系统 Python ⇒ 守卫当场拒绝、`build` 步骤 **1 秒就退**（2026-10-14 实测踩到）。
+    最省事的喂法：`$env:PATH = "<仓库>\.venv\Scripts;$env:PATH"`。
     ⚠️ **新增运行依赖必须显式声明**：`python-multipart` 此前一直被隐式满足（系统 Python 里
     别的包顺带装了它），缺失时 FastAPI 对 `UploadFile` / `Form(...)` 路由**注册即抛**
     `RuntimeError` ⇒ 4 个测试文件直接收集失败。**"在开发机能跑"推不出"依赖声明是完整的"。**
