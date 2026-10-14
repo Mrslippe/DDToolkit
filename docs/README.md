@@ -24,8 +24,7 @@ budget: 60
 | `design/` | 设计资产 + 带日期的专题调研（过期不误导，故不放顶层）。**专题子目录**（`pills/` `status-island/` `widget-preview/` `vtuber-sidebar/` …）里放该类东西的**一切**：调研 md + 截图 png + **`.html` 示例稿**。<br>⚠️ **示例稿一律放这儿**（2026-10-07 用户口径）：`docs/design/<主题>/<名字>.html`；它是**给人看的静态稿，不是产品代码** —— 不参与构建、不进任何门禁，所以**不许**被 `src/` 引用。线上实现永远在 `frontend/src/`，示例稿里请写清它对应哪条规则（同 `widget-preview/direction.html` 那两件的先例） |
 | `releases/` `reference/` `tools/` `diagrams/` | 归档、外部存档与生成物 |
 
-> ⚠️ **子目录正在迁移中**（2026-09-30 起按批次搬）。迁移完成前，尚未搬走的文档
-> 仍留在顶层 —— 以实际存在的文件为准，别按上表硬猜路径。
+> ⚠️ **子目录仍在按批次迁移**（2026-09-30 起）：迁移完成前，未搬走的文档仍留在顶层 —— 以实际存在的文件为准，别按上表硬猜路径。
 
 > `releases/` 归档：`v0.9.1.md` / `v0.9.2.md` / `v0.9.3.md` / `v0.9.9.md` / `v1.0.0.md` / `v1.0.1.md` / `v1.0.2.md` / `v1.1.0.md` / `v1.1.1.md` / `v1.2.0.md`
 > —— 发布时被 `scripts/upload_release_assets.py` 读取；**新增一份要补这一行**（`scripts/doc_check.py` 查这条）。
@@ -42,18 +41,15 @@ budget: 60
 | 现在要干什么、卡在哪 | `TODO.md` |
 | 打包发版 | `ops/RELEASE.md` |
 
-> 「按需求分级 → **只读这几份**」的路由表由 `DEV-LOOP.md` 维护，本文件不复述
-> （复述一份就多一个漂移点，理由见 `DEV-LOOP.md` §0.4）。
+> 「按需求分级 → **只读这几份**」的路由表由 `DEV-LOOP.md` 维护（复述一份就多一个漂移点，理由见其 §0.4）。
 
 ## 3. 文档纪律
 
-1. **每份文档开头必须有头块**：`class` / `scope` / `not-scope` / `sot` / `verify` /
-   `budget` / `retire-when`。**字段定义、各 `class` 的必填项与行数上限的真源是
-   `scripts/docs_gate.py`** —— 本文件不复述那张表。
-2. **数字三分法**：测量值**不写死**（指向 `scripts/gen_doc_numbers.py --list`）；
-   定义值照写（它就是规格）；带日期的快照必须标日期。
+1. **每份文档开头必须有头块**：`class` / `scope` / `not-scope` / `sot` / `verify` / `budget` /
+   `retire-when`。**字段定义、各 `class` 的必填项与行数上限的真源是 `scripts/docs_gate.py`**。
+2. **数字三分法**：测量值**不写死**（指向 `scripts/gen_doc_numbers.py --list`）；定义值照写
+   （它就是规格）；带日期的快照必须标日期。
 3. **能引用就别复述**，并用 `not-scope` 写清本篇**不**写什么、该去哪份找。
 
-以上三条由 `python scripts/docs_gate.py` 机器判（秒级，已进 C 档门禁）；
-索引与版本号的漂移由 `python scripts/doc_check.py` 判。两者分工：**后者管"数字漂没漂"，
-前者管"文档的声明成不成立"。** 新增/搬动文档后跑一次即可。
+三条由 `python scripts/docs_gate.py` 机器判（秒级，已进 C 档）；索引与版本号的漂移由
+`python scripts/doc_check.py` 判 —— **后者管"数字漂没漂"，前者管"声明成不成立"**。

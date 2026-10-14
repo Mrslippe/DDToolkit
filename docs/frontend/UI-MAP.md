@@ -470,6 +470,7 @@ keyframes 只会重启**）。
 | 搜索框 | `.list-search-wrap` 内 `.list-search` | **240×25 浮片**，放大镜 10×10 居左、placeholder 12px；`/` 键聚焦；focus 粉内描边 |
 
 | 直播过滤 | shadcn `SelectTrigger.input list-filter-btn [&>svg]:size-2.5` | **89×25 浮片**；选项 全部/直播中/未直播（在线实时过滤） |
+| 排序（六档） | 筛选浮窗内的一组选项（`.filter-pop` 那一族） | **需求 5（`devlog/413`–`415`）**：自定义 / 名称 / 粉丝 / 开播时间…共六档；**自定义档**=按住条目拖动重排（落库），其余档是只读排序视图 ⇒ 切走再切回来不丢拖拽结果。偏好**走 `localStorage`**（`utils/vtuberSort.ts`，与 `playerPrefs` 同套路：纯本机显示习惯，不动后端），存档与迁移口径见 `tests/` 里那组用例 |
 | 拉取键 | `.list-pull-btn`（`Download` 16px，**44×25** 浮片） | 打开 BatchFetchDialog |
 
 **列表体**
@@ -1510,16 +1511,6 @@ DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段
 | `.profile-setting`（设定集正文） | 🔶 全局 webkit | 200px 高局部滚动，全局样式兜底可接受 |
 
 ---
-
-## 设计迭代速查（本会话沉淀）
-
-- 设计稿代码为**参考规格**，落地以 tokens/layout 为准；「微调」直接口播，无需回设计工具
-- 浮动小元件（浮片/光条/药丸）豁免全局方形规则；交互态统一「无描边、背景填充」语言
-- 图标一律 lucide（视觉尺寸按设计稿实测覆盖 className），自定义图形进 `assets/icons/`
-- 窗口美学：DWM 系统圆角/阴影已关闭，只有前端 4px 一套弧线
-- **滚动条**：见 F 节——新增滚动容器先问「是否主滚动容器、能否 OverlayScroll」，数值询问用户
-- **图表**：图表一律 ECharts 6.1 按需注册（canvas 自绘），Shadcn Chart/recharts 已退役（chart.tsx/`--chart-*` 已清）；**图表色值集中在 `utils/chartTheme.ts`**（tokens 同源注释），新图表从那里引色，禁止在组件里手写色值
-- **词云**：增量摊铺加权 Voronoi 拼贴（`utils/wordCloudLayout.ts`：力导向站点滑动 + λ 面积精确）；react-wordcloud 已退役（其 d3 依赖已随移除）
 
 ## 前端不变量
 

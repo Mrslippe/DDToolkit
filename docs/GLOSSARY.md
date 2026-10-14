@@ -24,7 +24,7 @@ budget: 300
 | **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景/**企划**） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
 | **企划归属 / group**（需求 6，B3，`devlog/457`） | 这个 V 属于哪个企划/公会（`VirtuaReal` / `NIJISANJI` / `虚研社`…）—— 左栏名字右边的徽章显示它 | `vtubers.group_name` / `group_uuid`（f014）；解析与回填 `services/groups.py`；界面 `utils/groupBadge.ts` + `.vtuber-emblem` | 数据源：**vdb.vtbs.moe**（随包候选池快照，唯一同时给企划名与稳定 UUID）→ 本地 `thirdparty_vtubers` 兜底；**B 站官方没有这个字段**；写入**只填空、不覆盖**。⚠️ **展示口径 = `vtuberGroup()`**（手填 `faction` 优先 → 否则 `group_name` → **都没有则「个人势」**，2026-10-13 用户口径）；**编辑口径 = `vtuberGroupField()`**（同上但空 ⇒ 空串 = 未设置）—— 两个函数并存是**故意的**：档案设置里"没设过"与"设成个人势"必须分得开（`devlog/458` 修的是"两处各读一个字段"） |
 | **个人势**（2026-10-13，`devlog/481`） | **没有企划的 V 的统一归类**（用户口径：「没有企划的统一用『个人势』代替，也作为一个企划类型」） | `utils/groupBadge.ts::PERSONAL_GROUP` | 它在界面上是一个**正常取值**：徽章显示「个人势」、筛选弹窗里有这一枚 chip（点它筛出所有没有企划的 V）、图标素材同名单（slug = `个人势`）。⚠️ 它**不是**库里的一个字段值 —— 没有企划的 V 在库里 `group_name` 仍是空 |
-| **候选池 / pool**（需求 7，C2，`devlog/457`） | 随包的 VTuber 名册快照 `vtubers.csv`（约 9.6k 行），「添加 V」里搜人的本地来源 | `scripts/discover_vtubers.py` 生成；`app/services/pool.py` 读取与检索；`vtubers.meta.json` 是它的体检 | 主源 **vdb.vtbs.moe `list.json`**（**应用运行时不访问**）；跨平台账号只在 `extra_accounts` 里**展示**，不进检索池 |
+| **候选池 / pool**（需求 7，C2，`devlog/457`） | 离线待选 VTuber 索引：随包的名册快照 `vtubers.csv`（约 9.6k 行），「添加 V」里搜人的本地来源 | `scripts/discover_vtubers.py` 生成；`app/services/pool.py` 读取与检索（`GET /vtuber/pool/search`）；`vtubers.meta.json` 是它的体检 | 主源 **vdb.vtbs.moe `list.json`**（**应用运行时不访问**）；跨平台账号只在 `extra_accounts` 里**展示**，不进检索池；它是收录（adopt）的**池内**入口 —— R11 起不再是唯一入口，**索引来源不在池里**的要走池外通道（见下面「索引来源」「B 站直查」两行） |
 | **账号 / account** | V 在某平台的账号（昵称/签名/头像/粉丝数/直播字段） | `models/vtuber.py::Account`；`AccountRepo`；`services/platforms/` | 唯一键 `(platform, platform_uid)` |
 | **主账号 / primary account** | 每个 V 按 `PRIMARY_PLATFORM_ORDER`（bilibili > weibo）取的首个账号 | `scheduler._primary_accounts()` | **只用于第三方历史回填**（动态流已改为全部账号，见「动态名单」） |
 | **动态名单 / dynamics lane** | 动态流按平台分组的账号名单：**库里所有 V 的所有平台账号**各占一格；名单之间并行、**名单内部串行**，名单内间隔自适应摊平（R7，devlog/078） | `scheduler._dynamics_lanes()` / `_active_dynamics_lanes()` / `_lane_gap()` | 微博未登录时整条 weibo 名单跳过 |
@@ -52,7 +52,6 @@ budget: 300
 | **归档 / archive** | 早于 N 天的帖子不再参与抓取遍历 | `PostRepo.archive_before`；`scheduler.archive_old_posts` | `is_archived` |
 | **归档三态 / archived filter** | 列表页归档筛选：全部 / 仅未归档（`is_archived=false`）/ 仅已归档 | `PostFilterPop`（v0.9.9 P10-A 接线 `unarchived`） | 后端参数本就支持，此前前端只接了「仅已归档」 |
 | **时间范围 / date range** | 帖子发布时间过滤（`date_from`/`date_to`，本地日期串，`to` = 次日零点排他即含当天） | `utils/dateRange.ts`；`common/DateRangePicker.tsx` | 双月历 + 预设（量纲**含今天**），草稿制确认后生效 |
-| **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`，快照式名单） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的**池内**入口（R11 起不再是唯一入口）；**索引来源不在池里**，要走池外通道（见下） |
 | **索引来源 / index origin** | `thirdparty_vtubers`（danmakus 周级索引）命中、但 **`vtubers.csv` 里没有**的条目 —— 正是"池快照之后的新 V" | `GET /vtuber/pool/search` 返回项 `origin='index'` | 收录必须走池外通道（`source='bilibili'`）；标成 `pool` 会 404（devlog/083 §十一） |
 | **B 站直查 / bili search** | 池外收录通道：按 uid 精确查（`acc/info`）或按名称模糊搜（`wbi/search/type`） | `services/bili_search.py`；`GET /vtuber/bili/search` | **只在显式触发时**打上游（devlog/083）；搜不到 uid，uid 走精确通道；**未登录也能用**（匿名 WBI 签名，devlog/086） |
 | **能力矩阵 / capabilities** | 本机"未登录/已登录"两态下各能用什么；**四态** `full`/`degraded`/`requires_login`/`disabled` | `services/capabilities.py`；`GET /capabilities`；实测脚本 `scripts/capability_matrix.py` | 策略 vs 实测**双向契约**（`tests/test_capabilities.py`）：实测可用 ⇒ 不得标 requires_login；被 412 硬拒 ⇒ 必须标。⚠️ `disabled` = **我们自己把它关了**（有总开关的平台，如抖音），与 `requires_login` **不能混** —— 补救动作一个是"去设置打开"、一个是"去粘 Cookie"（`devlog/338`） |
@@ -137,7 +136,6 @@ budget: 300
 | **轮次执行器** | 按平台并发的调度原语：每轮各平台各处理一个元素 | `scheduler._run_platform_rounds` | 平台内串行、平台间并行、单平台风控单独冷却 |
 | **签名来源 / 覆盖（A3）** | 卡片签名 = `sign_override` → `sign_source_account_id` 账号 → 主账号 → 空；**平台签名只读**，选来源/打字都不改 `accounts.sign` | `vtubers.sign_override / sign_source_account_id`；前端 `utils/signSource.ts` | f004（devlog/074）；下拉选平台 = 改来源并清覆盖 |
 | **曾用值 / vtuber_field_history** | V **在平台上曾经用过的**昵称/签名（按账号记账，抓取覆盖前入库；手改不入账） | `vtuber_field_history`；`services/vtuber_history.py::record_field_change()` | f004；**取代字段锁定**（快照表不含昵称/签名，不记账即永久丢失）；⚠️ 展示暂缓（devlog/075：归入「账号信息历史快照」） |
-| **字段锁定 / locked_fields** | ~~用户手改的账号字段抓取时不覆盖~~ **已退役**（f004 删除该列）：改为"允许覆盖 + 记曾用值" | `accounts.locked_fields`（已删）；`scheduler._field_locked()` 恒 False 垫片 | v0.9.7 引入、devlog/074 退役 |
 | **账号排序 / sort_order** | 平台徽章展示顺序（拖拽落库） | `accounts.sort_order`；`PUT /vtuber/{id}/account-order` | v0.9.7 |
 | **左栏排序 / vtuber sort_order** | 左栏虚拟主播的自定义顺序（拖拽落库）。⚠️ 与上一行**语义不同**：左栏可以**带筛选拖**，所以是"把传进来的**填回原位**"、没传的原地不动（不是"排在其后"） | `vtubers.sort_order`；`VTuberRepo.reorder()`；`PUT /vtuber-order` | f010，需求 4/5，devlog/413 |
 | **档案设置窗口** | 背景/名称/企划/设定/头像/签名/账号管理（承接原 profile 视图） | `components/VtuberSettingsDialog.tsx` | v0.9.7，devlog/048 |

@@ -120,6 +120,15 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 
 ⚠️ **`tokens.css` 行数最少但改得最勤**（全仓 churn/KLOC 最高之一）—— 它一改就是全局视觉。
 
+**两个"只用一次但要记住落点"的库**（2026-10 从 `UI-MAP.md` 的会话速查段搬来；那份索引里
+不该存这类架构事实）：
+
+- **图表 = ECharts 6.1 按需注册**（canvas 自绘）。Shadcn Chart / recharts **已退役**
+  （`chart.tsx` 与 `--chart-*` 已清）；**色值集中在 `utils/chartTheme.ts`**（与 tokens 同源注释），
+  新图表从那里引色，**禁止在组件里手写色值**。
+- **词云** = 增量摊铺加权 Voronoi 拼贴（`utils/wordCloudLayout.ts`：力导向站点滑动 + λ 面积精确）；
+  `react-wordcloud` 已退役（其 d3 依赖随移除）。
+
 ## 7. 构建与开发工具面
 
 - **两个入口**（2026-10-13 起）：`vite.config.ts` 的 `rollupOptions.input` 列出
