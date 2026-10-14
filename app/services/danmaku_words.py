@@ -254,9 +254,19 @@ class JiebaTokenizer:
             t.start()
 
     def _on_idle(self) -> None:
-        """定时器到点：再确认一次真的空闲（期间可能又有人用了）。"""
+        """定时器到点：再确认一次真的空闲（期间可能又有人用了）。
+
+        ⚠️ **早醒要再等一轮**（2026-10-14 修，CI 的 Windows 腿抓到的）：`threading.Timer`
+        只保证"不早于"这个语义是**不成立**的 —— Windows 上实测会提前几毫秒醒来，此时
+        `release_if_idle()` 算出"还没到点"、返回 False，而**没有任何人再武装定时器**
+        ⇒ 词典就此永远不被释放（要等下一次用词云才重新武装）。
+        Linux 上定时器不早醒，所以这条只在那条腿现形。
+        ⚠️ 重新武装放在**这里**而不是 `release_if_idle()` 里：那个函数是"看一眼"的判据，
+        用例会用注入的 `now` 直接调它（那里面**不该**有起定时器的副作用）。
+        """
         try:
-            self.release_if_idle()
+            if not self.release_if_idle():
+                self._arm_timer()
         except Exception as e:  # pragma: no cover - 释放失败不该影响任何请求
             logger.warning(f"分词词典释放失败（忽略）: {type(e).__name__}: {e}")
 

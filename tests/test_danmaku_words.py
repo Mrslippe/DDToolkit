@@ -389,6 +389,11 @@ def test_timer_drives_the_release_and_rearms_on_use(monkeypatch):
 
     用 0.05s 的阈值把等待压到毫秒级（真机默认 10 分钟）—— 这是驱动层的唯一一条用例，
     状态机本身的判据都在上面那几条（注入假时钟，不受调度影响）。
+
+    ⚠️ **等法从"睡死 0.6s"改成"轮询到点"**（2026-10-14）：CI 的 Windows 腿在这条上偶发红过 ——
+    固定睡眠假定"定时器一定在 0.6s 内跑完"，而 CI runner 负载高时线程可能晚醒，
+    Windows 的定时器还可能**早醒**（早醒那条由 `_on_idle` 重新武装来兜，另有专门用例）。
+    轮询保留"真驱动"这个性质，同时不把"多久算够"写死成一个固定值。
     """
     import time as _time
 
@@ -397,10 +402,37 @@ def test_timer_drives_the_release_and_rearms_on_use(monkeypatch):
     monkeypatch.setattr(dw, "TOKENIZER_IDLE_SEC", 0.05)
     tk = _fresh_tokenizer()
     assert tk.loaded is True
-    _time.sleep(0.6)
-    assert tk.loaded is False, "到点应当被定时器释放"
+    deadline = _time.monotonic() + 10.0
+    while tk.loaded and _time.monotonic() < deadline:
+        _time.sleep(0.02)
+    assert tk.loaded is False, f"到点应当被定时器释放（等了 10s）；state={tk.state()}"
     tk.cut("再来一次")
     assert tk.loaded is True, "再用一次应当重建"
+    tk.cancel_timer()
+
+
+def test_early_timer_fire_rearms_instead_of_giving_up(monkeypatch):
+    """★ 定时器**早醒** ⇒ 再等一轮，不能就此收摊（2026-10-14，CI 的 Windows 腿抓到的真问题）。
+
+    机制：`_on_idle()` → `release_if_idle()` 在"还没到点"时返回 False，而**没有任何人**
+    再武装定时器 ⇒ 词典永远不被释放（要等下一次用词云）。Windows 的 `threading.Timer`
+    实测会提前几毫秒醒，Linux 不会 —— 所以这条只在 Windows 上现形。
+
+    这里不去赌调度，直接把"现在还没到点"造出来（把 `_last_used` 往后挪），然后手工触发
+    定时器回调，验"它还把定时器留着"。
+    """
+    import time as _time
+
+    from app.services import danmaku_words as dw
+
+    monkeypatch.setattr(dw, "TOKENIZER_IDLE_SEC", 0.05)
+    tk = _fresh_tokenizer()
+    tk.cancel_timer()                     # 先把真定时器撤掉，下面只要它"重新武装"这一件事
+    tk._last_used = _time.monotonic() + 5.0     # = 现在离"到点"还早（等价于早醒那一刻）
+    tk._on_idle()
+    assert tk.loaded is True, "还没到点就不该释放"
+    assert tk._timer is not None and tk._timer.is_alive(), \
+        "早醒之后没人再武装定时器 ⇒ 词典再也不会被释放（老写法就是这样）"
     tk.cancel_timer()
 
 
