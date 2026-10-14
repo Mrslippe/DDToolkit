@@ -1,6 +1,6 @@
 """小红书登录态：**粘贴 cookie**（第 4 阶段 ④ 第三刀-2，devlog/233）。
 
-为什么不做扫码：调研 `docs/platforms-xhs-douyin-research.md` §2.8 给了三条登录路，
+为什么不做扫码：调研 `docs/design/platforms/xhs-douyin-research.md` §2.8 给了三条登录路，
 扫码那条的二维码/状态接口**也**要签名与设备 cookie（鸡生蛋），而 **cookie 复用**是
 MediaCrawler 与本项目都最省事的一条。
 

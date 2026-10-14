@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""手动动作走推送（M2，devlog/244；方案 `docs/design/notices/message-hub-execution.md` §M2）。
+"""手动动作走推送（M2，devlog/244；口径见 `docs/backend/MESSAGES.md`）。
 
 ## 这一批解决什么
 

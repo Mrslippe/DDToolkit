@@ -1,4 +1,4 @@
-"""身份级限速与**四类响应**（第 4 阶段 ⑤，devlog/237；调研 `docs/platforms-xhs-douyin-research.md` §5.3.1）。
+"""身份级限速与**四类响应**（第 4 阶段 ⑤，devlog/237；调研 `docs/design/platforms/xhs-douyin-research.md` §5.3.1）。
 
 ## 为什么需要（现有机制差在哪）
 

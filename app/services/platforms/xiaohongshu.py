@@ -1,6 +1,6 @@
 """小红书平台适配（第 4 阶段 ④ 第一刀，devlog/230）。
 
-依据：`docs/platforms-xhs-douyin-research.md` §2（接口清单 / 签名 / cookie / 登录）。
+依据：`docs/design/platforms/xhs-douyin-research.md` §2（接口清单 / 签名 / cookie / 登录）。
 
 ## 这一刀做到哪
 

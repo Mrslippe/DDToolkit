@@ -133,8 +133,8 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
 30b. **后端端口：优先固定区间 `8765–8769`，全被占才回退随机**（E2，2026-10-06）：
     `lib.rs::pick_backend_port(&PREFERRED_PORTS)`。**为什么改掉纯随机**（原先 `127.0.0.1:0`）：
     浏览器扩展读不到文件、也扫不完 65536 个端口，它只能"依次探几个候选"，
-    再靠 `/healthz` 的 `app` 标识 + 配对 token **认领**（见
-    `docs/plans/browser-extension-cookie-sync-execution.md` §3.4）。
+    再靠 `/healthz` 的 `app` 标识 + 配对 token **认领**（扩展侧的探测顺序与三条纪律
+    见 `extension/README.md`；契约端点见 `backend/AUTH-CAPABILITIES.md`）。
     ⚠️ 三条纪律：① **端口不是身份** —— 区间里坐着的可能是另一个实例（dev + 打包版同时开），
     认身份靠 `/healthz` 的标识与配对 token；② **抢不到不许 panic**（回退随机即可：
     功能一切照旧，只是扩展探测不到、要用户手填端口）；③ **探针继续用随机端口**

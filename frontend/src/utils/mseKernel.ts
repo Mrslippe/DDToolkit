@@ -1,5 +1,5 @@
 /**
- * MSE 播放内核（2026-10-04，devlog/312；计划 `docs/plans/bili-mse-kernel-execution.md` S2）。
+ * MSE 播放内核（2026-10-04，devlog/312；落地见 `docs/frontend/UI-MAP.md` 的 MSE 内核段（`devlog/312`））。
  *
  * ## 为什么换掉 progressive（`<video src>` + 独立 `<audio>`）
  *

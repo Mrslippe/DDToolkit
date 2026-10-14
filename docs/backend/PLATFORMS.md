@@ -2,7 +2,7 @@
 doc: backend/platforms
 class: module
 scope: 平台适配层：BasePlatform 协议、注册表、PostStreams 形状，以及接入一个新平台的完整 checklist
-not-scope: 各平台接口字段的调研 → design/xhs-douyin-research.md；调度怎么选择平台 → backend/FETCH-PIPELINE.md
+not-scope: 各平台接口字段的调研 → design/platforms/xhs-douyin-research.md；调度怎么选择平台 → backend/FETCH-PIPELINE.md
 sot: app/services/platforms/, app/services/platforms/base.py, app/services/platforms/registry.py
 verify: python -m pytest -q tests/test_platform_branches.py
 budget: 700
@@ -94,9 +94,9 @@ scheduler 统一消费框架：
 
 ## 3. 新平台接入步骤（抖音已按此清单落地，devlog/334）
 
-> ⚠️ **先读 `docs/design/xhs-douyin-research.md`**（调研快照）+ `docs/plans/douyin-execution.md` §0：
+> ⚠️ **先读 `docs/design/platforms/xhs-douyin-research.md`**（调研快照，含合规定性与接口探测结论）：
 > 抖音 / 小红书的用户协议**明文禁止爬虫与自动化采集**，**不存在"允许的额度"**；
-> 抖音那条已由用户 2026-10-04 拍板（立场 C，风险自担 + 降险三条）。
+> 抖音那条已由用户 2026-10-04 拍板（立场 C，风险自担 + 降险三条），D1–D4 已落地（`devlog/333`–`337`）。
 
 1. **签名**（若平台要签）：先确认有没有**可 vendor 的纯 Python 实现**（抖音 = DTK，Apache-2.0，
    见 `platforms/vendor/dtksign/NOTICE.md`：blob SHA 比对 + 只改一行 import + sha256 判据）。
@@ -178,7 +178,7 @@ class DouyinPlatform(BasePlatform):          # 真实形状见 app/services/plat
 - 前端：TopBar 登录按钮（B 站会话过期红点徽章）→ `LoginDialog`（Tab 清单来自 `utils/platformLogin.ts::LOGIN_TABS`，**单一事实来源**）→ B 站用 react-qr-code 渲染 url、微博显示 base64 图 → 2s 轮询 → 成功 toast
 - B 站流程：generate → poll（qrcode_key）→ 回调 URL 种 SESSDATA 等 → nav 校验 → `.env`
 - 微博流程：`passport.weibo.com/sso/v2/qrcode/image`（回退 `login.sina.com.cn` JSONP）→ check（50114001/50114002/20000000/50114004）→ `login.php?alt=` 种 SUB/SUBP 等 → crossDomainUrlList 补种 → `.env`
-- **小红书：没有扫码**（它连二维码/状态接口都要签名与设备 cookie，见 `docs/design/xhs-douyin-research.md` §2.8）⇒ 走 `POST /auth/xiaohongshu/cookie`（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ **先校验再落盘**：缺 `a1`/`web_session` 一律 400 且不写 `.env`；`status()` 只报"配齐了没"（不做探活：没有免签名的探活端点，硬探白挨一次风控），真实失效由抓取侧 `classify_http()=='cookie_invalid'` 反映。前端在登录浮窗的第三个 Tab 里粘贴（步骤文案 + 400 原文直接显示）
+- **小红书：没有扫码**（它连二维码/状态接口都要签名与设备 cookie，见 `docs/design/platforms/xhs-douyin-research.md` §2.8）⇒ 走 `POST /auth/xiaohongshu/cookie`（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ **先校验再落盘**：缺 `a1`/`web_session` 一律 400 且不写 `.env`；`status()` 只报"配齐了没"（不做探活：没有免签名的探活端点，硬探白挨一次风控），真实失效由抓取侧 `classify_http()=='cookie_invalid'` 反映。前端在登录浮窗的第三个 Tab 里粘贴（步骤文案 + 400 原文直接显示）
 - **抖音：也没有扫码**，且**要多收一个 UA** ⇒ `POST /auth/douyin/cookie`（body `{"cookie": "uifid=…; s_v_web_id=…; ttwid=…", "user_agent": "…"}`）。
   ⚠️ 为什么 UA 是凭据的一部分：`a_bogus` 把 UA 算进签名，而**填错的症状是静默的**（HTTP 200 + 0 字节空体，devlog/333）⇒ 它必须与 cookie 来自同一个浏览器会话，不能躺在默认值里（`DOUYIN_UA`）。
   必需键：`s_v_web_id` + `uifid`（或 `UIFID_TEMP`）+ `ttwid`；`status()` 额外报一个 `ua_configured`（**不回显 UA 全文**：它是身份指纹）。

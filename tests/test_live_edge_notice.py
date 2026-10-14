@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""开播边沿的**面向用户出口**（M1，devlog/243；方案 `docs/design/notices/message-hub-execution.md` §M1）。
+"""开播边沿的**面向用户出口**（M1，devlog/243；口径见 `docs/backend/MESSAGES.md`）。
 
 ## 这一批不是"新造检测"，是"给它一个出口"
 

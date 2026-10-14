@@ -1,4 +1,4 @@
-"""**dev-only** 的合成发布钩子（M0，devlog/241；方案 `docs/design/notices/message-hub-execution.md` §8.3）。
+"""**dev-only** 的合成发布钩子（M0，devlog/241；口径与取舍见 `docs/backend/MESSAGES.md`）。
 
 ## 为什么单独一个模块
 

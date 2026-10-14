@@ -47,7 +47,7 @@ flowchart LR
 
 **读路径的两处"作用域限制"**（2026-10 落地；方案文档已随落地删除，结论留在这里）：
 
-- **按页合并**（`devlog/459`/`460`，设计见旧 `plans/live-sessions-page-scope-execution.md`）：
+- **按页合并**（`devlog/459`/`460`）：
   `GET /account/{id}/live-sessions` **只合并"这一页 ± 1 页"**里的表内行与自观测快照
   （请求带 `from`/`to` 或 `month`，对外只返回窗口内那些场次），翻页时带页 id 重取重算。
   起因是"每次读都合并整段历史"：实测 155ms 里 ORM 装载 1,394 行 21ms + 分组合并 ~63ms

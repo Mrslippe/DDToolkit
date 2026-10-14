@@ -186,7 +186,7 @@ def _specs() -> list[Spec]:
         # 用户口径（需求 9）：「在设置中把平台抓取功能的开关做出来，放在**数据源**那一项里」，
         # 且「开关只影响是否启动抓取」——关掉后自动档与手动档都拦，已抓到的数据照常看。
         # 真源 = `services/platform_switches.py`（手动端点 / 能力矩阵 / 自动档共用同一份）。
-        # ⚠️ 抖音为什么默认关：抖音协议**明文禁止**自动化采集（`docs/plans/douyin-execution.md` §0），
+        # ⚠️ 抖音为什么默认关：抖音协议**明文禁止**自动化采集（`docs/design/platforms/xhs-douyin-research.md` §6），
         # 所以"配了 cookie"不等于"要在后台一直抓"。其余三家默认开（它们是既有行为）。
         Spec("BILIBILI_ENABLED", "bool", True, None, None,
              "启用 B 站抓取", "", NAV_SOURCES, hot,

@@ -1,4 +1,4 @@
-"""消息中心 M0：推送通道骨架（devlog/241；方案 `docs/design/notices/message-hub-execution.md`）。
+"""消息中心 M0：推送通道骨架（devlog/241；口径见 `docs/backend/MESSAGES.md`）。
 
 | 判据 | 方案编号 |
 |---|---|

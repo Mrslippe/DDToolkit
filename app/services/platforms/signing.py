@@ -1,6 +1,6 @@
 """平台请求**签名器**的接口（第 4 阶段 ④，devlog/230、232；抖音 D2，devlog/334）。
 
-调研结论（`docs/design/xhs-douyin-research.md` §1.1、§2.3）：两家的签名都**已被开源纯 Python
+调研结论（`docs/design/platforms/xhs-douyin-research.md` §1.1、§2.3）：两家的签名都**已被开源纯 Python
 复刻**，所以本地签、浏览器只在"身份过期/被风控"时兜底 —— 但**两家的签名策略不该共用**：
 
 - **小红书**：mnsv2（`x-s` / `x-t` / `x-s-common`），依赖 MIT 的 [`xhshow`](https://github.com/Cloxl/xhshow)

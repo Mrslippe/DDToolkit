@@ -49,8 +49,8 @@ flowchart TB
 > `app` 标识 + 配对 token"认领。装配方：`extension/`（零构建）、
 > `app/services/{pairing,cookie_import}.py`、`app/routers/auth.py`、
 > `frontend/src/components/LoginDialog.tsx`（配对界面）。
-> 方案 `docs/design/browser-extension-cookie-sync.md`、执行方案
-> `docs/plans/browser-extension-cookie-sync-execution.md`。
+> 落地于 `devlog/356`–`376`（E1–E5）；扩展自己的口径与手工验收表在 `extension/README.md`，
+> 壳侧端口认领那条不变量见 `desktop/SHELL.md` 第 30b 条。
 
 | 并发单元 | 载体 | 职责 | 是否占抓取锁 |
 |---|---|---|---|

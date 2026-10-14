@@ -1617,7 +1617,7 @@ const PREFERRED_PORTS: [u16; 5] = [8765, 8766, 8767, 8768, 8769];
 ///
 /// ⚠️ 端口**不是身份**：区间里坐着的可能是另一个实例（dev + 打包版同时开）。
 /// 认身份靠 `/healthz` 的应用标识 + 配对 token（见
-/// `docs/plans/browser-extension-cookie-sync-execution.md` §3.4），所以这里
+/// `extension/README.md`；壳侧那条不变量见 `docs/desktop/SHELL.md` 第 30b 条），所以这里
 /// "抢到就用"是安全的 —— 但**不许**在抢不到时 panic（回退随机即可，功能不受影响，
 /// 只是扩展探测不到、要用户手填端口）。
 fn pick_backend_port(candidates: &[u16]) -> u16 {

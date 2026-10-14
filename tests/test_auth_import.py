@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""浏览器扩展的凭据导入（`POST /auth/import`）与配对凭证（E1，`docs/plans/browser-extension-cookie-sync-execution.md`）。
+"""浏览器扩展的凭据导入（`POST /auth/import`）与配对凭证（E1，契约见 `docs/backend/AUTH-CAPABILITIES.md`；扩展侧见 `extension/README.md`）。
 
 ## 这批解决的痛点
 

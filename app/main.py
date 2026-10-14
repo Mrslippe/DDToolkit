@@ -577,7 +577,7 @@ def healthz():
     附带 `app`（E1，2026-10-06）：**给浏览器扩展认领端口用的应用标识**。
     桌面壳改成优先绑固定区间（8765–8769）之后，扩展依次探这些端口，
     靠这个字段认出"这是 DDToolkit"（端口不是身份，配对 token 才是 —— 见
-    `docs/plans/browser-extension-cookie-sync-execution.md` §3.4）。
+    `extension/README.md` 与 `docs/desktop/SHELL.md` 第 30b 条）。
     ⚠️ 只**加**字段，不动既有键：启动幕在轮询它，且它是"没 token 时唯一能带出启动故障的通路"。
     """
     first_run = not FIRST_RUN_MARKER.exists()

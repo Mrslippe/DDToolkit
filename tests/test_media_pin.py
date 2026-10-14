@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """帖子媒体固化 + 归档自动清理（2026-10-04，devlog/319）。
 
-方案 `docs/plans/media-pinning-execution.md` 批次 1。用户口径：「不论什么平台，未归档的帖子
+规格 `docs/backend/ASSETS.md`（`devlog/319`）。用户口径：「不论什么平台，未归档的帖子
 都可以作为轻资产固定下来，已归档的部分就自动移除」。
 
 | # | 判据 | 错了会怎样 |

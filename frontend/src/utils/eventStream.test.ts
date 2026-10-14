@@ -1,5 +1,5 @@
 /**
- * 推送通道的**传输层**判据（M0b，devlog/242；方案 `docs/design/notices/message-hub-execution.md` §2.1）。
+ * 推送通道的**传输层**判据（M0b，devlog/242；口径见 `docs/backend/MESSAGES.md`）。
  *
  * 这一层只回答三件事，**都不靠"看起来连着"**：
  * ① 帧解析（注释行/心跳、跨 chunk 切断、坏帧不许炸整条流）；

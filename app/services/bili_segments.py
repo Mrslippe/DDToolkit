@@ -8,7 +8,7 @@
 根因是**裸 fMP4 + `src=` 直喂**：Chromium 的 MP4 demuxer 不读 `sidx`，
 "跳到第 N 秒"只能按码率猜字节位置、再从关键帧解码丢弃到目标。
 
-`docs/plans/bili-mse-kernel-execution.md` 的 S1 就是验证"MSE 能不能根治"，
+`docs/frontend/UI-MAP.md` 的 MSE 内核段（`devlog/312`） 就是验证"MSE 能不能根治"，
 而 MSE 的前提是**时间 → 字节**的映射 —— 那份映射就在流开头的 `sidx` 里。
 
 ## 实测到的结构（一条 1080P 视频）

@@ -1,5 +1,5 @@
 /**
- * 推送通道的**传输层**（M0b，devlog/242；方案 `docs/design/notices/message-hub-execution.md` §2.1）。
+ * 推送通道的**传输层**（M0b，devlog/242；口径见 `docs/backend/MESSAGES.md`）。
  *
  * ## 为什么是 `fetch` + `ReadableStream`，而不是 `EventSource`
  *

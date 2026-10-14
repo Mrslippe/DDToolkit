@@ -1,6 +1,6 @@
 """抖音平台适配（第 4 阶段 ④ 第二刀，devlog/334；依据 D1 spike，`devlog/333`）。
 
-依据：`docs/design/xhs-douyin-research.md` §3 + `docs/plans/douyin-execution.md`。
+依据：`docs/design/platforms/xhs-douyin-research.md` §3；落地批次 `devlog/333`–`337`。
 
 ## ⚠️ 先读这一节：抖音的失败**不是** 403（D1 真机实测，devlog/333）
 

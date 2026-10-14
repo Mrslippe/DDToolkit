@@ -1,4 +1,4 @@
-"""应用级**消息中心**（M0，devlog/241；方案 `docs/design/notices/message-hub-execution.md`）。
+"""应用级**消息中心**（M0，devlog/241；口径与取舍见 `docs/backend/MESSAGES.md`）。
 
 ## 它解决什么
 

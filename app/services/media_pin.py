@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""帖子媒体固化（2026-10-04，devlog/319；计划 `docs/plans/media-pinning-execution.md` 批次 1）。
+"""帖子媒体固化（2026-10-04，devlog/319；规格 `docs/backend/ASSETS.md`）。
 
 ## 它解决什么
 
