@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight } from 'lucide-react'
 import FloatPill from '../common/FloatPill'
 import type { HmSession } from '../../api/types'
 
@@ -54,6 +54,7 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
   const [year, setYear] = useState(defaultYear)
   /** 年份选择浮层（点中间那块展开） */
   const [pick, setPick] = useState(false)
+  const navRef = useRef<HTMLDivElement>(null)
   const minYear = years[0] ?? defaultYear
   const maxYear = years[years.length - 1] ?? defaultYear
 
@@ -100,32 +101,32 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
     <>
       <div className="wb-hm-head">
         <h2 className="wb-card-title">直播与采集</h2>
-        {/* 与直播日历的导航栏对齐：浮片族三连（‹ / 中间可点 / ›），
-            中间点开是**年份选择**（2026-10-19 用户第 3 条） */}
-        <div className="wb-hm-years">
-          <FloatPill size="sm" shape="text" className="wb-hm-year-btn"
-                     onClick={() => setYear((y) => y - 1)}
-                     disabled={year <= minYear} aria-label="上一年"
-                     data-testid="hm-prev"><ChevronLeft size={14} strokeWidth={2} /></FloatPill>
-          <div className="wb-hm-year-pick">
-            <FloatPill size="md" shape="text" className="wb-hm-year-mid"
-                       onClick={() => setPick((p) => !p)}
-                       data-testid="hm-year">{year} · {yearSessions} 场</FloatPill>
-            {pick && (
-              <div className="wb-hm-year-menu" data-testid="hm-year-menu">
-                {years.map((y) => (
-                  <button key={y} type="button" onClick={() => { setYear(y); setPick(false) }}
-                          className={y === year ? 'is-on' : ''} data-testid={`hm-year-${y}`}>
-                    {y}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <FloatPill size="sm" shape="text" className="wb-hm-year-btn"
-                     onClick={() => setYear((y) => y + 1)}
-                     disabled={year >= maxYear} aria-label="下一年"
-                     data-testid="hm-next"><ChevronRight size={14} strokeWidth={2} /></FloatPill>
+        {/* 与直播日历的导航栏**同构**（2026-10-19 用户："直接参考直播日历卡片上的按钮实现"）：
+            `FloatPill` 用**默认尺寸**（不传 size —— 传 sm 会把图标挤掉），图标用
+            `ChevronsLeft/Right` + 日历那套 `lc-nav-icon` / `lc-nav-text` 类。 */}
+        <div className="wb-hm-years lc-nav" ref={navRef}>
+          <FloatPill shape="icon" title="上一年" onClick={() => setYear((y) => y - 1)}
+                     disabled={year <= minYear} data-testid="hm-prev">
+            <ChevronsLeft className="lc-nav-icon" />
+          </FloatPill>
+          <FloatPill shape="text" title="选择年份" onClick={() => setPick((p) => !p)}
+                     data-testid="hm-year">
+            <span className="lc-nav-text">{year} · {yearSessions} 场</span>
+          </FloatPill>
+          <FloatPill shape="icon" title="下一年" onClick={() => setYear((y) => y + 1)}
+                     disabled={year >= maxYear} data-testid="hm-next">
+            <ChevronsRight className="lc-nav-icon" />
+          </FloatPill>
+          {pick && (
+            <div className="wb-hm-year-menu" data-testid="hm-year-menu">
+              {years.map((y) => (
+                <button key={y} type="button" onClick={() => { setYear(y); setPick(false) }}
+                        className={y === year ? 'is-on' : ''} data-testid={`hm-year-${y}`}>
+                  {y}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
