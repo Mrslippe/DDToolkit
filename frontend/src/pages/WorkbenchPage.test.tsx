@@ -21,6 +21,26 @@ const fanCollectStatus = vi.fn()
 const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
 const fanProfile = vi.fn()
+const fanActivity = vi.fn()
+
+/** 滑杆数据：30 场、每天一场（9 月），后端 `?limit=150` 的形状 */
+const ACTIVITY = {
+  vtuber: '弥月Mizuki',
+  today: '2026-10-18',
+  years: [2026],
+  days: Object.fromEntries(
+    Array.from({ length: 30 }, (_, i) => {
+      const d = `2026-09-${`${i + 1}`.padStart(2, '0')}`
+      return [d, { n: 1, c: i % 3 === 0 ? 1 : 0 }]
+    }),
+  ),
+  recent: Array.from({ length: 30 }, (_, i) => ({
+    at: `2026-09-${`${i + 1}`.padStart(2, '0')} 20:00:00`,
+    c: i % 3 === 0,
+    n: i % 3 === 0 ? 12000 : 0,
+  })),
+  limit: 150,
+}
 
 vi.mock('../api/api', () => ({
   api: {
@@ -32,6 +52,8 @@ vi.mock('../api/api', () => ({
     fanRanked: (...a: unknown[]) => fanRanked(...a),
     // 档案卡（V2，2026-10-18）：选中 V 后页面会拉它，桩里必须有，否则整页抛错
     fanProfile: () => fanProfile(),
+    // 热力图 + 滑杆的数据源（V3/V4）：没有它滑杆不渲染，结果区就一直是空态
+    fanActivity: () => fanActivity(),
   },
   // 档案卡会用它把 `static/...` 转成可加载 URL；桩里给个恒等即可
   resolveAsset: (p: string | null | undefined) => p ?? null,
@@ -99,6 +121,7 @@ beforeEach(() => {
   fanCollectStatus.mockReset().mockResolvedValue({ items: [], count: 0 })
   fanCollectCancel.mockReset().mockResolvedValue({ ok: true })
   fanRanked.mockReset().mockResolvedValue(RANKED)
+  fanActivity.mockReset().mockResolvedValue(ACTIVITY)
   // 档案卡（V2）的桩：只要"读到了"的形状就够，本文件不判它的视觉细节
   fanProfile.mockReset().mockResolvedValue({
     vtuber: { id: 1, name: '弥月Mizuki', faction: null, birthday: null, debut_date: null,
@@ -128,14 +151,17 @@ describe('数据分析工作台', () => {
     expect(fanSessions).not.toHaveBeenCalled()
   })
 
-  it('启用后渲染主播选择器与区间，并显示后端的预估', async () => {
+  it('启用后渲染主播选择器与窗口读数，并显示后端的预估', async () => {
     await mount()
     const sel = q<HTMLSelectElement>('[data-testid="workbench-vtuber"]')
     expect(sel).not.toBeNull()
     expect(sel!.options.length).toBe(2)
     expect(sel!.value).toBe('弥月Mizuki')     // 优先选已有数据的那个
-    expect(q('[data-testid="workbench-preview"]')!.textContent).toContain('12')
-    expect(q('[data-testid="workbench-preview"]')!.textContent).toContain('待采')
+    // 滑杆把窗口报上来之后，结果区才出读数（V3/V4/V5 之后不再是日期输入框）
+    const preview = q('[data-testid="workbench-preview"]')!
+    expect(preview.textContent).toContain('窗口场次')
+    expect(preview.textContent).toContain('待采')
+    expect(preview.textContent).toContain('2026-09-01')   // 窗口首末场次的日期
     expect(fanSessions).toHaveBeenCalled()
   })
 

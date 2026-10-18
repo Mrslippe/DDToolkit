@@ -469,7 +469,7 @@
 
 .wb-profile-name {
   margin: 0;
-  font-size: 23px;
+  font-size: clamp(18px, 1.6vw, 23px);   /* 窄卡里别把名字挤出省略号 */
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -544,15 +544,308 @@
 
 .wb-profile-cover-row {
   display: flex;
+  flex-wrap: wrap;              /* 窄卡里宁可换行，也不要把「采集覆盖」拆成两截 */
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
+  gap: 2px 10px;
   font-size: 11px;
   color: var(--c-text-sub);
+}
+
+.wb-profile-cover-row > span:first-child {
+  white-space: nowrap;
 }
 
 .wb-profile-cover-row b {
   color: var(--c-text-main);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+
+/* ── V3/V4 布局：上排 = 档案卡 + 直播与采集卡 ────────────────────────────
+   右列宽度写死 723px（= 53 列 × (11+2) − 2 + 卡片内边距 36）：
+   滑杆内部有 1200px 可滚动内容，用 `auto` 会被它撑爆、把档案卡挤成 0 宽（已踩过）。 */
+.wb-row1 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 723px;
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 1180px) {
+  .wb-row1 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wb-hm-card {
+  gap: 10px;
+}
+
+.wb-hm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wb-hm-years {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.wb-hm-years button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--c-text-sub);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.wb-hm-years button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.wb-hm-years b {
+  min-width: 86px;
+  padding: 0 6px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-hm-months {
+  position: relative;
+  margin-bottom: 3px;
+  font-size: 10px;
+  color: var(--c-text-sub);
+}
+
+.wb-hm-months span {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.wb-hm-months .yr {
+  color: var(--c-primary-deep);
+  font-weight: 700;
+}
+
+.wb-hm {
+  display: grid;
+  grid-auto-flow: column;
+  width: max-content;
+}
+
+.wb-hm-cell {
+  border-radius: 2.5px;
+  background: #f4eef0;
+  position: relative;
+}
+
+.wb-hm-cell.n1 { background: #fbd3dd; }
+.wb-hm-cell.n2 { background: #f7b2c3; }
+.wb-hm-cell.n3 { background: #ef8ba5; }
+/* 未来：灰格填满，不留白 */
+.wb-hm-cell.future { background: #e7eaee; }
+.wb-hm-cell.out { background: transparent; }
+
+/* 已采集：右上角深色角标（4px 三角）。用比主色更深的 --c-mark，
+   在 4 档填色上都够对比；5px 会吃掉近一半格子（实测）。 */
+.wb-hm-cell.coll::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 4px solid #8e1b4b;
+  border-left: 4px solid transparent;
+  border-top-right-radius: 2.5px;
+}
+
+.wb-hm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.wb-lg {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wb-lg i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2.5px;
+}
+
+.wb-lg i.mark {
+  position: relative;
+  overflow: hidden;
+  background: #fbd3dd;
+}
+
+.wb-lg i.mark::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 4px solid #8e1b4b;
+  border-left: 4px solid transparent;
+}
+
+/* ── 场次窗口滑杆（高度 = 参考元素的一半）── */
+.wb-zoom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-grades {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-grades span {
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.wb-grade {
+  height: 24px;
+  padding: 0 11px;
+  border: 1px solid var(--c-border);
+  border-radius: 7px;
+  background: var(--c-bg-card);
+  color: var(--c-text-sub);
+  font-size: 11.5px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.wb-grade.on {
+  background: rgba(255, 162, 180, 0.16);
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
+  font-weight: 600;
+}
+
+.wb-zoom-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+}
+
+.wb-zoom-scroll::-webkit-scrollbar { height: 6px; }
+.wb-zoom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 99px;
+}
+.wb-zoom-scroll::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 99px;
+}
+
+.wb-zoom-inner {
+  position: relative;
+  height: 23px;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  touch-action: none;
+}
+
+.wb-bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 2px;
+}
+
+.wb-bars i {
+  border-radius: 1.5px 1.5px 0 0;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.wb-bars i.has { background: #f3b6c6; }
+.wb-bars i.c { background: var(--c-primary); }
+
+.wb-win {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  border-left: 2px solid var(--c-primary-deep);
+  border-right: 2px solid var(--c-primary-deep);
+  background: rgba(255, 162, 180, 0.16);
+  cursor: grab;
+}
+
+.wb-win .h {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 15px;
+  margin-top: -7.5px;
+  border: 1px solid rgba(255, 162, 180, 0.55);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+}
+
+.wb-win .h.l { left: -6px; cursor: ew-resize; }
+.wb-win .h.r { right: -6px; cursor: ew-resize; }
+
+.wb-win .grip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 7px;
+  margin: -3.5px 0 0 -8px;
+  border-radius: 3px;
+  background: rgba(201, 64, 111, 0.5);
+  cursor: grab;
+}
+
+.wb-zoom-read {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.wb-zoom-read b {
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-zoom-read .acc { color: var(--c-primary-deep); }
+
+.wb-result {
+  min-height: 200px;
 }

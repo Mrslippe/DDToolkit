@@ -1467,6 +1467,22 @@ export interface FanVtuber {
   sessions: number
 }
 
+export interface FanActivityDay { n: number; c: number }
+export interface FanActivitySession { at: string; c: boolean; n: number }
+
+/** 热力图 + 场次滑杆的同一份数据源（V3/V4） */
+export interface FanActivity {
+  vtuber: string
+  /** 服务器当天（YYYY-MM-DD）—— 灰格判定必须与后端同一天 */
+  today: string
+  years: number[]
+  /** 每天：n = 场次数，c = 其中已采场次数 */
+  days: Record<string, FanActivityDay>
+  /** 最近 N 场，时间正序 */
+  recent: FanActivitySession[]
+  limit: number
+}
+
 export interface FanProfileStats {
   /** 最新一条快照的粉丝数（多账号取最大） */
   followers: number | null

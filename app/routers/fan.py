@@ -30,8 +30,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -93,6 +95,8 @@ MAX_LIMIT = 5000
 MIN_WINDOW = 5
 MAX_WINDOW = 200
 DEFAULT_WINDOW = 75
+#: 滑杆取最近多少场（用户口径：总量上限 150 场，2026-10-18）
+ACTIVITY_LIMIT = 150
 #: L6 滑动窗的默认参数（与 `timeline` 模块的常量同源）
 TIMELINE_SIZE = 25
 TIMELINE_STEP = 10
@@ -475,6 +479,103 @@ def health(
             "没有接入外部源时 C3/C4 一律标 unverified —— 那不是本模型的问题",
         ],
         "warnings": win.warnings[:10],
+    }
+
+
+# ── 热力图 + 场次滑杆的数据源（V3/V4）─────────────────────────────────────
+@router.get("/fan/{vtuber}/activity")
+def fan_activity(
+    vtuber: str,
+    limit: int = Query(ACTIVITY_LIMIT, ge=25, le=500,
+                       description="滑杆取最近多少场（用户口径上限 150）"),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """热力图与滑杆的**同一个**数据源。
+
+    - `days`：全部历史按天聚合 —— `{"2026-07-05": {"n": 2, "c": 1}}`。
+      `n` 是当天场次数（**热力图深浅只编码它**），`c` 是其中**弹幕已落盘**的场次数。
+    - `recent`：最近 `limit` 场，时间正序 —— 滑杆逐场用。`c` 表示已采，
+      `n` 是已采时的弹幕总量（未采为 0，前端画矮桩）。
+    - `today`：服务器当天（`YYYY-MM-DD`）—— 灰格判定必须与后端同一天，不能各用各的。
+
+    ⚠️ `c` 数的是**数据根里真有事实表**的场次，不是"库里有场次"。两者差得很远
+    （试点只采了一批），这正是界面要告诉用户的。
+    """
+    from app.models.vtuber import VTuber
+
+    v = _resolve(vtuber, db)
+    row = db.query(VTuber).filter(VTuber.name == v.name).first()
+    if row is None:
+        raise HTTPException(404, f"库里找不到主播：{v.name}")
+
+    # 已落盘的场次：live_id → 弹幕总量
+    collected: dict[str, int] = {}
+    try:
+        stats_dir = resolve_data_dir() / v.subdir / "stats"
+        if stats_dir.is_dir():
+            for f in stats_dir.glob("*.json"):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                lid = d.get("live_id")
+                if lid:
+                    collected[str(lid)] = int(d.get("type0") or 0)
+    except FanDataNotFound:
+        pass
+
+    # 全部历史：按天聚合场次数
+    days: dict[str, dict[str, int]] = {}
+    for d, n in db.execute(
+        text(
+            "select date(s.start_at) d, count(*) n "
+            "from live_sessions s join accounts a on a.id = s.account_id "
+            "where a.vtuber_id = :vid and a.platform = 'bilibili' "
+            "  and s.start_at is not null "
+            "group by d order by d"
+        ),
+        {"vid": row.id},
+    ):
+        if d:
+            days[str(d)] = {"n": int(n), "c": 0}
+
+    # 最近 limit 场（倒序取，再翻正）
+    rows = db.execute(
+        text(
+            # ⚠️ **只取采集器真能采的场次**：`live_id` 必须是 uuid 形态（`length > 20`），
+            # 与 `loader.list_sessions_from_db` 的过滤一致。不加这一条，滑杆会把
+            # 「库里有的场次」算进待采，而 `fanSessions` 只认可采的 ⇒ 界面自相矛盾
+            # （实测：区间 75 场里 14 场 live_id 不是 uuid 形态，待采一个说 14、一个说 0）。
+            "select s.live_id, s.start_at from live_sessions s "
+            "join accounts a on a.id = s.account_id "
+            "where a.vtuber_id = :vid and a.platform = 'bilibili' "
+            "  and s.start_at is not null "
+            "  and s.live_id is not null and length(s.live_id) > 20 "
+            "order by s.start_at desc limit :lim"
+        ),
+        {"vid": row.id, "lim": limit},
+    ).all()
+
+    recent = []
+    for lid, at in reversed(rows):
+        iso = str(at or "")[:19]
+        if not iso:
+            continue
+        n = collected.get(str(lid), 0) if lid else 0
+        has = bool(lid) and str(lid) in collected
+        recent.append({"at": iso, "c": has, "n": n})
+        day = iso[:10]
+        if has and day in days:
+            days[day]["c"] += 1
+
+    return {
+        "vtuber": v.name,
+        "today": date.today().isoformat(),
+        "years": sorted({int(k[:4]) for k in days}),
+        "days": days,
+        "recent": recent,
+        "limit": limit,
     }
 
 
