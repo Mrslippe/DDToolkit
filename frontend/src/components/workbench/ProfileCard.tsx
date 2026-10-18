@@ -109,16 +109,6 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
           />
           <div className="wb-profile-id">
             <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
-            {/* A 区：最多 3 项 */}
-            <div className="wb-profile-meta" data-testid="profile-meta">
-              <span>
-                <b className="is-acc">{s.collected}</b> / {s.total_sessions} 场可分析
-              </span>
-              <span className="sep" />
-              <span>{fmtFans(s.followers)}</span>
-              <span className="sep" />
-              <span>最近 <b>{mmdd(s.last)}</b></span>
-            </div>
           </div>
           {/* 切换器**独立成一枚按钮、靠右固定**（2026-10-18 用户第二次反馈）。
               之前把下拉套在名字上：触发器宽度受名字长短影响，箭头跟着文字跑，
@@ -142,6 +132,15 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
               </SelectContent>
             </Select>
           )}
+        </div>
+        {/* A 区：最多 3 项。**放在名称块外面**——和切换器同一行时可用宽度只剩 ~290px，
+            "最近 10-11" 会被挤到第二行（2026-10-19 截图实测）。 */}
+        <div className="wb-profile-meta" data-testid="profile-meta">
+          <span><b className="is-acc">{s.collected}</b> / {s.total_sessions} 场可分析</span>
+          <span className="sep" />
+          <span>{fmtFans(s.followers)}</span>
+          <span className="sep" />
+          <span>最近 <b>{mmdd(s.last)}</b></span>
         </div>
 
         {/* B 区：最多 3 块，缺了就整块不渲染 */}
