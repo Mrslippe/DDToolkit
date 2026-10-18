@@ -49,6 +49,10 @@ export default function Heatmap({ days, years, today, defaultYear }: Props) {
   const minYear = years[0] ?? defaultYear
   const maxYear = years[years.length - 1] ?? defaultYear
 
+  /** 格子的 hover 浮窗（2026-10-19 用户第 5 条）：**不用原生 title**，
+      原生小黄条既不受样式控制，也在暗色/缩放下发虚。位置用 fixed 跟随光标。 */
+  const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+
   const grid = useMemo(() => {
     const jan1 = new Date(year, 0, 1)
     const dec31 = new Date(year, 11, 31)
@@ -121,9 +125,15 @@ export default function Heatmap({ days, years, today, defaultYear }: Props) {
           else if (future) cls.push('future')
           else if (n > 0) cls.push(`n${Math.min(3, n)}`)
           if (c.in && !future && coll > 0) cls.push('coll')
-          const title = !c.in ? '' : future ? `${c.d} · 还没到`
-            : `${c.d} · ${n ? `${n} 场` : '无直播'}${coll ? ' · 已采' : ''}`
-          return <div key={c.d} className={cls.join(' ')} title={title || undefined} />
+          const text = !c.in ? '' : future ? `${c.d} · 还没到`
+            : `${c.d} · ${n ? `${n} 场` : '无直播'}${coll ? ` · 已采 ${coll} 场` : ''}`
+          return (
+            <div key={c.d} className={cls.join(' ')}
+                 data-testid="hm-cell" data-day={c.d}
+                 onMouseEnter={text ? (e) => setHover({ x: e.clientX, y: e.clientY, text }) : undefined}
+                 onMouseMove={text ? (e) => setHover({ x: e.clientX, y: e.clientY, text }) : undefined}
+                 onMouseLeave={text ? () => setHover(null) : undefined} />
+          )
         })}
       </div>
 
@@ -136,6 +146,12 @@ export default function Heatmap({ days, years, today, defaultYear }: Props) {
         <span className="wb-lg"><i className="mark" /> 角标 = 弹幕已采</span>
         <span className="wb-lg"><i style={{ background: '#e7eaee' }} /> 灰 = 还没到</span>
       </div>
+
+      {/* 自定义浮窗（2026-10-19 用户第 5 条）：fixed 跟随光标，不参与布局 */}
+      {hover && (
+        <div className="wb-hm-tip" data-testid="hm-tip"
+             style={{ left: hover.x + 12, top: hover.y + 14 }}>{hover.text}</div>
+      )}
     </>
   )
 }

@@ -216,6 +216,20 @@ describe('数据分析工作台', () => {
     expect(fanCollectStatus.mock.calls.length).toBeGreaterThan(0)
   })
 
+  it('热力图的格子 hover 时浮出自定义浮窗（不是原生 title）', async () => {
+    await mount()
+    const cell = document.querySelector('[data-day="2026-09-01"]') as HTMLElement
+    expect(cell).not.toBeNull()
+    expect(cell.getAttribute('title')).toBeNull()   // 原生 title 已移除
+    await act(async () => {
+      // React 18 把 onMouseEnter 代理在根节点的 mouseover 上，所以派发 mouseover
+      cell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: 40, clientY: 40 }))
+    })
+    const tip = document.querySelector('[data-testid="hm-tip"]')
+    expect(tip).not.toBeNull()
+    expect(tip!.textContent).toContain('2026-09-01')
+  })
+
   it('删除已采集：按钮打开确认弹窗，并显示预览（不可恢复的操作先给数字）', async () => {
     await mount()
     const btn = document.querySelector('[data-testid="workbench-purge"]') as HTMLElement
