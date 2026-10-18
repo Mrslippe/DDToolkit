@@ -1124,3 +1124,64 @@
   font-size: 11.5px;
   color: var(--c-text-sub);
 }
+
+/* 年份选择浮层（与 `.wb-name-menu` 同一套卡片语言） */
+.wb-hm-year-pick {
+  position: relative;
+}
+
+.wb-hm-year-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  background: var(--c-bg-card);
+  box-shadow: var(--pill-shadow);
+}
+
+.wb-hm-year-menu button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+
+.wb-hm-year-menu button:hover,
+.wb-hm-year-menu button.is-on {
+  background: var(--pill-bg-hover);
+  color: var(--c-primary-deep);
+}
+
+/* 区间按钮与它的浮窗 */
+.wb-range {
+  position: relative;
+}
+
+.wb-range-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  padding: 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius);
+  background: var(--c-bg-card);
+  box-shadow: var(--pill-shadow);
+}
+
+.wb-stat-range {
+  align-items: flex-start;
+  gap: 4px;
+}

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import FloatPill from '../common/FloatPill'
 import type { HmSession } from '../../api/types'
 
 interface DayStat {
@@ -50,6 +52,8 @@ function iso(d: Date): string {
  */
 export default function Heatmap({ days, detail, years, today, defaultYear }: Props) {
   const [year, setYear] = useState(defaultYear)
+  /** 年份选择浮层（点中间那块展开） */
+  const [pick, setPick] = useState(false)
   const minYear = years[0] ?? defaultYear
   const maxYear = years[years.length - 1] ?? defaultYear
 
@@ -96,14 +100,29 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
     <>
       <div className="wb-hm-head">
         <h2 className="wb-card-title">直播与采集</h2>
+        {/* 与直播日历的导航栏对齐：浮片族三连（‹ / 中间可点 / ›），
+            中间点开是**年份选择**（2026-10-19 用户第 3 条） */}
         <div className="wb-hm-years">
-          <button type="button" onClick={() => setYear((y) => y - 1)}
-                  disabled={year <= minYear} aria-label="上一年"
-                  data-testid="hm-prev">‹</button>
-          <b data-testid="hm-year">{year} · {yearSessions} 场</b>
-          <button type="button" onClick={() => setYear((y) => y + 1)}
-                  disabled={year >= maxYear} aria-label="下一年"
-                  data-testid="hm-next">›</button>
+          <FloatPill size="sm" shape="icon" onClick={() => setYear((y) => y - 1)}
+                     disabled={year <= minYear} aria-label="上一年"
+                     data-testid="hm-prev"><ChevronLeft size={14} strokeWidth={2} /></FloatPill>
+          <div className="wb-hm-year-pick">
+            <FloatPill size="md" shape="text" onClick={() => setPick((p) => !p)}
+                       data-testid="hm-year">{year} · {yearSessions} 场</FloatPill>
+            {pick && (
+              <div className="wb-hm-year-menu" data-testid="hm-year-menu">
+                {years.map((y) => (
+                  <button key={y} type="button" onClick={() => { setYear(y); setPick(false) }}
+                          className={y === year ? 'is-on' : ''} data-testid={`hm-year-${y}`}>
+                    {y}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <FloatPill size="sm" shape="icon" onClick={() => setYear((y) => y + 1)}
+                     disabled={year >= maxYear} aria-label="下一年"
+                     data-testid="hm-next"><ChevronRight size={14} strokeWidth={2} /></FloatPill>
         </div>
       </div>
 

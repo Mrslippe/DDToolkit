@@ -174,7 +174,6 @@ export default function App() {
               {(phase === 'icon' || phase === 'loading') && (
                 <span className="curtain-icon">{TargetIcon}</span>
               )}
-              {phase === 'loading' && <span className="curtain-spin" />}
             </div>
           )}
           <main className="app-main" ref={mainRef}>

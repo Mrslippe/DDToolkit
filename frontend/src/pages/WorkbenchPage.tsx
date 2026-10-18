@@ -17,6 +17,7 @@ import {
 import Heatmap from '../components/workbench/Heatmap'
 import ProfileCard from '../components/workbench/ProfileCard'
 import PurgeButton from '../components/workbench/PurgeButton'
+import RangeButton from '../components/workbench/RangeButton'
 import ResultCharts from '../components/workbench/ResultCharts'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
@@ -72,6 +73,11 @@ export default function WorkbenchPage() {
   const [summary, setSummary] = useState<FanCollectProgress | null>(null)
   /** 重试计数：失败时点「重试」把它 +1，预估的 effect 就会再跑一次 */
   const [retryTick, setRetryTick] = useState(0)
+  /** 滑轨的**时间跨度**（不是选中窗口）：默认 = 热力图当前年份的整年 */
+  const [range, setRange] = useState<{ from: string; to: string }>(() => {
+    const y = new Date().getFullYear()
+    return { from: `${y}-01-01`, to: `${y}-12-31` }
+  })
 
   // 1) 主播表 + 模块开关
   useEffect(() => {
@@ -96,11 +102,11 @@ export default function WorkbenchPage() {
     setRanked(null)
     setProgress(null)
     setWin(null)
-    withNetRetry(() => api.fanActivity(picked))
+    withNetRetry(() => api.fanActivity(picked, 400, { since: range.from, until: range.to }))
       .then((r) => { if (alive) setActivity(r) })
       .catch((e: Error) => { if (alive) setErr(friendly(e)) })
     return () => { alive = false }
-  }, [enabled, picked])
+  }, [enabled, picked, range.from, range.to])
 
   // 3) 窗口变了 ⇒ 重新预估
   const onWindow = useCallback((r: WindowRange) => { setWin(r) }, [])
@@ -307,9 +313,9 @@ export default function WorkbenchPage() {
                   {unknown ? '—' : toCollect}
                 </span>
               </div>
-              <div className="wb-stat">
-                <span className="wb-stat-label">区间</span>
-                <span className="wb-stat-note">{since} ~ {until}</span>
+              <div className="wb-stat wb-stat-range">
+                <span className="wb-stat-label">滑轨区间</span>
+                <RangeButton value={range} onConfirm={setRange} />
               </div>
             </div>
           )}

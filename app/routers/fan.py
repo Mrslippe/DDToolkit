@@ -95,8 +95,8 @@ MAX_LIMIT = 5000
 MIN_WINDOW = 5
 MAX_WINDOW = 200
 DEFAULT_WINDOW = 75
-#: 滑杆取最近多少场（用户口径：总量上限 150 场，2026-10-18）
-ACTIVITY_LIMIT = 150
+#: 滑杆取最近多少场（用户口径：总量上限 400 场，2026-10-18）
+ACTIVITY_LIMIT = 400
 #: L6 滑动窗的默认参数（与 `timeline` 模块的常量同源）
 TIMELINE_SIZE = 25
 TIMELINE_STEP = 10
@@ -650,6 +650,8 @@ def fan_activity(
     vtuber: str,
     limit: int = Query(ACTIVITY_LIMIT, ge=25, le=500,
                        description="滑杆取最近多少场（用户口径上限 150）"),
+    since: str | None = Query(None, description="滑轨区间的起点 YYYY-MM-DD（含）"),
+    until: str | None = Query(None, description="滑轨区间的终点 YYYY-MM-DD（含）"),
     db: Session = Depends(get_db),
     _: None = Depends(require_module),
 ) -> dict[str, Any]:
@@ -704,6 +706,16 @@ def fan_activity(
             days[str(d)] = {"n": int(n), "c": 0}
 
     # 最近 limit 场（倒序取，再翻正）
+    #: 滑轨的**时间跨度**由界面选（2026-10-19 用户口径：区间 = 整条滑轨）；
+    #: 值一律走绑定参数，不拼字符串。
+    span = ""
+    params: dict[str, Any] = {"vid": row.id, "lim": limit}
+    if since:
+        span += " and date(s.start_at) >= :since"
+        params["since"] = since
+    if until:
+        span += " and date(s.start_at) <= :until"
+        params["until"] = until
     rows = db.execute(
         text(
             # ⚠️ **只取采集器真能采的场次**：`live_id` 必须是 uuid 形态（`length > 20`），
@@ -716,9 +728,10 @@ def fan_activity(
             "  and s.start_at is not null "
             "  and s.live_id is not null and length(s.live_id) > 20 "
             "  and s.session_key is not null and s.session_key != '' "
-            "order by s.start_at desc limit :lim"
+            + span +
+            " order by s.start_at desc limit :lim"
         ),
-        {"vid": row.id, "lim": limit},
+        params,
     ).all()
 
     recent = []

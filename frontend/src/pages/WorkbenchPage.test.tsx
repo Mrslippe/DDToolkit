@@ -164,7 +164,9 @@ describe('数据分析工作台', () => {
     const preview = q('[data-testid="workbench-preview"]')!
     expect(preview.textContent).toContain('窗口场次')
     expect(preview.textContent).toContain('待采')
-    expect(preview.textContent).toContain('2026-09-01')   // 窗口首末场次的日期
+    // 2026-10-19 起这一行是**滑轨区间选择器**（不再是窗口首尾日期）
+    expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
+    expect(preview.textContent).toContain('滑轨区间')
     expect(fanSessions).toHaveBeenCalled()
   })
 

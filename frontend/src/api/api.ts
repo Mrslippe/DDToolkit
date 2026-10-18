@@ -1047,8 +1047,14 @@ export const api = {
   /** 已注册的主播 + 数据是否就位 + **模块是否启用**（`enabled`） */
   fanVtubers: () => request<FanVtuberList>('/fan/vtubers'),
   /** 热力图 + 场次滑杆的数据源（一次取回，避免两次往返） */
-  fanActivity: (name: string, limit = 150) =>
-    request<FanActivity>(`/fan/${encodeURIComponent(name)}/activity?limit=${limit}`),
+  /** 热力图 + 滑轨数据源。`since`/`until` 决定**滑轨的时间跨度**（默认整年）。 */
+  fanActivity: (name: string, limit = 400,
+                opts?: { since?: string; until?: string }) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    return request<FanActivity>(`/fan/${encodeURIComponent(name)}/activity?${q}`)
+  },
   /** 删除已采集数据（`dryRun` 默认 true：先预览再确认） */
   fanPurge: (name: string, body: FanPurgeIn) =>
     request<FanPurgeResult>(`/fan/${encodeURIComponent(name)}/purge`, {

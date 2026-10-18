@@ -1382,13 +1382,11 @@ html[data-group-badge='off'] .vtuber-emblem {
 .view-curtain::before {
   top: 0;
   z-index: 2;                    /* 上半块压住下半块，阴影才落在它上面 */
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
   transform: translateY(-100%);        /* 默认在画面外 = 敞开 */
 }
 
 .view-curtain::after {
   bottom: 0;
-  box-shadow: 0 -8px 22px rgba(15, 23, 42, 0.10);
   transform: translateY(100%);
 }
 
@@ -1431,23 +1429,7 @@ html[data-group-badge='off'] .vtuber-emblem {
   animation: curtain-icon-in 160ms ease both;
 }
 
-.view-curtain.is-loading .curtain-icon {
-  opacity: 0.45;
-}
 
-.view-curtain .curtain-spin {
-  position: absolute;
-  z-index: 3;
-  left: 50%;
-  top: 50%;
-  width: 22px;
-  height: 22px;
-  margin: 26px 0 0 -11px;      /* 落在图标下方，不与图标叠 */
-  border-radius: 50%;
-  border: 2px solid rgba(201, 64, 111, 0.25);
-  border-top-color: var(--c-primary-deep);
-  animation: curtain-spin 620ms linear infinite;
-}
 
 @keyframes curtain-in-up {
   from { transform: translateY(-100%); }
@@ -1469,14 +1451,21 @@ html[data-group-badge='off'] .vtuber-emblem {
   to { transform: translateY(100%); }
 }
 
+/* 加载段：图标**呼吸**（缩放 + 透明度），不再用转圈 —— 转圈显得像卡住了 */
+.view-curtain.is-loading .curtain-icon {
+  animation: curtain-breathe 1.25s ease-in-out infinite;
+}
+
+@keyframes curtain-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50%      { transform: scale(1.12); opacity: 1; }
+}
+
 @keyframes curtain-icon-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
 
-@keyframes curtain-spin {
-  to { transform: rotate(360deg); }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .view-curtain {
