@@ -7,6 +7,7 @@ import type {
 import FloatPill from '../components/common/FloatPill'
 import Heatmap from '../components/workbench/Heatmap'
 import ProfileCard from '../components/workbench/ProfileCard'
+import PurgeButton from '../components/workbench/PurgeButton'
 import ResultCharts from '../components/workbench/ResultCharts'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
@@ -225,6 +226,12 @@ export default function WorkbenchPage() {
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">
+                  <PurgeButton name={picked} disabled={running || busy}
+                               onPurged={() => {
+                                 setRanked(null)
+                                 withNetRetry(() => api.fanActivity(picked))
+                                   .then(setActivity).catch(() => {})
+                               }} />
                   {running && (
                     <FloatPill size="md" shape="text" onClick={() => void cancel()}
                                data-testid="workbench-cancel">取消</FloatPill>

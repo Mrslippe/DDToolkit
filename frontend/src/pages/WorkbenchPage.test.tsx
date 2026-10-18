@@ -52,6 +52,8 @@ vi.mock('../api/api', () => ({
     fanRanked: (...a: unknown[]) => fanRanked(...a),
     // 档案卡（V2，2026-10-18）：选中 V 后页面会拉它，桩里必须有，否则整页抛错
     fanProfile: () => fanProfile(),
+    // 删除按钮只在弹窗打开时才调它；桩留着，免得以后加交互时整页抛错
+    fanPurge: () => Promise.resolve({ sessions: 0, files: 0, bytes: 0, by_dir: {} }),
     // 热力图 + 滑杆的数据源（V3/V4）：没有它滑杆不渲染，结果区就一直是空态
     fanActivity: () => fanActivity(),
   },

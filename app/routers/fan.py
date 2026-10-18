@@ -494,6 +494,117 @@ def health(
     }
 
 
+# ── 删除已采集数据（2026-10-19）────────────────────────────────────────────
+class FanPurgeIn(BaseModel):
+    """删除请求。**`dry_run` 默认 true** —— 与 `settings` 的 prune 端点同一口径：
+    界面先拿一份"将要删什么"给用户看，确认后才带 `dry_run=false` 再来一次。
+    """
+
+    dry_run: bool = True
+    #: `all` = 该 V 的全部已采数据；`window` = 只删 `since`~`until` 之间的
+    scope: str = "all"
+    since: str | None = None
+    until: str | None = None
+
+
+@router.post("/fan/{vtuber}/purge")
+def fan_purge(
+    vtuber: str,
+    body: FanPurgeIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """删除**已采集**的弹幕数据（不可恢复）。
+
+    ⚠️ 三条安全约束：
+    1. **只删该 V 子目录下 `raw/` `stats/` `names/` 里的文件**（按 live_id 逐个 unlink），
+       不做任何 `rmtree` —— 目录结构、`meta.json`、其它 V 的数据都不动。
+    2. `dry_run` 默认 **true**：不传就只算不删。
+    3. `scope="window"` 时必须同时给 `since`/`until`，按 `stats` 里的 `start_at` 判断
+       —— 与"窗口"的口径一致。
+
+    删除后清进程内缓存（`_CACHE` / `_PLAN_CACHE`），否则界面还会显示已删掉的结果。
+    """
+    from app.models.vtuber import VTuber
+
+    if body.scope not in ("all", "window"):
+        raise HTTPException(400, f"未知范围 {body.scope!r}；可用：all / window")
+    if body.scope == "window" and not (body.since and body.until):
+        raise HTTPException(400, "scope=window 时必须同时给 since 与 until")
+    if body.scope == "window" and str(body.since) > str(body.until):
+        raise HTTPException(400, "起止日期反了")
+
+    v = _resolve(vtuber, db)
+    row = db.query(VTuber).filter(VTuber.name == v.name).first()
+    if row is None:
+        raise HTTPException(404, f"库里找不到主播：{v.name}")
+
+    try:
+        root = resolve_data_dir() / v.subdir
+    except FanDataNotFound as exc:
+        raise HTTPException(409, f"还没有任何分析数据根（{exc}）") from exc
+    if not root.is_dir():
+        raise HTTPException(409, f"该主播还没有已采集的数据：{v.subdir}")
+
+    stats_dir = root / "stats"
+    live_ids: list[str] = []
+    if stats_dir.is_dir():
+        for p in sorted(stats_dir.glob("*.json")):
+            lid = p.stem
+            if body.scope == "window":
+                try:
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                day = str(d.get("start_at") or "")[:10]
+                if not day or not (str(body.since) <= day <= str(body.until)):
+                    continue
+            live_ids.append(lid)
+
+    by_dir: dict[str, dict[str, int]] = {}
+    for sub in ("raw", "stats", "names"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        files = 0
+        nbytes = 0
+        targets = (d.glob("*.json") if body.scope == "all"
+                   else (d / f"{lid}.json" for lid in live_ids))
+        for p in targets:
+            if not p.is_file():
+                continue
+            size = p.stat().st_size
+            if not body.dry_run:
+                try:
+                    p.unlink()
+                except OSError:
+                    continue
+            files += 1
+            nbytes += size
+        by_dir[sub] = {"files": files, "bytes": nbytes}
+
+    total_files = sum(x["files"] for x in by_dir.values())
+    total_bytes = sum(x["bytes"] for x in by_dir.values())
+
+    if not body.dry_run:
+        _CACHE.clear()
+        _PLAN_CACHE.clear()
+        logger.info("fan: 已删除 %s 的已采数据（%s）· %d 文件 / %.1f MB",
+                    v.name, body.scope, total_files, total_bytes / 1048576)
+
+    return {
+        "vtuber": v.name,
+        "dry_run": body.dry_run,
+        "scope": body.scope,
+        "root": str(root),
+        "sessions": len(live_ids),
+        "files": total_files,
+        "bytes": total_bytes,
+        "by_dir": by_dir,
+        "deleted": not body.dry_run,
+    }
+
+
 # ── 热力图 + 场次滑杆的数据源（V3/V4）─────────────────────────────────────
 @router.get("/fan/{vtuber}/activity")
 def fan_activity(

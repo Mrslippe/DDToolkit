@@ -1467,6 +1467,26 @@ export interface FanVtuber {
   sessions: number
 }
 
+export interface FanPurgeIn {
+  dryRun: boolean
+  scope: 'all' | 'window'
+  since?: string
+  until?: string
+}
+
+/** 删除已采集数据的预览/结果（`dry_run` 时只算不删） */
+export interface FanPurgeResult {
+  vtuber: string
+  dry_run: boolean
+  scope: string
+  root: string
+  sessions: number
+  files: number
+  bytes: number
+  by_dir: Record<string, { files: number; bytes: number }>
+  deleted: boolean
+}
+
 export interface FanActivityDay { n: number; c: number }
 export interface FanActivitySession { at: string; c: boolean; n: number }
 
