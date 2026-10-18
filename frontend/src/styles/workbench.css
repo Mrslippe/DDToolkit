@@ -902,3 +902,112 @@
   flex: 1;
   min-width: 0;
 }
+
+
+/* ── 结果区改造（2026-10-19）───────────────────────────────────────────── */
+
+/* 采集/分析：直播与采集卡的**右下角** */
+.wb-hm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* 进行中：大百分比 + 粗进度条 */
+.wb-busy {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.wb-busy-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--c-text-main);
+}
+
+.wb-busy-pct {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--c-primary-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-bar-lg {
+  height: 10px;
+  border-radius: 99px;
+}
+
+/* 分析没有百分比可报 —— 用滚动条纹表示"在动"，**不编数字** */
+.wb-bar-lg.is-indeterminate .wb-bar-fill {
+  background: linear-gradient(90deg, var(--c-primary) 0%,
+                            var(--c-primary-deep) 50%, var(--c-primary) 100%);
+  background-size: 200% 100%;
+  animation: wb-bar-slide 1.1s linear infinite;
+}
+
+@keyframes wb-bar-slide {
+  from { background-position: 200% 0; }
+  to { background-position: 0 0; }
+}
+
+/* 空态：把「采集 → 分析 → 结果」讲清楚 */
+.wb-flow {
+  align-items: flex-start;
+  text-align: left;
+  gap: 8px;
+  padding: 8px 4px;
+}
+
+.wb-flow-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.wb-flow-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--c-text-sub);
+}
+
+.wb-flow-note {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  opacity: 0.85;
+}
+
+/* 结果小卡片：饼图 + 分布曲线并排 */
+.wb-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+
+@media (max-width: 980px) {
+  .wb-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wb-chart-card {
+  padding: 12px 14px;
+  gap: 8px;
+  background: var(--c-bg-list);
+}
+
+.wb-chart {
+  width: 100%;
+  height: 208px;
+}

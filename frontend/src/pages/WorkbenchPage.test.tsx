@@ -214,26 +214,20 @@ describe('数据分析工作台', () => {
     expect(fanCollectStatus.mock.calls.length).toBeGreaterThan(0)
   })
 
-  it('「查看名单」按 strength 取，表格与标签都渲染出来', async () => {
+  it('「分析」按 strength 取，结果显示为两张小卡片', async () => {
     await mount()
     await act(async () => {
-      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+      (document.querySelector('[data-testid="workbench-load"]') as HTMLElement).click()
     })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
     expect(fanRanked).toHaveBeenCalledTimes(1)
-    const [name, by] = fanRanked.mock.calls[0] as [string, string]
-    expect(name).toBe('弥月Mizuki')
-    expect(by).toBe('strength')      // 后端没有默认口径，前端必须显式给
-
-    const table = q('[data-testid="workbench-table"]')
-    expect(table).not.toBeNull()
-    expect(table!.textContent).toContain('19871')
-    expect(table!.textContent).toContain('满勤')       // 标签 chip
-    expect(table!.textContent).toContain('大额打米')
-    expect(table!.textContent).toContain('100%')        // 出席率
+    expect(fanRanked.mock.calls[0][1]).toBe('strength')
+    // 结果区的主展示：分层饼图 + 核心度分布（表格已按用户要求移出）
+    expect(document.querySelector('[data-testid="chart-pie-card"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="chart-line-card"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="workbench-table"]')).toBeNull()
   })
-
   it('接口报错时把话说清楚，而不是空白', async () => {
     fanRanked.mockRejectedValue(new Error('数据分析工作台未启用'))
     await mount()
