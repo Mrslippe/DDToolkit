@@ -1499,6 +1499,8 @@ export interface FanProfileStats {
 /** 工作台档案卡（2026-10-18）。`vtuber` 直接复用 `VTuberOut`，不另造序列化。 */
 export interface FanProfile {
   vtuber: VTuber
+  /** 头像解析链的第 ②~⑤ 级都在账号上；缺了它就只能读到 `vtubers.avatar` 这层覆盖字段 */
+  accounts: Account[]
   stats: FanProfileStats
 }
 

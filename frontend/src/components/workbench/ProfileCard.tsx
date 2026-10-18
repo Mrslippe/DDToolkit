@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, resolveAsset } from '../../api/api'
 import type { FanProfile } from '../../api/types'
+import { resolveAvatarSources } from '../../utils/avatarSource'
 import ProxyImage from '../common/ProxyImage'
 
 interface VOption {
@@ -78,6 +79,10 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
   const group = (v.group_name || v.faction || '').trim()
   const sign = (v.sign_override || '').trim()
   const bg = resolveAsset(v.background_path)
+  /* ⚠️ 与左栏**同一个函数**（`devlog/135` 的教训：各写一条链，迟早漂开）。
+     2026-10-18 实测踩到：只读 `v.avatar`（覆盖字段）⇒ dev 库里它是空的，
+     于是左栏有头像、工作台只有首字兜底。 */
+  const avatar = resolveAvatarSources(v, data.accounts)
   const pct = Math.round(s.coverage * 1000) / 10
 
   return (
@@ -89,8 +94,8 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
           <ProxyImage
             className="wb-profile-avatar"
             alt={v.name}
-            src={v.avatar}
-            fallbackSrc={resolveAsset(v.avatar_local)}
+            src={avatar.src}
+            fallbackSrc={resolveAsset(avatar.local)}
             fallbackClassName="wb-profile-avatar wb-profile-avatar-fb"
             fallback={<span>{v.name.slice(0, 1)}</span>}
           />

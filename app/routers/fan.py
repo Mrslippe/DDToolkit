@@ -648,8 +648,14 @@ def fan_profile(
     except FanDataNotFound:
         collected = 0
 
+    # 头像的解析链要 `accounts`（`resolveAvatarSources` 的第 ②~⑤ 级全在账号上）。
+    # 不带上它，前端只能读 `vtubers.avatar` 这个**覆盖**字段 —— 它本来就多半是空的。
+    from app.schemas.vtuber import AccountOut
+
+    accounts = [AccountOut.model_validate(a) for a in (row.accounts or [])]
     return {
         "vtuber": base.model_dump(),
+        "accounts": [a.model_dump() for a in accounts],
         "stats": {
             "followers": int(fans) if fans else None,
             "total_sessions": total,
