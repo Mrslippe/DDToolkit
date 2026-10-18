@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/api'
 import type {
@@ -137,6 +137,14 @@ export default function WorkbenchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress?.state, picked])
 
+  /* ★ **窗口内的场次以"切片"为准，不以日期区间为准**（2026-10-19 用户发现
+     「窗口 75 场 / 已有 77 场」）。窗口是按场次切的 75 条，换成日期区间去库里数会把
+     **边界那两天整天**算进去，于是区间内有 78 场。所以"已有/待采"直接从切片上的 `c` 数。 */
+  const slice = useMemo(
+    () => (activity && win ? activity.recent.slice(win.start, win.start + win.size) : []),
+    [activity, win],
+  )
+
   const loadRanked = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
@@ -157,7 +165,11 @@ export default function WorkbenchPage() {
     setBusy(true)
     setErr(null)
     try {
-      await api.fanCollect(picked, since, until)
+      /* 发**窗口切片**的场次清单：日期区间可能含边界日的额外场次，
+         只有按清单采才能保证"采的就是窗口里那几场"。 */
+      await api.fanCollect(picked, since, until,
+        slice.filter((s) => !s.c && (s as { live_id?: string }).live_id)
+          .map((s) => ({ live_id: String((s as { live_id?: string }).live_id), start_at: s.at })))
       setProgress({ vtuber: picked, since, until, state: 'running',
                     total: preview?.to_collect ?? 0, done: 0, failed: 0,
                     skipped: 0, current: '', message: '', elapsed: 0 })
@@ -166,7 +178,7 @@ export default function WorkbenchPage() {
     } finally {
       setBusy(false)
     }
-  }, [picked, since, until, preview])
+  }, [picked, since, until, preview, slice])
 
   const cancel = useCallback(async (): Promise<void> => {
     try { await api.fanCollectCancel(picked) } catch (e) { setErr(friendly(e as Error)) }
@@ -178,9 +190,6 @@ export default function WorkbenchPage() {
      窗口是**按场次**切的 75 条，但换成日期区间去库里数，会把**边界那两天整天**都算进去 ——
      那两天各有额外场次，于是区间内有 78 场，超过窗口的 75。
      所以"已有/待采"直接从切片上的 `c`（该场是否已采）数出来，三个数字自然自洽。 */
-  const slice = activity && win
-    ? activity.recent.slice(win.start, win.start + win.size)
-    : []
   const alreadyInWin = slice.filter((s) => s.c).length
   const toCollect = win ? win.size - alreadyInWin : null
   const unknown = toCollect === null

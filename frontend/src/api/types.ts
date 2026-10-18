@@ -1501,6 +1501,8 @@ export interface FanActivity {
   /** 最近 N 场，时间正序 */
   recent: FanActivitySession[]
   limit: number
+  /** 该场的 live_id（2026-10-19 起提供）：采集按窗口清单发 */
+  live_id?: string
 }
 
 export interface FanProfileStats {

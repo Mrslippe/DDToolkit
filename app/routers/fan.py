@@ -270,6 +270,10 @@ async def _resolve_sessions(v, since: str, until: str, db: Session | None = None
 class CollectRequest(BaseModel):
     since: str = Field(..., description="起始日期 YYYY-MM-DD（含）")
     until: str = Field(..., description="结束日期 YYYY-MM-DD（含）")
+    #: 显式场次清单（2026-10-19）：给了就**按这批 live_id 采**，忽略日期枚举。
+    #: 界面上的"窗口"是 75 场，而日期区间可能含 78 场（边界日外溢）——
+    #: 传这个清单才能保证"采的就是窗口里那 75 场"。
+    sessions: list[dict[str, str]] | None = None
 
 
 @router.get("/fan/{vtuber}/sessions")
@@ -341,7 +345,15 @@ async def start_collect(
     _STOP[v.subdir] = False
 
     # 场次列表在**开始前**就定下来（本地优先）；不然采集中途上游挂了会采一半
-    sessions, source = await _resolve_sessions(v, since, until, db)
+    explicit = payload.sessions
+    if explicit:
+        from app.services.fan.collector import SessionPlan
+        plans = [SessionPlan(live_id=str(x.get("live_id") or ""),
+                             start_at=str(x.get("start_at") or ""))
+                 for x in explicit if x.get("live_id")]
+        sessions, source = plans, "window"
+    else:
+        sessions, source = await _resolve_sessions(v, since, until, db)
 
     async def run() -> None:
         try:
@@ -689,7 +701,7 @@ def fan_activity(
             continue
         n = collected.get(str(lid), 0) if lid else 0
         has = bool(lid) and str(lid) in collected
-        recent.append({"at": iso, "c": has, "n": n})
+        recent.append({"at": iso, "c": has, "n": n, "live_id": str(lid or "")})
         day = iso[:10]
         if has and day in days:
             days[day]["c"] += 1

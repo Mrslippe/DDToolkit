@@ -1067,12 +1067,15 @@ export const api = {
     request<FanSessionPreview>(
       `/fan/${encodeURIComponent(name)}/sessions?since=${since}&until=${until}`),
   /** 启动采集（同一主播同时只允许一个任务；已在跑 → 409） */
-  fanCollect: (name: string, since: string, until: string) =>
+  /** `sessions` = 窗口里那几场的 {live_id, start_at}：给了就按清单采，
+      不让后端按日期区间重新枚举（区间含边界日外溢，会多采几场）。 */
+  fanCollect: (name: string, since: string, until: string,
+               sessions?: { live_id: string; start_at: string }[]) =>
     request<{ ok: boolean; vtuber: string; since: string; until: string; state: string }>(
       `/fan/${encodeURIComponent(name)}/collect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ since, until }),
+        body: JSON.stringify({ since, until, sessions: sessions ?? null }),
       }),
   /** 采集进度（不传 name 则返回全部任务） */
   fanCollectStatus: (name?: string) =>
