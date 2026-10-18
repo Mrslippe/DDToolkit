@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, resolveAsset } from '../../api/api'
 import type { FanProfile } from '../../api/types'
 import { resolveAvatarSources } from '../../utils/avatarSource'
+import { withNetRetry } from '../../utils/netRetry'
 import ProxyImage from '../common/ProxyImage'
 
 interface VOption {
@@ -53,7 +54,7 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
     let alive = true
     setErr(null)
     setData(null)
-    api.fanProfile(name)
+    withNetRetry(() => api.fanProfile(name))
       .then((r) => { if (alive) setData(r) })
       .catch((e: Error) => { if (alive) setErr(e.message) })
     return () => { alive = false }

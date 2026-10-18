@@ -8,6 +8,7 @@ import FloatPill from '../components/common/FloatPill'
 import Heatmap from '../components/workbench/Heatmap'
 import ProfileCard from '../components/workbench/ProfileCard'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
+import { withNetRetry } from '../utils/netRetry'
 import '../styles/workbench.css'
 
 /** 名单默认条数（后端上限 5000） */
@@ -71,7 +72,7 @@ export default function WorkbenchPage() {
   // 1) 主播表 + 模块开关
   useEffect(() => {
     let alive = true
-    api.fanVtubers()
+    withNetRetry(() => api.fanVtubers())
       .then((r) => {
         if (!alive) return
         setEnabled(r.enabled)
@@ -91,7 +92,7 @@ export default function WorkbenchPage() {
     setRanked(null)
     setProgress(null)
     setWin(null)
-    api.fanActivity(picked)
+    withNetRetry(() => api.fanActivity(picked))
       .then((r) => { if (alive) setActivity(r) })
       .catch((e: Error) => { if (alive) setErr(e.message) })
     return () => { alive = false }
@@ -105,7 +106,7 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (enabled !== true || !picked || !since || !until) return
     let alive = true
-    api.fanSessions(picked, since, until)
+    withNetRetry(() => api.fanSessions(picked, since, until))
       .then((r) => { if (alive) setPreview(r) })
       .catch((e: Error) => { if (alive) setErr(friendly(e)) })
     return () => { alive = false }
@@ -121,7 +122,7 @@ export default function WorkbenchPage() {
           setProgress(p)
           if (p && p.state !== 'running') {
             // 采完刷新一次热力图与名单
-            api.fanActivity(picked).then(setActivity).catch(() => {})
+            withNetRetry(() => api.fanActivity(picked)).then(setActivity).catch(() => {})
             void loadRanked()
           }
         })
@@ -135,7 +136,8 @@ export default function WorkbenchPage() {
     if (!picked || !since || !until) return
     setBusy(true)
     try {
-      setRanked(await api.fanRanked(picked, 'strength', { since, until, limit: LIMIT }))
+      setRanked(await withNetRetry(
+        () => api.fanRanked(picked, 'strength', { since, until, limit: LIMIT })))
       setErr(null)
     } catch (e) {
       setErr((e as Error).message)

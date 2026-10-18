@@ -169,7 +169,8 @@ describe('数据分析工作台', () => {
     // 2026-10-18 用户截图：滑杆写「待采 75」，结果区写「待采 0 / 已全部采集」
     fanSessions.mockRejectedValue(new Error('Failed to fetch'))
     await mount()
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    // 网络级失败会先做几次短重试（utils/netRetry，合计约 1.2s）才把错误抛出来
+    await act(async () => { await new Promise((r) => setTimeout(r, 1500)) })
 
     const btn = q<HTMLButtonElement>('[data-testid="workbench-collect"]')!
     expect(btn.disabled).toBe(true)
