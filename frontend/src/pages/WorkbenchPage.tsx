@@ -5,6 +5,15 @@ import type {
   FanActivity, FanCollectProgress, FanRanked, FanSessionPreview, FanVtuber,
 } from '../api/types'
 import FloatPill from '../components/common/FloatPill'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog'
 import Heatmap from '../components/workbench/Heatmap'
 import ProfileCard from '../components/workbench/ProfileCard'
 import PurgeButton from '../components/workbench/PurgeButton'
@@ -59,6 +68,8 @@ export default function WorkbenchPage() {
   const [ranked, setRanked] = useState<FanRanked | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  /** 采集结束后的结果弹窗（done / failed / cancelled）；null = 不显示 */
+  const [summary, setSummary] = useState<FanCollectProgress | null>(null)
   /** 重试计数：失败时点「重试」把它 +1，预估的 effect 就会再跑一次 */
   const [retryTick, setRetryTick] = useState(0)
 
@@ -115,7 +126,9 @@ export default function WorkbenchPage() {
           setProgress(p)
           if (p && p.state !== 'running') {
             withNetRetry(() => api.fanActivity(picked)).then(setActivity).catch(() => {})
-            void loadRanked()
+            /* ⚠️ **采集与分析解耦**（2026-10-19 用户第 2 条）：以前这里会自动 `loadRanked()`，
+               用户没点「分析」就自己开始算。现在只弹采集结果，要不要分析由用户决定。 */
+            setSummary(p)
           }
         })
         .catch(() => { /* 轮询失败不弹窗，下一拍再试 */ })
@@ -319,6 +332,46 @@ export default function WorkbenchPage() {
             </div>
           )}
         </section>
+
+        {/* 采集结果弹窗（2026-10-19 用户第 2 条）：成功 / 跳过 / 失败 + **逐场失败原因** */}
+        <AlertDialog open={summary !== null} onOpenChange={(o) => { if (!o) setSummary(null) }}>
+          <AlertDialogContent data-testid="collect-dialog">
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {summary?.state === 'cancelled' ? '采集已取消'
+                  : summary?.state === 'failed' ? '采集失败' : '采集完成'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {summary && (
+                  <>
+                    成功 <b>{summary.done}</b> 场 · 跳过 <b>{summary.skipped}</b> 场（已采过）
+                    · 失败 <b>{summary.failed}</b> 场
+                    {summary.message ? `。${summary.message}` : ''}
+                  </>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {summary && (summary.failures?.length ?? 0) > 0 && (
+              <div className="wb-fails" data-testid="collect-failures">
+                <p className="wb-fails-title">没采到的场次（{summary.failures!.length}）</p>
+                <ul className="wb-fails-list">
+                  {summary.failures!.slice(0, 40).map((f) => (
+                    <li key={f.live_id}>
+                      <b>{String(f.start_at).slice(0, 16).replace('T', ' ')}</b> —— {f.reason}
+                    </li>
+                  ))}
+                </ul>
+                {summary.failures!.length > 40 && (
+                  <p className="wb-flow-note">只列出前 40 条。</p>
+                )}
+              </div>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogAction onClick={() => setSummary(null)}
+                                 data-testid="collect-dialog-ok">知道了</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <p className="wb-foot">
           口径：参与强度 = 三轴分位的等权平均（不含价值判断）；类型 = 主导轴 + 纯度门槛的

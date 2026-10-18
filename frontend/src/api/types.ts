@@ -1544,6 +1544,12 @@ export interface FanSessionPreview {
   last: string | null
 }
 
+export interface FanCollectFailure {
+  live_id: string
+  start_at: string
+  reason: string
+}
+
 export interface FanCollectProgress {
   vtuber: string
   since: string
@@ -1556,6 +1562,8 @@ export interface FanCollectProgress {
   current: string
   message: string
   elapsed: number
+  /** 逐场失败原因（后端 2026-10-19 起提供） */
+  failures?: FanCollectFailure[]
 }
 
 export interface FanRankedRow {

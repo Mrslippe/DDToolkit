@@ -92,6 +92,9 @@ class CollectProgress:
     done: int = 0
     failed: int = 0
     skipped: int = 0          # 已存在且跳过
+    #: 逐场失败明细（2026-10-19）：`[{live_id, start_at, reason}]`。
+    #: 之前只有 `failed` 一个计数，拿不到“哪几场没采到、为什么”—— 采集弹窗要用它。
+    failures: list[dict[str, Any]] = field(default_factory=list)
     current: str = ""
     message: str = ""
     started_at: float = field(default_factory=time.time)
@@ -111,6 +114,7 @@ class CollectProgress:
             "done": self.done,
             "failed": self.failed,
             "skipped": self.skipped,
+            "failures": self.failures,
             "current": self.current,
             "message": self.message,
             "elapsed": round(self.elapsed, 1),
@@ -378,12 +382,16 @@ async def collect(
                                     [("liveId", s.live_id), ("pageSize", COLLECT_PAGE_SIZE)])
                 if not j:
                     p.failed += 1
+                    p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
+                                       "reason": "上游没有返回该场的弹幕（可能已下架或接口无数据）"})
                     return
                 env = (j.get("data") or {})
                 inner = env.get("data") or {}
                 recs = inner.get("danmakus") or []
                 if len(recs) < MIN_RECORDS:
                     p.failed += 1
+                    p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
+                                       "reason": f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）"})
                     return
                 raw, stats = aggregate(recs)
                 stats["live_id"] = s.live_id

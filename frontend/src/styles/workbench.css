@@ -1024,3 +1024,32 @@
   width: 100%;
   height: 208px;
 }
+
+/* 采集结果弹窗里的失败清单 */
+.wb-fails {
+  margin: 2px 0 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  padding: 8px 10px;
+  background: var(--c-bg-list);
+}
+
+.wb-fails-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.wb-fails-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--c-text-sub);
+}
