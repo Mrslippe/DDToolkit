@@ -297,7 +297,16 @@ async def session_preview(
         sessions, source = await _resolve_sessions(v, since, until, db)
         _PLAN_CACHE[key] = (now, sessions, source)
 
-    root = resolve_data_dir() / v.subdir
+    # 数据根可能还不存在（dev 数据目录里没有 fan-structure 就是这样）。不兜住会 500，
+    # 前端只看到 `Failed to fetch` —— 2026-10-18 用户截图正是这条。
+    try:
+        root = resolve_data_dir() / v.subdir
+    except FanDataNotFound as exc:
+        raise HTTPException(
+            409,
+            "还没有任何分析数据根。请在工作台里选一个区间后点「开始采集」建立它；"
+            f"开发时也可以设 DDTOOLKIT_FAN_DATA_DIR 指向已有的数据集。（{exc}）",
+        ) from exc
     have = ({p.stem for p in (root / "stats").glob("*.json")}
             if (root / "stats").is_dir() else set())
     todo = [s for s in sessions if s.live_id not in have]
