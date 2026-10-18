@@ -246,7 +246,8 @@ export default function WorkbenchPage() {
           <section className="wb-card wb-hm-card" data-testid="workbench-heatmap">
             {activity ? (
               <>
-                <Heatmap days={activity.days} years={activity.years}
+                <Heatmap days={activity.days} detail={activity.detail}
+                         years={activity.years}
                          today={activity.today}
                          defaultYear={Number(activity.today.slice(0, 4))} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow} />

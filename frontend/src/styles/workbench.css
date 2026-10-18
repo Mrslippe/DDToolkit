@@ -1070,3 +1070,31 @@
   color: var(--c-text-main);
   white-space: nowrap;
 }
+
+/* 浮窗里的逐场明细 */
+.wb-tip-line {
+  display: block;
+  margin-top: 2px;
+  color: var(--c-text-sub);
+}
+
+.wb-tip-sess {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  max-width: 260px;
+}
+
+.wb-tip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-main);
+}
+
+.wb-tip-meta {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}

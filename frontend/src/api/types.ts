@@ -1487,6 +1487,14 @@ export interface FanPurgeResult {
   deleted: boolean
 }
 
+export interface HmSession {
+  title: string
+  at: string
+  /** 时长（分钟）；后端拿不到 end_at 时为 null */
+  dur: number | null
+  m: number
+}
+
 export interface FanActivityDay { n: number; c: number }
 export interface FanActivitySession { at: string; c: boolean; n: number }
 
@@ -1499,6 +1507,8 @@ export interface FanActivity {
   /** 每天：n = 场次数，c = 其中已采场次数 */
   days: Record<string, FanActivityDay>
   /** 最近 N 场，时间正序 */
+  /** 逐场明细：日期 → 场次（标题/时长/弹幕量） */
+  detail?: Record<string, HmSession[]>
   recent: FanActivitySession[]
   limit: number
   /** 该场的 live_id（2026-10-19 起提供）：采集按窗口清单发 */

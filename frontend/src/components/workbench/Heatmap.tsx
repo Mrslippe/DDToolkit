@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { HmSession } from '../../api/types'
 
 interface DayStat {
   /** 当天场次数 —— **热力图深浅只编码它** */
@@ -9,6 +11,8 @@ interface DayStat {
 
 interface Props {
   days: Record<string, DayStat>
+  /** 逐场明细（`/activity` 的 `detail`）：日期 → 该天的场次，浮窗用 */
+  detail?: Record<string, HmSession[]>
   years: number[]
   /** 服务器当天（`YYYY-MM-DD`）—— 灰格判定必须与后端同一天 */
   today: string
@@ -44,14 +48,14 @@ function iso(d: Date): string {
  * 几何：`left = 列序号 × (CELL + GAP)`，**精确像素**，与格子严格同轴；
  * 年份写在 1 月那一列上方 —— 那正是 12 月与 1 月的交界处。
  */
-export default function Heatmap({ days, years, today, defaultYear }: Props) {
+export default function Heatmap({ days, detail, years, today, defaultYear }: Props) {
   const [year, setYear] = useState(defaultYear)
   const minYear = years[0] ?? defaultYear
   const maxYear = years[years.length - 1] ?? defaultYear
 
   /** 格子的 hover 浮窗（2026-10-19 用户第 5 条）：**不用原生 title**，
       原生小黄条既不受样式控制，也在暗色/缩放下发虚。位置用 fixed 跟随光标。 */
-  const [hover, setHover] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [hover, setHover] = useState<{ x: number; y: number; day: string } | null>(null)
 
   const grid = useMemo(() => {
     const jan1 = new Date(year, 0, 1)
@@ -125,14 +129,12 @@ export default function Heatmap({ days, years, today, defaultYear }: Props) {
           else if (future) cls.push('future')
           else if (n > 0) cls.push(`n${Math.min(3, n)}`)
           if (c.in && !future && coll > 0) cls.push('coll')
-          const text = !c.in ? '' : future ? `${c.d} · 还没到`
-            : `${c.d} · ${n ? `${n} 场` : '无直播'}${coll ? ` · 已采 ${coll} 场` : ''}`
           return (
             <div key={c.d} className={cls.join(' ')}
                  data-testid="hm-cell" data-day={c.d}
-                 onMouseEnter={text ? (e) => setHover({ x: e.clientX, y: e.clientY, text }) : undefined}
-                 onMouseMove={text ? (e) => setHover({ x: e.clientX, y: e.clientY, text }) : undefined}
-                 onMouseLeave={text ? () => setHover(null) : undefined} />
+                 onMouseEnter={c.in && !future ? (e) => setHover({ x: e.clientX, y: e.clientY, day: c.d }) : undefined}
+                 onMouseMove={c.in && !future ? (e) => setHover({ x: e.clientX, y: e.clientY, day: c.d }) : undefined}
+                 onMouseLeave={c.in && !future ? () => setHover(null) : undefined} />
           )
         })}
       </div>
@@ -147,10 +149,33 @@ export default function Heatmap({ days, years, today, defaultYear }: Props) {
         <span className="wb-lg"><i style={{ background: '#e7eaee' }} /> 灰 = 还没到</span>
       </div>
 
-      {/* 自定义浮窗（2026-10-19 用户第 5 条）：fixed 跟随光标，不参与布局 */}
-      {hover && (
+      {/* 自定义浮窗：**用 Portal 挂到 body**（2026-10-19 修偏移）。
+          ⚠️ 之前直接放在卡片里：只要某个祖先带 `transform`（页面入场动画 `rise-in-page`
+          就会留在计算样式里），`position: fixed` 的包含块就变成那个祖先 ——
+          于是 `clientX/clientY` 被当成了相对它的坐标，浮窗整体偏移。挂到 body 就没有这层。 */}
+      {hover && createPortal(
         <div className="wb-hm-tip" data-testid="hm-tip"
-             style={{ left: hover.x + 12, top: hover.y + 14 }}>{hover.text}</div>
+             style={{ left: hover.x + 14, top: hover.y + 16 }}>
+          <b>{hover.day}</b>
+          {(() => {
+            const list = detail?.[hover.day] ?? []
+            const stat = days[hover.day]
+            if (!list.length) {
+              return <span className="wb-tip-line">{stat?.n ? `${stat.n} 场` : '无直播'}</span>
+            }
+            return list.map((s, i) => (
+              <div className="wb-tip-sess" key={`${hover.day}-${i}`}>
+                <span className="wb-tip-title">{s.title || '（无标题）'}</span>
+                <span className="wb-tip-meta">
+                  {s.at.slice(11, 16)}
+                  {s.dur != null ? ` · ${Math.floor(s.dur / 60)}h${s.dur % 60}m` : ''}
+                  {` · 弹幕 ${s.m.toLocaleString()}`}
+                </span>
+              </div>
+            ))
+          })()}
+        </div>,
+        document.body,
       )}
     </>
   )

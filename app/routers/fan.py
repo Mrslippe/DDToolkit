@@ -706,12 +706,43 @@ def fan_activity(
         if has and day in days:
             days[day]["c"] += 1
 
+    # 逐场明细（2026-10-19 用户）：热力图的浮窗要显示**场次名称 / 时长 / 弹幕量** ——
+    # 这些只有库里才有。按天分组，一天可能有多场。
+    detail: dict[str, list[dict[str, Any]]] = {}
+    for d, title, start_at, end_at, cnt in db.execute(
+        text(
+            "select date(s.start_at) d, s.title, s.start_at, s.end_at, s.danmakus_count "
+            "from live_sessions s join accounts a on a.id = s.account_id "
+            "where a.vtuber_id = :vid and a.platform = 'bilibili' "
+            "  and s.start_at is not null "
+            "  and s.session_key is not null and s.session_key != '' "
+            "order by s.start_at"
+        ),
+        {"vid": row.id},
+    ):
+        if not d:
+            continue
+        dur = None
+        try:
+            if end_at and start_at:
+                dur = max(0, int((end_at - start_at).total_seconds() // 60))
+        except (TypeError, ValueError):
+            dur = None
+        detail.setdefault(str(d), []).append({
+            "title": str(title or ""),
+            "at": str(start_at)[:19],
+            # 时长（分钟）；`end_at` 缺失时为 None —— **不猜**
+            "dur": dur,
+            "m": int(cnt or 0),
+        })
+
     return {
         "vtuber": v.name,
         "today": date.today().isoformat(),
         "years": sorted({int(k[:4]) for k in days}),
         "days": days,
         "recent": recent,
+        "detail": detail,
         "limit": limit,
     }
 
