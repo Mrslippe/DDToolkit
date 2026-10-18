@@ -67,6 +67,16 @@ from app.services.fan.collector import (
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
 from app.services.fan.tags import explain as explain_tags
+from app.services.fan.timeline import (
+    MAX_LAG,
+    TIERS_WITH_UNSEEN,
+    TIER_CORE,
+    TimelineError,
+    build_windows,
+    summarize as summarize_timeline,
+    survival,
+    transition,
+)
 from app.services.fan.tags import prevalence
 
 logger = logging.getLogger(__name__)
@@ -82,6 +92,9 @@ MAX_LIMIT = 5000
 MIN_WINDOW = 5
 MAX_WINDOW = 200
 DEFAULT_WINDOW = 75
+#: L6 滑动窗的默认参数（与 `timeline` 模块的常量同源）
+TIMELINE_SIZE = 25
+TIMELINE_STEP = 10
 
 _CACHE: dict[tuple, dict[str, Any]] = {}
 #: 采集任务：`v.subdir` → 进度对象。**同一主播同时只允许一个任务。**
@@ -462,6 +475,87 @@ def health(
         ],
         "warnings": win.warnings[:10],
     }
+
+
+# ── 时间动态（L6）──────────────────────────────────────────────────────────
+@router.get("/fan/{vtuber}/timeline")
+def timeline(
+    vtuber: str,
+    n: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    size: int = Query(TIMELINE_SIZE, ge=5, le=100, description="滑动窗的场次数"),
+    step: int = Query(TIMELINE_STEP, ge=1, le=100, description="相邻窗的步长（场）"),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """滑动窗 → 分层序列 → 迁移矩阵 → 换血率/半衰期（L6）。
+
+    ⚠️ **三个必须一起读的东西**（少一个就会误读）：
+
+    1. **层级在窗内按分位切** ⇒ 每层规模是固定比例（核心 20%）。所以"核心层 80% 下一窗还在
+       核心"**不能直接读成强留存** —— 独立假设下也有约 20% 落在对角线。判据是 `lift`。
+    2. **第 4 个状态「未观测」**：在 t 窗入池、t+1 窗没入池。它**不等于"降到外层"**
+       —— 把两者混起来会把"停止观看"和"看得少了"当成一件事。
+    3. **半衰期只在指数衰减成立时才可信**。实测三条曲线全都先掉后平，所以同时给 `r2`
+       与 `plateau`；`r2 < 0.9` 时半衰期只是粗估。
+
+    代价：每个窗口都要重读一遍 raw ⇒ 单次约 10~30 秒（结果进进程内缓存）。
+    """
+    from itertools import pairwise
+
+    v = _resolve(vtuber, _LAST_DB.get("db"))
+    key = ("timeline", v.subdir, n, size, step)
+    hit = _CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    try:
+        snaps, full = build_windows(v, n, size=size, step=step)
+    except TimelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FanDataNotFound as exc:
+        raise HTTPException(
+            404,
+            "还没有任何分析数据。请在工作台里选一个主播和时间区间，点「开始采集」；"
+            f"首采需要几分钟。（{exc}）",
+        ) from exc
+
+    trans = [transition(a, b) for a, b in pairwise(snaps)]
+    summary = summarize_timeline(snaps)
+
+    payload = {
+        "vtuber": v.name,
+        "spec": {"size": size, "step": step, "total_sessions": full.n,
+                 "tiers": list(TIERS_WITH_UNSEEN), "max_lag": MAX_LAG},
+        "coverage": {"first_date": snaps[0].first_date, "last_date": snaps[-1].last_date},
+        "windows": [s.meta() for s in snaps],
+        "transitions": [
+            {
+                "from": t.from_index, "to": t.to_index,
+                "union": t.union,
+                "counts": t.counts,
+                "expected": {ra: {cb: round(x, 2) for cb, x in row.items()}
+                             for ra, row in t.expected.items()},
+                "lift": {ra: {cb: round(x, 3) for cb, x in row.items()}
+                         for ra, row in t.lift.items()},
+                "core": {
+                    "retention_raw": round(t.retention(TIER_CORE), 4),
+                    "lift": round(t.diagonal_lift(TIER_CORE), 3),
+                    "churn": round(t.churn(TIER_CORE), 4),
+                },
+            }
+            for t in trans
+        ],
+        "summary": summary,
+        "tails": {tier: survival(snaps, tier).meta() for tier in TIERS_WITH_UNSEEN[:3]},
+        "notes": [
+            "层级在窗内按分位切 ⇒ 每层规模固定；判据看 lift，不看对角线",
+            "「未观测」= 下一窗没入池，不等于降到外层",
+            "半衰期只在指数衰减成立时才可信；看 r2 与 plateau",
+            "窗口有重叠（step < size）⇒ 相邻迁移不是独立观测",
+        ],
+    }
+    _CACHE[key] = payload
+    logger.info("fan: 已算 %s 的 L6（%s 窗，size=%s step=%s）", v.name, len(snaps), size, step)
+    return payload
 
 
 # ── 跨 V ────────────────────────────────────────────────────────────────────
