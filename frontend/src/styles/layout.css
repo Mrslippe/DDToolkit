@@ -1344,18 +1344,18 @@ html[data-group-badge='off'] .vtuber-emblem {
 }
 
 
-/* ── 界面切换的揭幕（2026-10-18 用户）────────────────────────────────────
-   与启动同一套语言：**两块面板从中间向上下滑开**，内容在下层微微上浮。
+/* ── 界面切换的揭幕（2026-10-18 用户第 3 版）────────────────────────────
+   四段：**闭幕 → 渐显目标界面的图标 → 一小段加载 → 揭幕 → 结束**。
 
-   ⚠️ 两处曾经做错、记在这里：
-   ① 第一版只给 `.app-main` 加动效 —— 但左栏不在 `.app-main` 里，它从 `display:none`
-      切回时要重新测量，那块空白在内容区之外。所以幕布必须盖住**整个 `.app-body`**。
-   ② 第二版幕布是单块纯色 `--c-bg-page`（#fffbfb）盖在同样近白的页面上 —— **等于隐形**，
-      淡出看不出任何变化。所以改成两块面板 + **边缘投影**：可见的是那条移动的边，不是颜色。 */
+   ⚠️ 三条踩过的坑，记在这里免得再犯：
+   ① 触发条件是**换界面**（帖子浏览 ⇄ 工作台），不是"路径变了" —— 否则在同一界面里
+      换左栏的 V 也会播一遍。
+   ② 幕布必须盖住**整个 `.app-body`**：左栏从外面切回时要重新测量，那块空白在内容区之外。
+   ③ 幕布不能是单块近白纯色（#fffbfb 盖在 #fffbfb 上 = 隐形）。可见的是**移动的边**，
+      所以用两块面板 + 边缘投影。 */
 .view-curtain {
   position: absolute;
-  /* 从工具栏右缘开始：揭幕**不盖住左工具栏**（用户 2026-10-18）。
-     50px 与 `.icon-rail` 的宽度一致，改栏宽要同步改这里。 */
+  /* 从工具栏右缘开始：揭幕不盖左工具栏。50px = `.icon-rail` 宽度。 */
   top: 0;
   right: 0;
   bottom: 0;
@@ -1378,19 +1378,55 @@ html[data-group-badge='off'] .vtuber-emblem {
 .view-curtain::before {
   top: 0;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
-  animation: curtain-up 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+  transform: translateY(-100%);        /* 默认在画面外 = 敞开 */
 }
 
 .view-curtain::after {
   bottom: 0;
   box-shadow: 0 -8px 22px rgba(15, 23, 42, 0.10);
+  transform: translateY(100%);
+}
+
+/* ① 闭幕：两块从上下合到中间 */
+.view-curtain.is-closing::before {
+  animation: curtain-in-up 180ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+.view-curtain.is-closing::after {
+  animation: curtain-in-down 180ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+/* ② 图标段与 ③ 加载段：幕布保持**合着**（贴回原位） */
+.view-curtain.is-icon::before,
+.view-curtain.is-loading::before {
+  transform: none;
+}
+.view-curtain.is-icon::after,
+.view-curtain.is-loading::after {
+  transform: none;
+}
+
+/* ④ 揭幕：再滑开 */
+.view-curtain.is-opening::before {
+  animation: curtain-up 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+.view-curtain.is-opening::after {
   animation: curtain-down 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
 }
 
-/* 加载段：两块面板先合着不动，中间一枚小转圈 —— 让"切换中"这件事被看见 */
-.view-curtain.is-loading::before,
-.view-curtain.is-loading::after {
-  animation: none;
+/* 目标界面的图标：渐显，比转圈更"像那个界面" */
+.view-curtain .curtain-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  margin: -13px 0 0 -17px;
+  color: var(--c-primary-deep);
+  animation: curtain-icon-in 160ms ease both;
+}
+
+.view-curtain.is-loading .curtain-icon {
+  opacity: 0.45;
 }
 
 .view-curtain .curtain-spin {
@@ -1399,17 +1435,21 @@ html[data-group-badge='off'] .vtuber-emblem {
   top: 50%;
   width: 22px;
   height: 22px;
-  margin: -11px 0 0 -11px;
+  margin: 26px 0 0 -11px;      /* 落在图标下方，不与图标叠 */
   border-radius: 50%;
   border: 2px solid rgba(201, 64, 111, 0.25);
   border-top-color: var(--c-primary-deep);
   animation: curtain-spin 620ms linear infinite;
 }
 
-@keyframes curtain-spin {
-  to {
-    transform: rotate(360deg);
-  }
+@keyframes curtain-in-up {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+
+@keyframes curtain-in-down {
+  from { transform: translateY(100%); }
+  to { transform: none; }
 }
 
 @keyframes curtain-up {
@@ -1420,6 +1460,15 @@ html[data-group-badge='off'] .vtuber-emblem {
 @keyframes curtain-down {
   from { transform: none; }
   to { transform: translateY(100%); }
+}
+
+@keyframes curtain-icon-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes curtain-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {

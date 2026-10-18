@@ -23,7 +23,8 @@
 
 .wb-inner {
   width: 100%;
-  max-width: 980px;          /* 内容宽度上限：表格再宽也留住可扫视的行长 */
+  /* 顶到窗口满宽（用户 2026-10-18）：原来 980 / 1240 的上限在默认窗口下左右留白太多。 */
+  max-width: none;          /* 内容宽度上限：表格再宽也留住可扫视的行长 */
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -817,8 +818,10 @@
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
 }
 
-.wb-win .h.l { left: -6px; cursor: ew-resize; }
-.wb-win .h.r { right: -6px; cursor: ew-resize; }
+/* 手柄**贴在窗口内侧**（2026-10-18 用户：拖动时不要超出外层时间窗口）。
+   原来用 `-6px` 让手柄探出窗口外 —— 窗口贴到轨道最左/最右时，手柄就跑到轨道外面去了。 */
+.wb-win .h.l { left: 0; cursor: ew-resize; }
+.wb-win .h.r { right: 0; cursor: ew-resize; }
 
 .wb-win .grip {
   position: absolute;

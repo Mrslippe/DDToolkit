@@ -40,6 +40,17 @@ vi.mock('./utils/shellState', () => ({
 vi.mock('./api/api', () => ({ api: { getAgreement: async () => ({ needed: false }) } }))
 
 import App from './App'
+import { useNavigate } from 'react-router-dom'
+
+function Nav() {
+  const nav = useNavigate()
+  return (
+    <>
+      <button data-testid="go-wb" onClick={() => nav('/workbench')}>wb</button>
+      <button data-testid="go-v17" onClick={() => nav('/vtubers/17')}>v17</button>
+    </>
+  )
+}
 
 let host: HTMLDivElement
 let root: Root
@@ -48,6 +59,7 @@ async function mount(path: string) {
   await act(async () => {
     root.render(
       <MemoryRouter initialEntries={[path]}>
+        <Nav />
         <App />
       </MemoryRouter>,
     )
@@ -93,14 +105,25 @@ describe('壳层 · 工作台不共用主播左栏', () => {
     expect(has('posts')).toBe(true)
   })
 
-  it('切界面时盖一层揭幕幕布（覆盖整个工作区，含左栏）', async () => {
-    // 用户口径：从左工具栏换页要像启动那样揭幕。
-    // 只给 `.app-main` 加动效不够 —— 左栏从 display:none 切回时要重新测量，
-    // 那块空白在内容区之外，必须由盖住整个 .app-body 的幕布遮掉。
-    await mount('/')
+  it('★ 换界面才揭幕；同一界面里换 V 不揭幕', async () => {
+    // 用户 2026-10-18：在帖子浏览里切换左栏的 V 也触发了揭幕 —— 那时我按 pathname 触发。
+    // 现在只看"帖子浏览 ⇄ 工作台"这个切换。
+    await mount('/vtubers/16')
+    expect(document.querySelector('.view-curtain')).toBeNull()   // 首次挂载不播
+
+    // ① 同一界面内换 V：不应触发
+    await act(async () => { (document.querySelector('[data-testid="go-v17"]') as HTMLElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelector('.view-curtain')).toBeNull()
+
+    // ② 换到工作台：应触发，并且整段流程后会自己撤掉
+    await act(async () => { (document.querySelector('[data-testid="go-wb"]') as HTMLElement).click() })
+    await act(async () => { await Promise.resolve() })
     expect(document.querySelector('.view-curtain')).not.toBeNull()
-    await act(async () => { await new Promise((r) => setTimeout(r, 400)) })
-    expect(document.querySelector('.view-curtain')).toBeNull()   // 260ms 后自动撤掉
+
+    // 闭幕 180 + 图标 140 + 加载 200 + 揭幕 260 ≈ 780ms
+    await act(async () => { await new Promise((r) => setTimeout(r, 1000)) })
+    expect(document.querySelector('.view-curtain')).toBeNull()
   })
 
   it('工作台下面再深的路径也算工作台（前缀判定）', async () => {

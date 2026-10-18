@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { BarChart3, FileText } from 'lucide-react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
@@ -20,9 +21,7 @@ import './styles/layout.css'
 import './styles/status-island.css'
 
 /** 揭幕幕布的时长（ms）。与 CSS 的 `.view-curtain` 动画时长必须一致。 */
-const CURTAIN_MS = 260
-/** 加载段时长（ms）。幕布先合着停这么久，再开始滑开。 */
-const CURTAIN_LOAD_MS = 120
+type Phase = 'idle' | 'closing' | 'icon' | 'loading' | 'opening'
 
 /**
  * 应用壳布局（参照设计稿 Frame1672）：
@@ -42,13 +41,23 @@ export default function App() {
   /* 三段式：**加载 → 揭幕 → 完成**（用户 2026-10-18）。
      ⚠️ 老实说：这是**按时间**分的段，不是"等数据真的回来"。要做成数据驱动，得让每个页面
      上报自己的首屏就绪 —— 那是另一件事，先按用户要的流程把节奏做出来。 */
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'opening'>('idle')
+  const [phase, setPhase] = useState<Phase>('idle')
+  /* ⚠️ 触发条件是**换界面**，不是"路径变了"（2026-10-18 用户：在帖子浏览里换左栏的 V
+     也会触发揭幕）。所以只看 `bareShell` —— 它只有"帖子浏览 ⇄ 工作台"两态；
+     同一界面内 `/vtubers/16 → /vtubers/17` 不算切换。 */
+  const prevBare = useRef(bareShell)
   useEffect(() => {
-    setPhase('loading')
-    const a = window.setTimeout(() => setPhase('opening'), CURTAIN_LOAD_MS)
-    const b = window.setTimeout(() => setPhase('idle'), CURTAIN_LOAD_MS + CURTAIN_MS)
-    return () => { window.clearTimeout(a); window.clearTimeout(b) }
-  }, [pathname])
+    if (prevBare.current === bareShell) return
+    prevBare.current = bareShell
+    setPhase('closing')
+    const timers = [
+      window.setTimeout(() => setPhase('icon'), 180),
+      window.setTimeout(() => setPhase('loading'), 180 + 140),
+      window.setTimeout(() => setPhase('opening'), 180 + 140 + 200),
+      window.setTimeout(() => setPhase('idle'), 180 + 140 + 200 + 260),
+    ]
+    return () => timers.forEach((x) => window.clearTimeout(x))
+  }, [bareShell])
 
   const mainRef = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -132,6 +141,11 @@ export default function App() {
      "让位"交给闲置状态决定。 */
   const idle = useSoloIdle(Boolean(solo))
 
+  /* 揭幕中间显示的是**目标界面**的图标：去工作台显示柱状图，回帖子浏览显示文件。 */
+  const TargetIcon = bareShell
+    ? <BarChart3 size={26} strokeWidth={1.8} />
+    : <FileText size={26} strokeWidth={1.8} />
+
   return (
     /* 单推模式的标记挂在这里：三段收起、空闲让位与 hover 唤出全走 CSS（`devlog/431`/`435`） */
     <div className="app-shell" data-solo={solo ? '1' : undefined}
@@ -151,7 +165,10 @@ export default function App() {
               组件与数据都留着，切回来立即有内容。 */}
           <VtuberSidebar />
           {phase !== 'idle' && (
-            <div className={`view-curtain is-${phase}`} key={pathname} aria-hidden>
+            <div className={`view-curtain is-${phase}`} aria-hidden>
+              {(phase === 'icon' || phase === 'loading') && (
+                <span className="curtain-icon">{TargetIcon}</span>
+              )}
               {phase === 'loading' && <span className="curtain-spin" />}
             </div>
           )}
