@@ -403,7 +403,9 @@
   padding: 0;
   overflow: hidden;
   min-height: 176px;
-  justify-content: center;
+  /* 内容**顶端对齐**（用户 2026-10-18）：卡片被右卡拉高时，内容贴在顶上，
+     而不是悬在中间、上下都空一截。 */
+  justify-content: flex-start;
 }
 
 .wb-profile-bg {

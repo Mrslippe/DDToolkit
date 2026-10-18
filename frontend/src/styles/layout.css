@@ -1325,8 +1325,12 @@ html[data-group-badge='off'] .vtuber-emblem {
    ① 工作台是独立界面：左栏**只隐藏不卸载** —— 卸载会让切回帖子浏览时先空一片、
       再等列表拉回来（实测约 0.8s 的空白）。
    ② 切页重播一次揭幕，与启动同一条 `rise-in-page`，只是更快（260ms）。 */
+/* ⚠️ 用**负外边距**把整栏推出视口，而不是 `display: none`（2026-10-18 用户：
+   切回帖子浏览时左栏先空着再渐显）。`display:none` 会让栏内 `OverlayScroll` 失去尺寸、
+   切回时重新测量，测量期间渲染不出条目 —— 那正是那块空白。
+   负外边距与"收起"用的是同一手法，宽度不变、测量照常。 */
 .app-body[data-bare] .sidebar-shell {
-  display: none;
+  margin-left: calc(-1 * var(--sidebar-width));
 }
 
 .app-main.view-enter {
@@ -1350,7 +1354,12 @@ html[data-group-badge='off'] .vtuber-emblem {
       淡出看不出任何变化。所以改成两块面板 + **边缘投影**：可见的是那条移动的边，不是颜色。 */
 .view-curtain {
   position: absolute;
-  inset: 0;
+  /* 从工具栏右缘开始：揭幕**不盖住左工具栏**（用户 2026-10-18）。
+     50px 与 `.icon-rail` 的宽度一致，改栏宽要同步改这里。 */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 50px;
   z-index: 40;
   overflow: hidden;
   pointer-events: none;
@@ -1376,6 +1385,31 @@ html[data-group-badge='off'] .vtuber-emblem {
   bottom: 0;
   box-shadow: 0 -8px 22px rgba(15, 23, 42, 0.10);
   animation: curtain-down 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+/* 加载段：两块面板先合着不动，中间一枚小转圈 —— 让"切换中"这件事被看见 */
+.view-curtain.is-loading::before,
+.view-curtain.is-loading::after {
+  animation: none;
+}
+
+.view-curtain .curtain-spin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 64, 111, 0.25);
+  border-top-color: var(--c-primary-deep);
+  animation: curtain-spin 620ms linear infinite;
+}
+
+@keyframes curtain-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes curtain-up {

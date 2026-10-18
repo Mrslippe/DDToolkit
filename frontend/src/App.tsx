@@ -21,6 +21,8 @@ import './styles/status-island.css'
 
 /** 揭幕幕布的时长（ms）。与 CSS 的 `.view-curtain` 动画时长必须一致。 */
 const CURTAIN_MS = 260
+/** 加载段时长（ms）。幕布先合着停这么久，再开始滑开。 */
+const CURTAIN_LOAD_MS = 120
 
 /**
  * 应用壳布局（参照设计稿 Frame1672）：
@@ -37,11 +39,15 @@ export default function App() {
   /* 切界面时**盖一层幕布再揭开**（2026-10-18 用户：从左工具栏换页要像启动那样揭幕）。
      ⚠️ 光给 `.app-main` 加动效不够：左栏从 `display:none` 切回时会重新测量，
      测量期间渲染不出条目 —— 那块空白**在内容区之外**，必须由覆盖整块的幕布盖住。 */
-  const [reveal, setReveal] = useState(false)
+  /* 三段式：**加载 → 揭幕 → 完成**（用户 2026-10-18）。
+     ⚠️ 老实说：这是**按时间**分的段，不是"等数据真的回来"。要做成数据驱动，得让每个页面
+     上报自己的首屏就绪 —— 那是另一件事，先按用户要的流程把节奏做出来。 */
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'opening'>('idle')
   useEffect(() => {
-    setReveal(true)
-    const t = window.setTimeout(() => setReveal(false), CURTAIN_MS)
-    return () => window.clearTimeout(t)
+    setPhase('loading')
+    const a = window.setTimeout(() => setPhase('opening'), CURTAIN_LOAD_MS)
+    const b = window.setTimeout(() => setPhase('idle'), CURTAIN_LOAD_MS + CURTAIN_MS)
+    return () => { window.clearTimeout(a); window.clearTimeout(b) }
   }, [pathname])
 
   const mainRef = useRef<HTMLElement>(null)
@@ -144,7 +150,11 @@ export default function App() {
               条件渲染会把它卸载 → 再进来要重新拉列表 = 那片空白。所以改成 CSS 隐藏，
               组件与数据都留着，切回来立即有内容。 */}
           <VtuberSidebar />
-          {reveal && <div className="view-curtain" key={pathname} aria-hidden />}
+          {phase !== 'idle' && (
+            <div className={`view-curtain is-${phase}`} key={pathname} aria-hidden>
+              {phase === 'loading' && <span className="curtain-spin" />}
+            </div>
+          )}
           <main className="app-main" ref={mainRef}>
             <Routes>
               <Route path="/" element={<EmptyState />} />
