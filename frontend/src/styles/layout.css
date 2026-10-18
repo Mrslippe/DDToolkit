@@ -1340,27 +1340,52 @@ html[data-group-badge='off'] .vtuber-emblem {
 }
 
 
-/* ── 界面切换的揭幕幕布（2026-10-18 用户）────────────────────────────────
-   与启动同一套语言：一层近白幕布盖住整个工作区，然后快速揭开、内容微微上浮。
-   为什么需要幕布而不是只给内容加动效：工作台隐藏左栏用的是 `display:none`，
-   切回帖子浏览时左栏会重新测量（`OverlayScroll`），测量期间渲染不出条目 ——
-   那块空白在内容区之外，只有盖住整块的幕布能遮掉它。 */
+/* ── 界面切换的揭幕（2026-10-18 用户）────────────────────────────────────
+   与启动同一套语言：**两块面板从中间向上下滑开**，内容在下层微微上浮。
+
+   ⚠️ 两处曾经做错、记在这里：
+   ① 第一版只给 `.app-main` 加动效 —— 但左栏不在 `.app-main` 里，它从 `display:none`
+      切回时要重新测量，那块空白在内容区之外。所以幕布必须盖住**整个 `.app-body`**。
+   ② 第二版幕布是单块纯色 `--c-bg-page`（#fffbfb）盖在同样近白的页面上 —— **等于隐形**，
+      淡出看不出任何变化。所以改成两块面板 + **边缘投影**：可见的是那条移动的边，不是颜色。 */
 .view-curtain {
   position: absolute;
   inset: 0;
   z-index: 40;
+  overflow: hidden;
   pointer-events: none;
-  background: var(--c-bg-page);
-  animation: view-curtain-out 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
-@keyframes view-curtain-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
+.view-curtain::before,
+.view-curtain::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: #fff;
+}
+
+.view-curtain::before {
+  top: 0;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
+  animation: curtain-up 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+.view-curtain::after {
+  bottom: 0;
+  box-shadow: 0 -8px 22px rgba(15, 23, 42, 0.10);
+  animation: curtain-down 260ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+@keyframes curtain-up {
+  from { transform: none; }
+  to { transform: translateY(-100%); }
+}
+
+@keyframes curtain-down {
+  from { transform: none; }
+  to { transform: translateY(100%); }
 }
 
 @media (prefers-reduced-motion: reduce) {
