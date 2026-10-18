@@ -467,6 +467,9 @@
 }
 
 .wb-profile-id {
+  /* 撑满头像右侧的剩余宽度 —— 否则触发器 `width:100%` 只是"内容宽"，
+     箭头就跟着名字长短跑（用户 2026-10-18 第二次反馈）。 */
+  flex: 1;
   min-width: 0;
 }
 
@@ -801,21 +804,24 @@
   position: absolute;
   top: -1px;
   bottom: -1px;
-  /* 左右边交给把手画（见 `.wb-win .h`）—— 窗口自己画边框的话，边框必然压在轨道边缘上 */
+  /* 照抄 dataZoom：选中区只有 1px 细边 + 淡粉填充，边界靠把手强调 */
+  border-left: 1px solid var(--c-primary-deep);
+  border-right: 1px solid var(--c-primary-deep);
   background: rgba(255, 162, 180, 0.16);
   cursor: grab;
 }
 
 .wb-win .h {
+  /* 把手**填满带高**、贴在带内缘：与 dataZoom 的手柄同构。
+     窗口已被 JS 夹在轨道内 ⇒ 把手必然在轨道内。 */
   position: absolute;
-  top: 50%;
-  width: 6px;
-  height: 22px;
-  margin-top: -11px;
-  border: 1.5px solid var(--c-primary-deep);
-  border-radius: 3px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  border: 1px solid var(--c-primary-deep);
+  border-radius: 2px;
   background: #fff;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
 }
 
 /* 手柄**贴在窗口内侧**（2026-10-18 用户：拖动时不要超出外层时间窗口）。

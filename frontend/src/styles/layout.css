@@ -1373,13 +1373,15 @@ html[data-group-badge='off'] .vtuber-emblem {
   right: 0;
   height: 50%;
   background: #fff;
-  /* 两块面板显式分层：`::after` 默认画在 `::before` 之上，
-     合上时下半块会压住上半块的阴影 —— 看起来像"下层盖住上层"。 */
+  /* 两块面板必须**上压下**（2026-10-18 用户第三次反馈：应该是上半遮住下半）。
+     `::after` 默认画在 `::before` 之上 —— 所以显式给上半更高层级，
+     它的下缘投影才能落在下半块上。 */
   z-index: 1;
 }
 
 .view-curtain::before {
   top: 0;
+  z-index: 2;                    /* 上半块压住下半块，阴影才落在它上面 */
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
   transform: translateY(-100%);        /* 默认在画面外 = 敞开 */
 }
@@ -1419,7 +1421,7 @@ html[data-group-badge='off'] .vtuber-emblem {
 /* 目标界面的图标：渐显，比转圈更"像那个界面" */
 .view-curtain .curtain-icon {
   position: absolute;
-  z-index: 2;                    /* 图标必须盖在面板之上，否则闭幕时看不见 */
+  z-index: 3;                    /* 图标要盖过**两块**面板 */
   left: 50%;
   top: 50%;
   display: grid;
@@ -1435,7 +1437,7 @@ html[data-group-badge='off'] .vtuber-emblem {
 
 .view-curtain .curtain-spin {
   position: absolute;
-  z-index: 2;
+  z-index: 3;
   left: 50%;
   top: 50%;
   width: 22px;

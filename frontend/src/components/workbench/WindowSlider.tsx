@@ -133,6 +133,17 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     }
   }, [size, start, step, total, maxGrade])
 
+  /* 选中区的位置与宽度**按轨道的实际宽度夹一次**（照抄 dataZoom 的结构：
+     选中区是轨道内的一段带，把手是带内两端的小竖条，谁也不许探出轨道）。
+     轨道宽 = total * step + 4（见下面的 inner style）。 */
+  const bandStyle = (() => {
+    const innerW = total * step + 4
+    const rawW = size * step - 2
+    const w = Math.max(8, Math.min(rawW, innerW - 4))
+    const left = Math.max(2, Math.min(2 + start * step - 1, innerW - 2 - w))
+    return { left, width: w }
+  })()
+
   const picked = sessions.slice(start, start + size)
   const coll = picked.filter((s) => s.c).length
   const first = picked[0]
@@ -165,7 +176,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
             ))}
           </div>
           <div className="wb-win"
-               style={{ left: 2 + start * step - 1, width: size * step - 2 }}
+               style={bandStyle}
                data-testid="zoom-win"
                onPointerDown={onPointerDown('move')}>
             <div className="h l" onPointerDown={onPointerDown('l')} data-testid="zoom-handle-l" />
