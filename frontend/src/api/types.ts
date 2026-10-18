@@ -1490,9 +1490,17 @@ export interface FanPurgeResult {
 export interface HmSession {
   title: string
   at: string
+  /** 结束时间（本地 HH:MM）；未知为空串 */
+  end?: string
   /** 时长（分钟）；后端拿不到 end_at 时为 null */
   dur: number | null
   m: number
+  /** 收益（元）；未知为 null */
+  income?: number | null
+  /** 峰值在线；未知为 null */
+  peak?: number | null
+  /** 分区（父 / 子） */
+  area?: string
 }
 
 export interface FanActivityDay { n: number; c: number }

@@ -168,7 +168,13 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
                 <span className="wb-tip-title">{s.title || '（无标题）'}</span>
                 <span className="wb-tip-meta">
                   {s.at.slice(11, 16)}
-                  {s.dur != null ? ` · ${Math.floor(s.dur / 60)}h${s.dur % 60}m` : ''}
+                  {s.end ? ` – ${s.end}` : ''}
+                  {s.dur != null ? ` · ${Math.floor(s.dur / 60)}小时${s.dur % 60}分` : ''}
+                </span>
+                {s.area ? <span className="wb-tip-meta">{s.area}</span> : null}
+                <span className="wb-tip-meta">
+                  {s.income != null ? `收益 ¥${s.income.toLocaleString()}` : '收益 —'}
+                  {s.peak != null ? ` · 峰值 ${s.peak.toLocaleString()}` : ''}
                   {` · 弹幕 ${s.m.toLocaleString()}`}
                 </span>
               </div>

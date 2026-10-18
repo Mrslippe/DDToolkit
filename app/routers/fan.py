@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -617,6 +617,21 @@ def fan_purge(
     }
 
 
+def _as_utc(v: object) -> datetime | None:
+    """SQLite 原生 SQL 拿回来的是字符串；按 **UTC** 解析成 `datetime`（带时区）。
+
+    ⚠️ 必须显式给她 tz：库里存的是 UTC，直接 `astimezone()` 会按本地时区解释 —— 差 8 小时。
+    """
+    if v is None:
+        return None
+    s = str(v).strip().replace(" ", "T", 1)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
 # ── 热力图 + 场次滑杆的数据源（V3/V4）─────────────────────────────────────
 @router.get("/fan/{vtuber}/activity")
 def fan_activity(
@@ -706,12 +721,16 @@ def fan_activity(
         if has and day in days:
             days[day]["c"] += 1
 
-    # 逐场明细（2026-10-19 用户）：热力图的浮窗要显示**场次名称 / 时长 / 弹幕量** ——
-    # 这些只有库里才有。按天分组，一天可能有多场。
+    # 逐场明细（2026-10-19）：热力图浮窗要显示**场次名称 / 时长 / 弹幕量 / 收益 / 峰值**。
+    # ⚠️ 两个坑都在这儿踩过：
+    #   ① 原生 SQL 返回的是**字符串**，`end_at - start_at` 会抛 TypeError —— 我第一版把它
+    #      吞成 None，于是"明明有 end_at 却显示不出时长"（用户拿日历卡片对出来的）。
+    #   ② 库里存的是 **UTC**，而日历卡片显示本地时间（18:59 而非 10:59）。这里统一转本地。
     detail: dict[str, list[dict[str, Any]]] = {}
-    for d, title, start_at, end_at, cnt in db.execute(
+    for d, title, start_at, end_at, cnt, income, peak, area, parent in db.execute(
         text(
-            "select date(s.start_at) d, s.title, s.start_at, s.end_at, s.danmakus_count "
+            "select date(s.start_at) d, s.title, s.start_at, s.end_at, s.danmakus_count, "
+            "       s.total_income, s.max_online_count, s.area_name, s.parent_area_name "
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
             "  and s.start_at is not null "
@@ -722,18 +741,19 @@ def fan_activity(
     ):
         if not d:
             continue
-        dur = None
-        try:
-            if end_at and start_at:
-                dur = max(0, int((end_at - start_at).total_seconds() // 60))
-        except (TypeError, ValueError):
-            dur = None
+        st = _as_utc(start_at)
+        en = _as_utc(end_at)
+        dur = int((en - st).total_seconds() // 60) if (st and en and en >= st) else None
         detail.setdefault(str(d), []).append({
             "title": str(title or ""),
-            "at": str(start_at)[:19],
-            # 时长（分钟）；`end_at` 缺失时为 None —— **不猜**
+            "at": st.astimezone().strftime("%Y-%m-%d %H:%M") if st else str(start_at)[:16],
+            "end": en.astimezone().strftime("%H:%M") if en else "",
+            # 时长（分钟）；拿不到就是 None —— **不猜**
             "dur": dur,
             "m": int(cnt or 0),
+            "income": round(float(income), 1) if income is not None else None,
+            "peak": int(peak) if peak is not None else None,
+            "area": " / ".join(x for x in (str(parent or ""), str(area or "")) if x),
         })
 
     return {
