@@ -239,8 +239,11 @@ async function request<T>(path: string, init?: RequestInit,
     // 401 单独提一句：它在本应用里**只可能是认证**（token 没注入 / 过期 / 壳与后端对不上），
     // 而默认文案只有"401 Unauthorized"，用户与排查者都看不出该往哪查。
     // ⚠️ 这句只进 `message`（给人看的那一份），`detail` 保持后端原文（`errors.ts` 的分工）。
+    // ⚠️ 后端 `detail` 本身已带括号（"缺少或无效的访问令牌（本机应用启动时生成）"），
+    // 再包一层就成了"访问令牌无效或缺失（缺少或无效的访问令牌（…））"—— 两层括号、
+    // 同一个意思说两遍（2026-10-19 截图里一眼看到）。这里**只用后端原文**，不再包装。
     const message = resp.status === 401
-      ? `访问令牌无效或缺失（${detail}）—— 应用若刚重启，请重开窗口`
+      ? `${detail || '访问令牌无效或缺失'} —— 应用若刚重启，请重开窗口`
       : undefined
     // Q1（devlog/216）：抛 `ApiError`（带 status/detail/path）而不是裸 `Error`。
     // **message 与改前逐字一致** —— 全仓 catch 分支几乎只读 `.message`，这是兼容的关键。
