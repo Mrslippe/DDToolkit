@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api/api'
 import type { FanCollectProgress, FanRanked, FanSessionPreview, FanVtuber } from '../api/types'
 import FloatPill from '../components/common/FloatPill'
+import ProfileCard from '../components/workbench/ProfileCard'
 import { fmtDate, today } from '../utils/dateRange'
 import '../styles/workbench.css'
 
@@ -179,6 +180,9 @@ export default function WorkbenchPage() {
           <h1 className="wb-title">数据分析工作台</h1>
           <p className="wb-sub">选主播 → 选区间 → 采集 → 看名单</p>
         </header>
+
+        {/* 档案卡（V2）：V 的身份 + 分析可用性。选中 V 之后才渲染 —— 空值时别去打接口 */}
+        {picked && <ProfileCard name={picked} />}
 
         {err && (
           <section className="wb-card" data-testid="workbench-error">

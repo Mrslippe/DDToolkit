@@ -1467,6 +1467,25 @@ export interface FanVtuber {
   sessions: number
 }
 
+export interface FanProfileStats {
+  /** 最新一条快照的粉丝数（多账号取最大） */
+  followers: number | null
+  /** 该 V 的 B 站场次总数（`live_sessions` 里有 `start_at` 的） */
+  total_sessions: number
+  /** **已落盘**的场次数（数据根里 `stats/*.json`）—— 不是"库里有场次" */
+  collected: number
+  first: string | null
+  last: string | null
+  /** `collected / total_sessions`，0~1 */
+  coverage: number
+}
+
+/** 工作台档案卡（2026-10-18）。`vtuber` 直接复用 `VTuberOut`，不另造序列化。 */
+export interface FanProfile {
+  vtuber: VTuber
+  stats: FanProfileStats
+}
+
 export interface FanVtuberList {
   items: FanVtuber[]
   count: number

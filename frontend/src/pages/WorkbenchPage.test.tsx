@@ -20,6 +20,7 @@ const fanCollect = vi.fn()
 const fanCollectStatus = vi.fn()
 const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
+const fanProfile = vi.fn()
 
 vi.mock('../api/api', () => ({
   api: {
@@ -29,7 +30,11 @@ vi.mock('../api/api', () => ({
     fanCollectStatus: (...a: unknown[]) => fanCollectStatus(...a),
     fanCollectCancel: (...a: unknown[]) => fanCollectCancel(...a),
     fanRanked: (...a: unknown[]) => fanRanked(...a),
+    // 档案卡（V2，2026-10-18）：选中 V 后页面会拉它，桩里必须有，否则整页抛错
+    fanProfile: () => fanProfile(),
   },
+  // 档案卡会用它把 `static/...` 转成可加载 URL；桩里给个恒等即可
+  resolveAsset: (p: string | null | undefined) => p ?? null,
 }))
 
 import WorkbenchPage from './WorkbenchPage'
@@ -94,6 +99,17 @@ beforeEach(() => {
   fanCollectStatus.mockReset().mockResolvedValue({ items: [], count: 0 })
   fanCollectCancel.mockReset().mockResolvedValue({ ok: true })
   fanRanked.mockReset().mockResolvedValue(RANKED)
+  // 档案卡（V2）的桩：只要"读到了"的形状就够，本文件不判它的视觉细节
+  fanProfile.mockReset().mockResolvedValue({
+    vtuber: { id: 1, name: '弥月Mizuki', faction: null, birthday: null, debut_date: null,
+              setting: null, avatar: null, avatar_local: null, background_path: null,
+              background_focus: null, background_video_path: null,
+              background_video_focus: null, notes: null, sign_override: null,
+              sign_source_account_id: null, sort_order: 0,
+              created_at: null, updated_at: null },
+    stats: { followers: 53006, total_sessions: 1168, collected: 75,
+             first: '2022-07-24', last: '2026-10-11', coverage: 0.0642 },
+  })
 })
 
 afterEach(() => {

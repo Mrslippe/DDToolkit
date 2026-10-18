@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Route, Routes, useNavigate } from 'react-router-dom'
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
 import { useSolo } from './utils/soloMode'
@@ -28,6 +28,9 @@ import './styles/status-island.css'
 export default function App() {
   const isMax = useIsMaximized()
   const navigate = useNavigate()
+  /* 哪些路由**不共用**主播左栏（目前只有工作台）。 */
+  const { pathname } = useLocation()
+  const bareShell = pathname.startsWith('/workbench')
   /* 大表情尺寸（2026-10-14，`devlog/486`）：读一次用户偏好 → 写到根元素的 CSS 变量。
      挂在壳层**而不是**设置窗/详情页：它影响所有渲染正文的地方，必须全局一致。 */
   useEmojiBigSize()
@@ -113,7 +116,10 @@ export default function App() {
         <TopBar />
         <div className="app-body">
           <IconRail />
-          <VtuberSidebar />
+          {/* 工作台是**独立界面**：不共用帖子浏览的主播左栏（2026-10-18 用户口径）。
+              ⚠️ 左栏消失后，"当前选中哪个 V"只由工作台自己的选择器承担 ——
+              从工作台回帖子浏览时左栏选中的**仍是原来那个 V**，这是预期行为，不是 bug。 */}
+          {!bareShell && <VtuberSidebar />}
           <main className="app-main">
             <Routes>
               <Route path="/" element={<EmptyState />} />

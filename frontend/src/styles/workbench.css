@@ -393,3 +393,166 @@
     transition: none;
   }
 }
+
+
+/* ── 档案卡（V2，2026-10-18）──────────────────────────────────────────────
+   两区结构见 docs/plans/workbench-visual-redesign.md §3.5：
+   A 区 = 读数行（最多 3 项）· B 区 = 补充区（最多 3 块）。
+   背景虚化 + 左侧白色渐层保证文字可读；没有背景图时不渲染 `.wb-profile-bg`。 */
+.wb-profile {
+  padding: 0;
+  overflow: hidden;
+  min-height: 176px;
+  justify-content: center;
+}
+
+.wb-profile-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center 22%;
+  filter: blur(2.5px) saturate(1.08);
+  transform: scale(1.04);
+}
+
+.wb-profile-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.86) 52%,
+    rgba(255, 255, 255, 0.30) 82%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
+}
+
+.wb-profile-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+  padding: 20px;
+}
+
+.wb-profile-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.wb-profile-avatar {
+  width: 62px;
+  height: 62px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+}
+
+/* 首字兜底：没有头像的 7 个 V 走这里（与左栏同一套观感） */
+.wb-profile-avatar-fb {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 162, 180, 0.22);
+  color: var(--c-primary-deep);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.wb-profile-id {
+  min-width: 0;
+}
+
+.wb-profile-name {
+  margin: 0;
+  font-size: 23px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #2f3a46;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-profile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.wb-profile-meta b {
+  color: var(--c-text-main);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-profile-meta b.is-acc {
+  color: var(--c-primary-deep);
+}
+
+.wb-profile-meta .sep {
+  width: 1px;
+  height: 10px;
+  background: var(--c-border);
+}
+
+.wb-profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wb-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--c-border);
+}
+
+.wb-profile-sign {
+  margin: 0;
+  max-width: 40ch;
+  padding-left: 9px;
+  border-left: 2px solid rgba(255, 162, 180, 0.75);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--c-text-sub);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wb-profile-cover {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: 330px;
+}
+
+.wb-profile-cover-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.wb-profile-cover-row b {
+  color: var(--c-text-main);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

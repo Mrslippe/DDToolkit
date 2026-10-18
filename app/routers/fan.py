@@ -36,6 +36,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -474,6 +475,85 @@ def health(
             "没有接入外部源时 C3/C4 一律标 unverified —— 那不是本模型的问题",
         ],
         "warnings": win.warnings[:10],
+    }
+
+
+# ── 档案卡（V2）────────────────────────────────────────────────────────────
+@router.get("/fan/{vtuber}/profile")
+def fan_profile(
+    vtuber: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """工作台档案卡要的那一份：**V 的身份 + 分析可用性**。
+
+    `vtuber` 直接复用 `app.routers.vtuber._vtuber_out`（头像 / 本地副本 / 背景 / 取景 /
+    企划 / 签名都在里面）—— 不另造序列化，否则"工作台的头像"和"左栏的头像"会分叉。
+
+    `stats` 是**算出来的**，不落库：
+
+    | 字段 | 定义 |
+    |---|---|
+    | `followers` | 最新一条 `account_stat_snapshots.followers_count`（多账号取最大） |
+    | `total_sessions` | `live_sessions` 里该 V 的 B 站场次数（有 `start_at` 的） |
+    | `collected` | 数据根里**已落盘**的场次数（`stats/*.json`） |
+    | `first` / `last` | 场次日期的首末 |
+    | `coverage` | `collected / total_sessions`（0~1） |
+
+    ⚠️ `collected` 数的是**数据根里真有的事实表**，不是"库里有场次" ——
+    两者差得很远（试点只采了一批），这正是卡片要告诉用户的。
+    """
+    from app.models.vtuber import VTuber
+    from app.routers.vtuber import _vtuber_out
+
+    v = _resolve(vtuber, db)
+    row = db.query(VTuber).filter(VTuber.name == v.name).first()
+    if row is None:
+        raise HTTPException(404, f"库里找不到主播：{v.name}")
+
+    base = _vtuber_out(db, row)
+
+    # 场次总数与首末日期（只算 B 站账号；跨平台场次不是一回事）
+    row_data = db.execute(
+        text(
+            "select count(*), min(date(s.start_at)), max(date(s.start_at)) "
+            "from live_sessions s join accounts a on a.id = s.account_id "
+            "where a.vtuber_id = :vid and a.platform = 'bilibili' "
+            "  and s.start_at is not null"
+        ),
+        {"vid": row.id},
+    ).one()
+    total = int(row_data[0] or 0)
+
+    fans = db.execute(
+        text(
+            "select max(s.followers_count) from account_stat_snapshots s "
+            "join accounts a on a.id = s.account_id "
+            "where a.vtuber_id = :vid and a.platform = 'bilibili' "
+            "  and s.followers_count is not null"
+        ),
+        {"vid": row.id},
+    ).scalar()
+
+    # 已落盘：数据根里该 V 的 stats 文件数（= 真能算分析的场次数）
+    collected = 0
+    try:
+        stats_dir = resolve_data_dir() / v.subdir / "stats"
+        if stats_dir.is_dir():
+            collected = len(list(stats_dir.glob("*.json")))
+    except FanDataNotFound:
+        collected = 0
+
+    return {
+        "vtuber": base.model_dump(),
+        "stats": {
+            "followers": int(fans) if fans else None,
+            "total_sessions": total,
+            "collected": collected,
+            "first": row_data[1],
+            "last": row_data[2],
+            "coverage": round(collected / total, 4) if total else 0.0,
+        },
     }
 
 
