@@ -11,6 +11,7 @@ import ModulePickerDialog from './ModulePickerDialog'
 import { exitSolo, useSolo } from '../utils/soloMode'
 import { usePrefs } from '../hooks/usePrefs'
 import { APP_MODULES, enabledModules } from '../utils/modules'
+import { requestViewChange } from '../utils/viewTransition'
 import './../styles/layout.css'
 
 /**
@@ -83,7 +84,7 @@ export default function IconRail() {
               data-testid="rail-posts"
               /* 单推时 `/` 没有内容（只有"选一个 V"的空态）⇒ 直接去单推那个 V，
                  免得点了被下面的重定向弹回来（看着像"按钮坏了"） */
-              onClick={() => navigate(solo ? `/vtubers/${solo.id}` : '/')}
+              onClick={() => requestViewChange(() => navigate(solo ? `/vtubers/${solo.id}` : '/'))}
             >
               <FileText className="h-[18px] w-[14px]" />
             </button>
@@ -104,7 +105,7 @@ export default function IconRail() {
                   className={`icon-rail-btn${active ? ' active' : ''}`}
                   aria-label={m.label}
                   data-testid={`rail-module-${m.key}`}
-                  onClick={() => navigate(m.route)}
+                  onClick={() => requestViewChange(() => navigate(m.route))}
                 >
                   <Icon className="h-[18px] w-[18px]" />
                 </button>

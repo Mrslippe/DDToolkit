@@ -801,8 +801,7 @@
   position: absolute;
   top: -1px;
   bottom: -1px;
-  border-left: 2px solid var(--c-primary-deep);
-  border-right: 2px solid var(--c-primary-deep);
+  /* 左右边交给把手画（见 `.wb-win .h`）—— 窗口自己画边框的话，边框必然压在轨道边缘上 */
   background: rgba(255, 162, 180, 0.16);
   cursor: grab;
 }
@@ -810,19 +809,22 @@
 .wb-win .h {
   position: absolute;
   top: 50%;
-  width: 9px;
-  height: 15px;
-  margin-top: -7.5px;
-  border: 1px solid rgba(255, 162, 180, 0.55);
+  width: 6px;
+  height: 22px;
+  margin-top: -11px;
+  border: 1.5px solid var(--c-primary-deep);
   border-radius: 3px;
   background: #fff;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
 }
 
 /* 手柄**贴在窗口内侧**（2026-10-18 用户：拖动时不要超出外层时间窗口）。
    原来用 `-6px` 让手柄探出窗口外 —— 窗口贴到轨道最左/最右时，手柄就跑到轨道外面去了。 */
-.wb-win .h.l { left: -6px; cursor: ew-resize; }
-.wb-win .h.r { right: -6px; cursor: ew-resize; }
+/* 把手**完全落在轨道内**（用户 2026-10-18 第二次反馈：依旧越界）。
+   做法：窗口自己不再画左右边框，边界由把手表达；把手贴在窗口内缘 1px 处，
+   宽 6px、圆角、带描边 —— 看得出手感，又永远在窗口（= 轨道）里面。 */
+.wb-win .h.l { left: 1px; cursor: ew-resize; }
+.wb-win .h.r { right: 1px; cursor: ew-resize; }
 
 .wb-win .grip {
   position: absolute;

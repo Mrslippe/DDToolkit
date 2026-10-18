@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BarChart3, FileText } from 'lucide-react'
+import { setViewTransitionDriver } from './utils/viewTransition'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
@@ -42,22 +43,26 @@ export default function App() {
      ⚠️ 老实说：这是**按时间**分的段，不是"等数据真的回来"。要做成数据驱动，得让每个页面
      上报自己的首屏就绪 —— 那是另一件事，先按用户要的流程把节奏做出来。 */
   const [phase, setPhase] = useState<Phase>('idle')
-  /* ⚠️ 触发条件是**换界面**，不是"路径变了"（2026-10-18 用户：在帖子浏览里换左栏的 V
-     也会触发揭幕）。所以只看 `bareShell` —— 它只有"帖子浏览 ⇄ 工作台"两态；
-     同一界面内 `/vtubers/16 → /vtubers/17` 不算切换。 */
-  const prevBare = useRef(bareShell)
+  /* 协调器：工具栏请求切界面时，壳层先把幕布**合上**，合好之后再让导航发生 ——
+     这样"界面变换"发生在幕布遮住的**加载中**那一段，而不是先换再遮（用户口径）。
+     时序：不动 → 闭幕 180 → 图标 140 → 加载 200（此刻导航）→ 揭幕 260 → 完成 */
   useEffect(() => {
-    if (prevBare.current === bareShell) return
-    prevBare.current = bareShell
-    setPhase('closing')
-    const timers = [
-      window.setTimeout(() => setPhase('icon'), 180),
-      window.setTimeout(() => setPhase('loading'), 180 + 140),
-      window.setTimeout(() => setPhase('opening'), 180 + 140 + 200),
-      window.setTimeout(() => setPhase('idle'), 180 + 140 + 200 + 260),
-    ]
-    return () => timers.forEach((x) => window.clearTimeout(x))
-  }, [bareShell])
+    let timers: number[] = []
+    setViewTransitionDriver((next) => {
+      timers.forEach((x) => window.clearTimeout(x))
+      setPhase('closing')
+      timers = [
+        window.setTimeout(() => setPhase('icon'), 180),
+        window.setTimeout(() => { setPhase('loading'); next() }, 320),
+        window.setTimeout(() => setPhase('opening'), 520),
+        window.setTimeout(() => setPhase('idle'), 780),
+      ]
+    })
+    return () => {
+      timers.forEach((x) => window.clearTimeout(x))
+      setViewTransitionDriver(null)
+    }
+  }, [])
 
   const mainRef = useRef<HTMLElement>(null)
   useEffect(() => {

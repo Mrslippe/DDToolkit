@@ -41,12 +41,13 @@ vi.mock('./api/api', () => ({ api: { getAgreement: async () => ({ needed: false 
 
 import App from './App'
 import { useNavigate } from 'react-router-dom'
+import { requestViewChange } from './utils/viewTransition'
 
 function Nav() {
   const nav = useNavigate()
   return (
     <>
-      <button data-testid="go-wb" onClick={() => nav('/workbench')}>wb</button>
+      <button data-testid="go-wb" onClick={() => requestViewChange(() => nav('/workbench'))}>wb</button>
       <button data-testid="go-v17" onClick={() => nav('/vtubers/17')}>v17</button>
     </>
   )
@@ -116,14 +117,17 @@ describe('壳层 · 工作台不共用主播左栏', () => {
     await act(async () => { await Promise.resolve() })
     expect(document.querySelector('.view-curtain')).toBeNull()
 
-    // ② 换到工作台：应触发，并且整段流程后会自己撤掉
+    // ② 经过**工具栏**切到工作台：幕布先合上，导航推迟到"加载中"那一段
     await act(async () => { (document.querySelector('[data-testid="go-wb"]') as HTMLElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(document.querySelector('.view-curtain')).not.toBeNull()
+    // 幕布刚合上时**还没换界面**（工作台页尚未挂载）
+    expect(has('workbench')).toBe(false)
 
-    // 闭幕 180 + 图标 140 + 加载 200 + 揭幕 260 ≈ 780ms
-    await act(async () => { await new Promise((r) => setTimeout(r, 1000)) })
+    // 闭幕 180 + 图标 140 + 加载 200（此刻导航）+ 揭幕 260 ≈ 780ms
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
     expect(document.querySelector('.view-curtain')).toBeNull()
+    expect(has('workbench')).toBe(true)
   })
 
   it('工作台下面再深的路径也算工作台（前缀判定）', async () => {
