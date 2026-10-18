@@ -168,26 +168,30 @@ describe('数据分析工作台', () => {
     expect(fanSessions).toHaveBeenCalled()
   })
 
-  it('取不到预估时，不能把「未知」说成「待采 0」', async () => {
-    // 2026-10-18 用户截图：滑杆写「待采 75」，结果区写「待采 0 / 已全部采集」
-    fanSessions.mockRejectedValue(new Error('Failed to fetch'))
+  it('★ 已有 + 待采 恒等于窗口场次（不再按日期区间数）', async () => {
+    // 2026-10-19 用户发现：窗口 75 场、已有 77 场、待采 1。
+    // 根因是“已有/待采”拿日期区间去库里数，而边界那两天整天都算进去了。
+    // 现在从切片上的 `c` 数：ACTIVITY 是 30 场、每 3 场已采 1 场 ⇒ 已有 10、待采 20。
     await mount()
-    // 网络级失败会先做几次短重试（utils/netRetry，合计约 1.2s）才把错误抛出来
-    await act(async () => { await new Promise((r) => setTimeout(r, 1500)) })
-
-    const btn = q<HTMLButtonElement>('[data-testid="workbench-collect"]')!
-    expect(btn.disabled).toBe(true)
-    expect(btn.textContent).toContain('预估中')      // 不是「已全部采集」
-    expect(q('[data-testid="workbench-preview"]')!.textContent).toContain('—')
-    // 裸的 Failed to fetch 对用户没信息量，要翻成能指导下一步的话
-    expect(q('[data-testid="workbench-error"]')!.textContent).toContain('后端没有响应')
+    const box = document.querySelector('[data-testid="workbench-preview"]') as HTMLElement
+    const txt = box.textContent ?? ''
+    const already = Number(/已有\s*(\d+)/.exec(txt)?.[1])
+    const to = Number(/待采\s*(\d+)/.exec(txt)?.[1])
+    expect(already).toBe(10)
+    expect(to).toBe(20)
+    expect(already + to).toBe(30)
   })
 
   it('待采为 0 时「开始采集」是禁用的', async () => {
-    fanSessions.mockResolvedValue({ ...PREVIEW, already: 12, to_collect: 0 })
+    // 切片里每一场都已采 ⇒ 待采 0
+    fanActivity.mockResolvedValueOnce({
+      ...ACTIVITY,
+      recent: ACTIVITY.recent.map((s: { c: boolean }) => ({ ...s, c: true })),
+    })
     await mount()
-    const btn = q<HTMLButtonElement>('[data-testid="workbench-collect"]')
-    expect(btn!.disabled).toBe(true)
+    const btn = document.querySelector('[data-testid="workbench-collect"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.disabled).toBe(true)
   })
 
   it('点「开始采集」真的调接口，参数是选中的主播与区间', async () => {

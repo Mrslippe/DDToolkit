@@ -173,9 +173,16 @@ export default function WorkbenchPage() {
   }, [picked])
 
   const running = progress?.state === 'running'
-  /* ⚠️ **未知 ≠ 0**：`preview` 还没回来（或取失败）时，`to_collect` 是"不知道"，
-     不是"零待采"。当成 0 会让按钮显示「已全部采集」，而滑杆那边明明写着「待采 75」。 */
-  const toCollect = preview ? preview.to_collect : null
+  /* ★ **窗口内的场次以"切片"为准，不以日期区间为准**（2026-10-19 用户发现
+     「窗口 75 场 / 已有 77 场」）。
+     窗口是**按场次**切的 75 条，但换成日期区间去库里数，会把**边界那两天整天**都算进去 ——
+     那两天各有额外场次，于是区间内有 78 场，超过窗口的 75。
+     所以"已有/待采"直接从切片上的 `c`（该场是否已采）数出来，三个数字自然自洽。 */
+  const slice = activity && win
+    ? activity.recent.slice(win.start, win.start + win.size)
+    : []
+  const alreadyInWin = slice.filter((s) => s.c).length
+  const toCollect = win ? win.size - alreadyInWin : null
   const unknown = toCollect === null
   const pct = progress && progress.total > 0
     ? Math.min(100, Math.round((progress.done / progress.total) * 100))
@@ -278,7 +285,7 @@ export default function WorkbenchPage() {
               </div>
               <div className="wb-stat">
                 <span className="wb-stat-label">已有</span>
-                <span className="wb-stat-value">{preview?.already ?? '—'}</span>
+                <span className="wb-stat-value">{alreadyInWin}</span>
               </div>
               <div className="wb-stat">
                 <span className="wb-stat-label">待采</span>
