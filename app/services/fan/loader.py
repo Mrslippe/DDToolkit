@@ -159,9 +159,14 @@ def get_vtuber(name_or_short: str, db: object | None = None) -> VtuberRef:
     """
     key = name_or_short.strip().lower()
     pool = list_vtubers(db) if db is not None else list(LEGACY_VTUBERS)
-    for v in pool:
-        if key in (v.name.lower(), v.short.lower(), v.subdir.lower(), v.mid):
-            return v
+    # ⚠️ **两层清单必须都查**（2026-10-19 用户报「未知的主播：星瞳_official」）：
+    # 同一个主播在不同来源里名字可能不同 —— dev 库叫 `星瞳official`（无下划线），
+    # 数据目录/旧样本叫 `星瞳_Official`（有下划线）。`/fan/vtubers` 是把两边**合并**
+    # 展示的，于是前端可能拿到只存在于旧样本里的那个名字；这里若只在库里找就必然扑空。
+    for candidate in (pool, list(LEGACY_VTUBERS)):
+        for v in candidate:
+            if key in (v.name.lower(), v.short.lower(), v.subdir.lower(), v.mid):
+                return v
     raise FanDataError(
         f"未知的主播：{name_or_short!r}；可用：{[v.name for v in pool] or '（库里还没有带 B 站账号的主播）'}"
     )

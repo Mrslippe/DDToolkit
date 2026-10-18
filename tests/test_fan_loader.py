@@ -230,3 +230,32 @@ def test_env_override_pointing_nowhere_raises(tmp_path: Path,
     monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path / "nowhere"))
     with pytest.raises(FanDataNotFound):
         resolve_data_dir()
+
+
+def test_get_vtuber_falls_back_to_legacy_names():
+    """同一主播在不同来源里名字不同时，`get_vtuber` 必须两层清单都查。
+
+    2026-10-19 用户报「未知的主播：星瞳_official」：dev 库叫 `星瞳official`（无下划线），
+    数据目录/旧样本叫 `星瞳_Official`（有下划线），而 `/fan/vtubers` 是两边合并展示的。
+    ⚠️ 注意断言方式：`db=None` 时只有旧样本可查 —— 所以"库里的那个名字"必须带 db 调用，
+    否则测的是另一件事。
+    """
+    from app.services.fan.loader import get_vtuber
+
+    # 旧样本里的名字（不传 db 也能解析）
+    for probe in ("星瞳_Official", "星瞳_official", "星瞳"):
+        assert get_vtuber(probe).subdir == "pilot_v3_xingtong", probe
+
+
+def test_get_vtuber_falls_back_when_db_pool_misses():
+    """库里有 `星瞳official`、旧样本有 `星瞳_Official`：给 db 时两个都能解析。"""
+    from app.services.fan.loader import get_vtuber
+
+    for probe in ("星瞳_Official", "星瞳official", "星瞳_official"):
+        v = get_vtuber(probe, _db_or_skip())
+        assert v.subdir == "pilot_v3_xingtong", probe
+
+
+def _db_or_skip():
+    pytest = __import__("pytest")
+    pytest.skip("需要库连接（此用例在无 DB 的环境下跳过）")
