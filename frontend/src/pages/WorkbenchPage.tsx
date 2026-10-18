@@ -17,6 +17,21 @@ const TAG_SHOWN = 3
 /** 进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
 const POLL_MS = 1000
 
+/**
+ * 把底层错误翻成能指导下一步的话。
+ *
+ * `Failed to fetch` 是 fetch 层的 TypeError（连接被拒 / 请求超时 / CORS 失败），
+ * 对用户零信息量 —— 而它最常见的原因恰恰是「区间枚举落到了上游兜底，上游 502 挂住」。
+ */
+function friendly(e: Error): string {
+  const m = e.message || ''
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) {
+    return '取不到区间预估：后端没有响应（通常是上游枚举超时）。可以稍后重试；'
+      + '已采过的数据仍能「查看名单」。'
+  }
+  return m
+}
+
 const STATE_TEXT: Record<string, string> = {
   idle: '待开始',
   running: '采集中',
@@ -90,7 +105,7 @@ export default function WorkbenchPage() {
     let alive = true
     api.fanSessions(picked, since, until)
       .then((r) => { if (alive) setPreview(r) })
-      .catch((e: Error) => { if (alive) setErr(e.message) })
+      .catch((e: Error) => { if (alive) setErr(friendly(e)) })
     return () => { alive = false }
   }, [enabled, picked, since, until])
 
@@ -149,7 +164,11 @@ export default function WorkbenchPage() {
   }, [picked])
 
   const running = progress?.state === 'running'
-  const toCollect = preview?.to_collect ?? 0
+  /* ⚠️ **未知 ≠ 0**：`preview` 还没回来（或取失败）时，`to_collect` 是"不知道"，
+     不是"零待采"。当成 0 会让按钮显示「已全部采集」，而滑杆那边明明写着「待采 75」
+     —— 2026-10-18 用户截图里就是这个自相矛盾。 */
+  const toCollect = preview ? preview.to_collect : null
+  const unknown = toCollect === null
   const pct = progress && progress.total > 0
     ? Math.min(100, Math.round((progress.done / progress.total) * 100))
     : 0
@@ -239,10 +258,12 @@ export default function WorkbenchPage() {
                                data-testid="workbench-cancel">取消</FloatPill>
                   )}
                   <FloatPill size="md" shape="text" active
-                             disabled={!toCollect || busy || running}
+                             disabled={unknown || !toCollect || busy || running}
                              onClick={() => void startCollect()}
                              data-testid="workbench-collect">
-                    {running ? '采集中…' : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
+                    {running ? '采集中…'
+                      : unknown ? '预估中…'
+                        : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
                   <FloatPill size="md" shape="text" disabled={busy}
                              onClick={() => void loadRanked()}
@@ -263,7 +284,9 @@ export default function WorkbenchPage() {
                 </div>
                 <div className="wb-stat">
                   <span className="wb-stat-label">待采</span>
-                  <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>{toCollect}</span>
+                  <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
+                    {unknown ? '—' : toCollect}
+                  </span>
                 </div>
                 <div className="wb-stat">
                   <span className="wb-stat-label">区间</span>

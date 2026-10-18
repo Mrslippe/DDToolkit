@@ -165,6 +165,20 @@ describe('数据分析工作台', () => {
     expect(fanSessions).toHaveBeenCalled()
   })
 
+  it('取不到预估时，不能把「未知」说成「待采 0」', async () => {
+    // 2026-10-18 用户截图：滑杆写「待采 75」，结果区写「待采 0 / 已全部采集」
+    fanSessions.mockRejectedValue(new Error('Failed to fetch'))
+    await mount()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    const btn = q<HTMLButtonElement>('[data-testid="workbench-collect"]')!
+    expect(btn.disabled).toBe(true)
+    expect(btn.textContent).toContain('预估中')      // 不是「已全部采集」
+    expect(q('[data-testid="workbench-preview"]')!.textContent).toContain('—')
+    // 裸的 Failed to fetch 对用户没信息量，要翻成能指导下一步的话
+    expect(q('[data-testid="workbench-error"]')!.textContent).toContain('后端没有响应')
+  })
+
   it('待采为 0 时「开始采集」是禁用的', async () => {
     fanSessions.mockResolvedValue({ ...PREVIEW, already: 12, to_collect: 0 })
     await mount()

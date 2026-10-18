@@ -281,7 +281,10 @@ async def session_preview(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """区间内有多少场、已采过几场。**采集前的预估**，用户据此决定要不要执行。"""
-    v = _resolve(vtuber)
+    # ⚠️ 必须传 `db`：不传时 `get_vtuber` 只能查硬编码的 `LEGACY_VTUBERS`，
+    # 库里的账号 mid 与常量不一致时本地枚举返回空 ⇒ 落到**上游兜底**（实测 502）
+    # ⇒ 请求挂到超时，前端只看到 `Failed to fetch`（2026-10-18 用户截图复现）。
+    v = _resolve(vtuber, db)
     since, until = _range_or_none(since, until)
     if not since or not until:
         raise HTTPException(400, "预估必须同时给起止日期")
