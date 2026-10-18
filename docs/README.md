@@ -16,7 +16,7 @@ budget: 60
 | 位置 | 放什么 |
 |---|---|
 | 根 `*.md` | `OVERVIEW` / `GLOSSARY` / `DEV-LOOP` / `TODO` / 本文件 |
-| `frontend/` | 前端框架文档 + `UI-MAP`（组件与元素索引 + 整体美学） |
+| `frontend/` | 前端框架文档 + `UI-MAP`（组件与元素索引 + 整体美学）+ `WORKBENCH-MAP`（数据分析工作台的功能 → 落点表） |
 | `backend/` | 后端框架文档 + **各功能模块各自的框架文档** |
 | `desktop/` | Tauri 壳（Rust 侧） |
 | `ops/` | 发布与运维 |
@@ -37,6 +37,7 @@ budget: 60
 | 建立整体认知 / 改动跨多层 | `OVERVIEW.md`，再进对应那一侧的框架文档 |
 | 改后端某个模块 | `backend/<模块>.md` + 后端框架文档的不变量一节 |
 | 改界面 / 找组件类名 / 查设计令牌 | `frontend/UI-MAP.md` |
+| 改数据分析工作台的某个数字或交互 | `frontend/WORKBENCH-MAP.md`（功能 → 文件:函数） |
 | 本地怎么跑、怎么验、门禁几档 | `DEV-LOOP.md` |
 | 现在要干什么、卡在哪 | `TODO.md` |
 | 打包发版 | `ops/RELEASE.md` |
