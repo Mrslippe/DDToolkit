@@ -403,6 +403,12 @@
 .wb-profile {
   padding: 0;
   overflow: hidden;
+  /* ⚠️ 必须给不透明底色 + 独立合成层（2026-10-19 用户：四角在深色背景下发灰黑）。
+     原因：`.wb-profile-bg` 带 `filter: blur()`，它是一个**独立合成层**，圆角裁切在合成
+     路径上可能漏掉最外侧那一两像素 —— 于是卡片自己的投影（深色）从圆角缝里透出来。
+     给卡片铺一层不透明底色，并在卡内 `isolation: isolate` 让被裁的层自成一个栈。 */
+  background: var(--c-bg-card);
+  isolation: isolate;
   min-height: 176px;
   /* 内容**顶端对齐**（用户 2026-10-18）：卡片被右卡拉高时，内容贴在顶上，
      而不是悬在中间、上下都空一截。 */
@@ -412,6 +418,8 @@
 .wb-profile-bg {
   position: absolute;
   inset: 0;
+  /* 背景层自己也要按卡片圆角裁一次，别只依赖父级的 overflow */
+  border-radius: inherit;
   background-size: cover;
   background-position: center 22%;
   filter: blur(2.5px) saturate(1.08);
@@ -529,7 +537,9 @@
 
 .wb-profile-sign {
   margin: 0;
-  max-width: 40ch;
+  /* 宽度**撑到容器上限**（2026-10-19 用户）：原来 40ch 让它在卡中间就换行，
+     右边明明还有一大截空间。 */
+  max-width: none;
   padding-left: 9px;
   border-left: 2px solid rgba(255, 162, 180, 0.75);
   font-size: 12px;
@@ -545,7 +555,8 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-width: 330px;
+  /* 同上：不再压到 330px，直接吃满卡片宽度 */
+  max-width: none;
 }
 
 .wb-profile-cover-row {
