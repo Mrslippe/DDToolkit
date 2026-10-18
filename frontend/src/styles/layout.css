@@ -1316,3 +1316,22 @@ html[data-group-badge='off'] .vtuber-emblem {
   font-size: 13px;
   color: #a8b2bf;
 }
+
+
+/* ── 界面切换（2026-10-18 用户）──────────────────────────────────────────
+   ① 工作台是独立界面：左栏**只隐藏不卸载** —— 卸载会让切回帖子浏览时先空一片、
+      再等列表拉回来（实测约 0.8s 的空白）。
+   ② 切页重播一次揭幕，与启动同一条 `rise-in-page`，只是更快（260ms）。 */
+.app-body[data-bare] .sidebar-shell {
+  display: none;
+}
+
+.app-main.view-enter {
+  animation: rise-in-page 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main.view-enter {
+    animation: none;
+  }
+}

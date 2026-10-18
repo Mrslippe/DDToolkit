@@ -849,3 +849,45 @@
 .wb-result {
   min-height: 200px;
 }
+
+
+/* 主播切换器：长在档案卡的名字位置上（用户：切换按钮应该放在档案卡中） */
+.wb-name-select {
+  max-width: 100%;
+  padding: 0 22px 0 0;
+  border: 0;
+  background: transparent;
+  font-size: clamp(18px, 1.6vw, 23px);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #2f3a46;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  text-overflow: ellipsis;
+  /* 右侧小三角：用背景画，省一个 DOM 节点 */
+  background-image: linear-gradient(45deg, transparent 50%, #6b7c8f 50%),
+                    linear-gradient(135deg, #6b7c8f 50%, transparent 50%);
+  background-position: calc(100% - 10px) 55%, calc(100% - 5px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.wb-name-select:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  border-radius: 6px;
+}
+
+/* 错误卡：一句话 + 一枚「重试」（用户：没有给出重试按钮） */
+.wb-err-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wb-err-row .wb-hint {
+  flex: 1;
+  min-width: 0;
+}

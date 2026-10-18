@@ -65,6 +65,8 @@ export default function WorkbenchPage() {
   const [ranked, setRanked] = useState<FanRanked | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  /** 重试计数：失败时点「重试」把它 +1，预估的 effect 就会再跑一次 */
+  const [retryTick, setRetryTick] = useState(0)
 
   // 1) 主播表 + 模块开关
   useEffect(() => {
@@ -107,7 +109,7 @@ export default function WorkbenchPage() {
       .then((r) => { if (alive) setPreview(r) })
       .catch((e: Error) => { if (alive) setErr(friendly(e)) })
     return () => { alive = false }
-  }, [enabled, picked, since, until])
+  }, [enabled, picked, since, until, retryTick])
 
   // 4) 采集进度轮询：只在 running 时开
   useEffect(() => {
@@ -202,27 +204,22 @@ export default function WorkbenchPage() {
 
         {err && (
           <section className="wb-card" data-testid="workbench-error">
-            <p className="wb-hint is-error">⚠ {err}</p>
+            <div className="wb-err-row">
+              <p className="wb-hint is-error">⚠ {err}</p>
+              <FloatPill size="md" shape="text" data-testid="workbench-retry"
+                         onClick={() => { setErr(null); setRetryTick((n) => n + 1) }}>
+                重试
+              </FloatPill>
+            </div>
           </section>
         )}
 
         <div className="wb-row1">
-          {picked ? <ProfileCard name={picked} /> : <div className="wb-card" />}
+          {picked
+            ? <ProfileCard name={picked} options={vtubers} onPick={setPicked} />
+            : <div className="wb-card" />}
 
           <section className="wb-card wb-hm-card" data-testid="workbench-heatmap">
-            <div className="wb-hm-head">
-              <span className="wb-card-note">主播</span>
-              <select className="wb-input wb-select" value={picked}
-                      onChange={(e) => setPicked(e.target.value)}
-                      data-testid="workbench-vtuber">
-                {vtubers.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.short}{v.has_data ? `（已有 ${v.sessions} 场）` : '（无数据）'}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {activity ? (
               <>
                 <Heatmap days={activity.days} years={activity.years}

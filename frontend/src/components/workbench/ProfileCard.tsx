@@ -3,9 +3,19 @@ import { api, resolveAsset } from '../../api/api'
 import type { FanProfile } from '../../api/types'
 import ProxyImage from '../common/ProxyImage'
 
+interface VOption {
+  name: string
+  short: string
+  has_data: boolean
+  sessions: number
+}
+
 interface Props {
   /** 当前选中的主播显示名 */
   name: string
+  /** 可切换的主播（2026-10-18 用户：切换按钮放进档案卡，不再占热力图卡一行） */
+  options?: VOption[]
+  onPick?: (name: string) => void
 }
 
 /** 覆盖率低于这个值时，进度条给一条最短可见宽度（否则 6% 细得看不见） */
@@ -34,7 +44,7 @@ function mmdd(iso: string | null): string {
  * 头像 / 背景 / 签名全部来自 `GET /fan/{v}/profile` 里的 `vtuber`（= `VTuberOut`），
  * 与左栏走**同一条**解析链（`ProxyImage` + `resolveAsset`），不另造一套。
  */
-export default function ProfileCard({ name }: Props) {
+export default function ProfileCard({ name, options = [], onPick }: Props) {
   const [data, setData] = useState<FanProfile | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -85,7 +95,21 @@ export default function ProfileCard({ name }: Props) {
             fallback={<span>{v.name.slice(0, 1)}</span>}
           />
           <div className="wb-profile-id">
-            <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
+            {/* 主播切换器就长在名字上：不给它单独一行，也不藏进别处 */}
+            {options.length > 1 && onPick ? (
+              <select className="wb-name-select" value={name} title={v.name}
+                      aria-label="切换主播"
+                      onChange={(e) => onPick(e.target.value)}
+                      data-testid="workbench-vtuber">
+                {options.map((o) => (
+                  <option key={o.name} value={o.name}>
+                    {o.short}{o.has_data ? '' : '（无数据）'}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
+            )}
             {/* A 区：最多 3 项 */}
             <div className="wb-profile-meta" data-testid="profile-meta">
               <span>
