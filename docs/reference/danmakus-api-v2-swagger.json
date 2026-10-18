@@ -3,9 +3,67 @@
   "info": {
     "title": "Danmakus API",
     "description": "Danmakus API, https://danmakus.com/",
-    "version": "v3"
+    "version": "v2"
   },
   "paths": {
+    "/api/v2/account/core-config": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreControlConfig"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreControlConfig"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreControlConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/account/info": {
       "get": {
         "tags": [
@@ -163,64 +221,6 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResponseRecordingInfoArrayResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/account/core-config": {
-      "get": {
-        "tags": [
-          "Account"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Account"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CoreControlConfig"
-              }
-            },
-            "text/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CoreControlConfig"
-              }
-            },
-            "application/*+json": {
-              "schema": {
-                "$ref": "#/components/schemas/CoreControlConfig"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoreControlConfigResponseValue"
                 }
               }
             }
@@ -472,6 +472,91 @@
         }
       }
     },
+    "/api/v2/account/search-points": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointsResponseResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointsResponseResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointsResponseResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/account/search-points/history": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointLedgerPageResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointLedgerPageResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPointLedgerPageResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/account/statistics": {
       "get": {
         "tags": [
@@ -648,6 +733,91 @@
         }
       }
     },
+    "/api/v3/lives/{liveId}/danmakus/after": {
+      "get": {
+        "tags": [
+          "ArchivedDanmakuCursor"
+        ],
+        "parameters": [
+          {
+            "name": "liveId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 2000
+            }
+          },
+          {
+            "name": "afterTs",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/DanmakuType"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "归档弹幕游标页",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedDanmakuCursorPageV3ResponseValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "游标或数量无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到可见的已结束直播",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/rank/audience/day": {
       "get": {
         "tags": [
@@ -761,67 +931,6 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AudienceLeaderboardResponseResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/contribution/contributor": {
-      "get": {
-        "tags": [
-          "Contribution"
-        ],
-        "parameters": [
-          {
-            "name": "accountId",
-            "in": "query",
-            "description": "贡献者账号 ID",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "公开贡献者资料",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "贡献者不存在",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
                 }
               }
             }
@@ -1317,6 +1426,79 @@
         }
       }
     },
+    "/api/v2/contribution/contributor": {
+      "get": {
+        "tags": [
+          "Contribution"
+        ],
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "description": "贡献者账号 ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "公开贡献者资料",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "贡献者不存在",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributorPublicDataResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/core-runtime/ws": {
+      "get": {
+        "tags": [
+          "CoreRuntime"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v2/core-runtime/sync": {
       "post": {
         "tags": [
@@ -1558,6 +1740,35 @@
         }
       }
     },
+    "/api/v2/core-runtime/extraction-rules": {
+      "get": {
+        "tags": [
+          "CoreRuntime"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuExtractionRuleSetResponseValue"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuExtractionRuleSetResponseValue"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuExtractionRuleSetResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/core-runtime/upload-danmakus": {
       "post": {
         "tags": [
@@ -1715,69 +1926,134 @@
         }
       }
     },
-    "/api/v2/add": {
+    "/api/v2/rank/range": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "parameters": [
           {
-            "name": "uid",
+            "name": "range",
             "in": "query",
-            "description": "主播的UId",
+            "description": "范围类型 [0: 过去一天, 1: 过去一周, 2: 过去一月]",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/RankRange"
             }
           },
           {
-            "name": "token",
+            "name": "type",
             "in": "query",
-            "description": "人机验证token",
+            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
             "required": true,
             "schema": {
+              "$ref": "#/components/schemas/RankType"
+            }
+          },
+          {
+            "name": "area",
+            "in": "query",
+            "description": "分区名，不传则不过滤",
+            "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "description": "返回数量, 默认100",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 100
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "添加成功",
+            "description": "排行榜数据",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
+                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/rank/month": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "description": "排行年份",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "description": "排行月份",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RankType"
+            }
+          },
+          {
+            "name": "area",
+            "in": "query",
+            "description": "分区名，不传则不过滤",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "description": "返回数量, 默认100",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "月排行榜数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankInfoListResponseValue"
                 }
               }
             }
           },
           "400": {
-            "description": "参数错误或直播间已存在",
+            "description": "无效的年份或月份",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "验证失败或直播间被禁止收录",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
+                  "$ref": "#/components/schemas/RankInfoListResponseValue"
                 }
               }
             }
@@ -1785,29 +2061,87 @@
         }
       }
     },
-    "/api/v2/living": {
+    "/api/v2/rank/day": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "parameters": [
           {
-            "name": "includeExtra",
+            "name": "year",
             "in": "query",
-            "description": "是否包含拓展信息 (高能榜",
+            "description": "排行年份",
+            "required": true,
             "schema": {
-              "type": "boolean",
-              "default": false
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "description": "排行月份",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "description": "排行日期",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RankType"
+            }
+          },
+          {
+            "name": "area",
+            "in": "query",
+            "description": "分区名，不传则不过滤",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "description": "返回数量, 默认100",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 100
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "直播中的直播间信息",
+            "description": "日排行榜数据",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/APIChannelInfoListResponseValue"
+                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "无效的年份、月份或日期",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankInfoListResponseValue"
                 }
               }
             }
@@ -1815,18 +2149,56 @@
         }
       }
     },
-    "/api/v2/site": {
+    "/api/v2/vup-list": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "responses": {
           "200": {
-            "description": "站点信息",
+            "description": "VUP列表数据",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SiteInfoResponseValue"
+                  "$ref": "#/components/schemas/Int64VTBInfoDictionaryResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/emoicons": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "responses": {
+          "200": {
+            "description": "B豆数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TempResponseEmoiconModelListResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/guilds": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "responses": {
+          "200": {
+            "description": "公会数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StringInt64ListDictionaryResponseValue"
                 }
               }
             }
@@ -2035,420 +2407,6 @@
           },
           "400": {
             "description": "pageNum 超过最大页数",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/live": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "liveId",
-            "in": "query",
-            "description": "直播场Id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "uId",
-            "in": "query",
-            "description": "如有此项则只返回指定用户的弹幕",
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "description": "如有此项则只返回指定类型的弹幕. ● 0 : 普通消息 ● 1: 礼物 ● 2: 上舰 ● 3: Superchat ● 4: 进入直播间 ● 5: 标题变动● 6: 分区变动● 7: 直播中止● 8: 直播继续● 9: 用户封禁. 使用方法: ?type=0&type=1&type=2 ...",
-            "schema": {
-              "type": "array",
-              "items": {
-                "$ref": "#/components/schemas/DanmakuType"
-              }
-            }
-          },
-          {
-            "name": "pageNum",
-            "in": "query",
-            "description": "返回弹幕的页数",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 0
-            }
-          },
-          {
-            "name": "pageSize",
-            "in": "query",
-            "description": "每页大小, 默认全部返回",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": -1
-            }
-          },
-          {
-            "name": "includeExtra",
-            "in": "query",
-            "description": "直播场拓展信息, 包括词云 高能榜等",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          },
-          {
-            "name": "useEmoji",
-            "in": "query",
-            "description": "是否将表情包转换为表情链接",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          },
-          {
-            "name": "includeDanmakus",
-            "in": "query",
-            "description": "是否包含弹幕",
-            "schema": {
-              "type": "boolean",
-              "default": true
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "单个直播场的数据",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LiveResponeDataPaginationResponeResponseValue"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "pageNum 超过最大页数",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/user": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "uid",
-            "in": "query",
-            "description": "用户Id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "target",
-            "in": "query",
-            "description": "返回在指定直播间中的发言记录",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64",
-              "default": 0
-            }
-          },
-          {
-            "name": "pageNum",
-            "in": "query",
-            "description": "当前页数",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 0
-            }
-          },
-          {
-            "name": "pageSize",
-            "in": "query",
-            "description": "每页容量, 默认 5 条",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 5
-            }
-          },
-          {
-            "name": "useEmoji",
-            "in": "query",
-            "description": "是否将表情包转换为表情链接",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "用户历史记录",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserHistoryResponeDataPaginationResponeResponseValue"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "pageNum 超过最大页数",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LiveResponeDataListPaginationResponeResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/user/name": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "uid",
-            "in": "query",
-            "description": "用户Id",
-            "required": true,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "integer",
-                "format": "int64"
-              }
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "用户基础信息字典，key为用户ID，value为用户名",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Int64StringDictionaryResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/user/watchedChannels": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "uid",
-            "in": "query",
-            "description": "用户Id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "simple",
-            "in": "query",
-            "description": "是否去重, 默认不去重",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "用户看过的直播间列表",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReturnValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/user/watchedChannelsSimple": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "uid",
-            "in": "query",
-            "description": "用户Id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "distinct",
-            "in": "query",
-            "description": "是否去重, 默认不去重",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "用户看过的直播间列表(简单版)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReturnValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/area": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "responses": {
-          "200": {
-            "description": "分区信息字典",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StringStringListDictionaryResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/popularChannels": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "count",
-            "in": "query",
-            "description": "返回数量, 默认20",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 20
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "被查询最多的直播间列表",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleChannelInfoIEnumerableResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/popularUsers": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "count",
-            "in": "query",
-            "description": "返回数量, 默认20",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 20
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "被查询最多的用户列表",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleChannelInfoIEnumerableResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/channels": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "simple",
-            "in": "query",
-            "description": "是否仅返回用户名, uid, 头像链接",
-            "schema": {
-              "type": "boolean",
-              "default": false
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "所有收录的直播间信息",
             "content": {
               "application/json": {
                 "schema": {
@@ -2895,134 +2853,69 @@
         }
       }
     },
-    "/api/v2/rank/range": {
+    "/api/v2/add": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "parameters": [
           {
-            "name": "range",
+            "name": "uid",
             "in": "query",
-            "description": "范围类型 [0: 过去一天, 1: 过去一周, 2: 过去一月]",
+            "description": "主播的UId",
             "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/RankRange"
-            }
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/RankType"
-            }
-          },
-          {
-            "name": "area",
-            "in": "query",
-            "description": "分区名，不传则不过滤",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "count",
-            "in": "query",
-            "description": "返回数量, 默认100",
             "schema": {
               "type": "integer",
-              "format": "int32",
-              "default": 100
+              "format": "int64"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "description": "人机验证token",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "排行榜数据",
+            "description": "添加成功",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RankInfoListResponseValue"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/rank/month": {
-      "get": {
-        "tags": [
-          "DanmakuControllers"
-        ],
-        "parameters": [
-          {
-            "name": "year",
-            "in": "query",
-            "description": "排行年份",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "month",
-            "in": "query",
-            "description": "排行月份",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/RankType"
-            }
-          },
-          {
-            "name": "area",
-            "in": "query",
-            "description": "分区名，不传则不过滤",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "count",
-            "in": "query",
-            "description": "返回数量, 默认100",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 100
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "月排行榜数据",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                  "$ref": "#/components/schemas/ObjectResponseValue"
                 }
               }
             }
           },
           "400": {
-            "description": "无效的年份或月份",
+            "description": "参数错误或直播间已存在",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "验证失败或直播间被禁止收录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
                 }
               }
             }
@@ -3030,87 +2923,138 @@
         }
       }
     },
-    "/api/v2/rank/day": {
+    "/api/v2/living": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "parameters": [
           {
-            "name": "year",
+            "name": "includeExtra",
             "in": "query",
-            "description": "排行年份",
-            "required": true,
+            "description": "是否包含拓展信息 (高能榜",
             "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "month",
-            "in": "query",
-            "description": "排行月份",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "day",
-            "in": "query",
-            "description": "排行日期",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "type",
-            "in": "query",
-            "description": "排行类型 [0: 收益, 1: 观看数, 2: 点赞数, 3: 弹幕数, 4: 直播次数]",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/RankType"
-            }
-          },
-          {
-            "name": "area",
-            "in": "query",
-            "description": "分区名，不传则不过滤",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "count",
-            "in": "query",
-            "description": "返回数量, 默认100",
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "default": 100
+              "type": "boolean",
+              "default": false
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "日排行榜数据",
+            "description": "直播中的直播间信息",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                  "$ref": "#/components/schemas/APIChannelInfoListResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/site": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "responses": {
+          "200": {
+            "description": "站点信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteInfoResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/user": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "用户Id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "返回在指定直播间中的发言记录",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0
+            }
+          },
+          {
+            "name": "pageNum",
+            "in": "query",
+            "description": "当前页数",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "每页容量, 默认 5 条",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 5
+            }
+          },
+          {
+            "name": "useEmoji",
+            "in": "query",
+            "description": "是否将表情包转换为表情链接",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "hideOnlyEnter",
+            "in": "query",
+            "description": "隐藏仅入场的直播场",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "用户历史记录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserHistoryResponeDataPaginationResponeResponseValue"
                 }
               }
             }
           },
           "400": {
-            "description": "无效的年份、月份或日期",
+            "description": "pageNum 超过最大页数",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RankInfoListResponseValue"
+                  "$ref": "#/components/schemas/LiveResponeDataListPaginationResponeResponseValue"
                 }
               }
             }
@@ -3118,18 +3062,33 @@
         }
       }
     },
-    "/api/v2/vup-list": {
+    "/api/v2/user/name": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
+        "parameters": [
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "用户Id",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "VUP列表数据",
+            "description": "用户基础信息字典，key为用户ID，value为用户名",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Int64VTBInfoDictionaryResponseValue"
+                  "$ref": "#/components/schemas/Int64StringDictionaryResponseValue"
                 }
               }
             }
@@ -3137,18 +3096,39 @@
         }
       }
     },
-    "/api/v2/emoicons": {
+    "/api/v2/user/watchedChannels": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
+        "parameters": [
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "用户Id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "simple",
+            "in": "query",
+            "description": "是否去重, 默认不去重",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "B豆数据",
+            "description": "用户看过的直播间列表",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TempResponseEmoiconModelListResponseValue"
+                  "$ref": "#/components/schemas/ReturnValue"
                 }
               }
             }
@@ -3156,18 +3136,513 @@
         }
       }
     },
-    "/api/v2/guilds": {
+    "/api/v2/user/watchedChannelsSimple": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "用户Id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "distinct",
+            "in": "query",
+            "description": "是否去重, 默认不去重",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "用户看过的直播间列表(简单版)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReturnValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/area": {
       "get": {
         "tags": [
           "DanmakuControllers"
         ],
         "responses": {
           "200": {
-            "description": "公会数据",
+            "description": "分区信息字典",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StringInt64ListDictionaryResponseValue"
+                  "$ref": "#/components/schemas/StringStringListDictionaryResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/popularChannels": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "count",
+            "in": "query",
+            "description": "返回数量, 默认20",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "被查询最多的直播间列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimpleChannelInfoIEnumerableResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/popularUsers": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "count",
+            "in": "query",
+            "description": "返回数量, 默认20",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "被查询最多的用户列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimpleChannelInfoIEnumerableResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/channels": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "simple",
+            "in": "query",
+            "description": "是否仅返回用户名, uid, 头像链接",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "所有收录的直播间信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/live": {
+      "get": {
+        "tags": [
+          "DanmakuControllers"
+        ],
+        "parameters": [
+          {
+            "name": "liveId",
+            "in": "query",
+            "description": "直播场Id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "uId",
+            "in": "query",
+            "description": "如有此项则只返回指定用户的弹幕",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "如有此项则只返回指定类型的弹幕. ● 0 : 普通消息 ● 1: 礼物 ● 2: 上舰 ● 3: Superchat ● 4: 进入直播间 ● 5: 标题变动● 6: 分区变动● 7: 直播中止● 8: 直播继续● 9: 用户封禁. 使用方法: ?type=0&type=1&type=2 ...",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/DanmakuType"
+              }
+            }
+          },
+          {
+            "name": "pageNum",
+            "in": "query",
+            "description": "返回弹幕的页数",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "每页大小, 默认全部返回",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": -1
+            }
+          },
+          {
+            "name": "includeExtra",
+            "in": "query",
+            "description": "直播场拓展信息, 包括词云 高能榜等",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "useEmoji",
+            "in": "query",
+            "description": "是否将表情包转换为表情链接",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "includeDanmakus",
+            "in": "query",
+            "description": "是否包含弹幕",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "单个直播场的数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponeDataPaginationResponeResponseValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "pageNum 超过最大页数",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/danmaku/search/queue-stats": {
+      "get": {
+        "tags": [
+          "DanmakuSearch"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllQueueStatsResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/danmaku/search/async": {
+      "post": {
+        "tags": [
+          "DanmakuSearch"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "关键词",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "开始时间 Unix 毫秒",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "结束时间 Unix 毫秒",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "channelUid",
+            "in": "query",
+            "description": "直播间 UID",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "发言用户 UID",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "返回条数",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "description": "请求优先通道（注册用户自动启用）",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "requestId",
+            "in": "query",
+            "description": "请求幂等 ID（同一查询所有分页复用）",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "上一页返回的分页游标",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuSearchTaskResponseResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/danmaku/search/async/{taskId}": {
+      "get": {
+        "tags": [
+          "DanmakuSearch"
+        ],
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuSearchTaskStatusResponseResponseValue"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/danmaku/search": {
+      "get": {
+        "tags": [
+          "DanmakuSearch"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "关键词",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "开始时间 Unix 毫秒",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "结束时间 Unix 毫秒",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "channelUid",
+            "in": "query",
+            "description": "直播间 UID",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "uid",
+            "in": "query",
+            "description": "发言用户 UID",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "返回条数",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "description": "请求优先通道（注册用户自动启用）",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "requestId",
+            "in": "query",
+            "description": "请求幂等 ID（同一查询所有分页复用）",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "上一页返回的分页游标",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanmakuContentSearchPageResponseValue"
                 }
               }
             }
@@ -3467,6 +3942,15 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "hideOnlyEnter",
+            "in": "query",
+            "description": "隐藏仅入场的直播场",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
           }
         ],
         "responses": {
@@ -3536,6 +4020,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "hideOnlyEnter",
+            "in": "query",
+            "description": "隐藏仅入场的直播场",
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           }
         ],
@@ -4291,6 +4784,35 @@
         },
         "additionalProperties": false
       },
+      "AllQueueStats": {
+        "type": "object",
+        "properties": {
+          "contentSearch": {
+            "$ref": "#/components/schemas/QueueStats"
+          },
+          "userHistory": {
+            "$ref": "#/components/schemas/UserHistoryQueueStat"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AllQueueStatsResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/AllQueueStats"
+          }
+        },
+        "additionalProperties": false
+      },
       "AnonymousDanmakuActorV3": {
         "type": "object",
         "properties": {
@@ -4436,6 +4958,42 @@
         },
         "additionalProperties": false
       },
+      "ArchivedDanmakuCursorPageV3": {
+        "type": "object",
+        "properties": {
+          "frame": {
+            "$ref": "#/components/schemas/DanmakuFrameV3"
+          },
+          "nextTs": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "nextSeq": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ArchivedDanmakuCursorPageV3ResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ArchivedDanmakuCursorPageV3"
+          }
+        },
+        "additionalProperties": false
+      },
       "AudienceLeaderboardItem": {
         "type": "object",
         "properties": {
@@ -4514,6 +5072,10 @@
             "nullable": true
           },
           "pendingLiveCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalLiveCount": {
             "type": "integer",
             "format": "int32"
           },
@@ -5952,6 +6514,9 @@
           "endTime": {
             "type": "integer",
             "format": "int64"
+          },
+          "forceRefresh": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -5962,6 +6527,215 @@
           "jobId": {
             "type": "string",
             "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuContentSearchHit": {
+        "type": "object",
+        "properties": {
+          "liveId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "channelUid": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "channelName": {
+            "type": "string",
+            "nullable": true
+          },
+          "liveTitle": {
+            "type": "string",
+            "nullable": true
+          },
+          "liveStart": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uid": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uname": {
+            "type": "string",
+            "nullable": true
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuContentSearchPage": {
+        "type": "object",
+        "properties": {
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DanmakuContentSearchHit"
+            },
+            "nullable": true
+          },
+          "cacheHit": {
+            "type": "boolean"
+          },
+          "wasQueued": {
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "boolean"
+          },
+          "extendedScope": {
+            "type": "boolean"
+          },
+          "pointsSpent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pointsBalance": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuContentSearchPageResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/DanmakuContentSearchPage"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuExtractionRule": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "nullable": true
+          },
+          "discardPatterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "target": {
+            "type": "string",
+            "nullable": true
+          },
+          "proto": {
+            "type": "string",
+            "nullable": true
+          },
+          "protoSource": {
+            "type": "string",
+            "nullable": true
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DanmakuFieldSpec"
+            },
+            "nullable": true
+          },
+          "consts": {
+            "type": "object",
+            "additionalProperties": { },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuExtractionRuleSet": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "protobufs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DanmakuProtobufSchema"
+            },
+            "nullable": true
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DanmakuExtractionRule"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuExtractionRuleSetResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/DanmakuExtractionRuleSet"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuFieldSpec": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "as": {
+            "type": "string",
+            "nullable": true
+          },
+          "mul": {
+            "type": "string",
+            "nullable": true
+          },
+          "div": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -6076,6 +6850,20 @@
         },
         "additionalProperties": false
       },
+      "DanmakuProtobufSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "proto": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "DanmakuRecordV3": {
         "type": "object",
         "properties": {
@@ -6101,6 +6889,75 @@
           },
           "payload": {
             "$ref": "#/components/schemas/DanmakuPayloadV3"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuSearchTaskResponse": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuSearchTaskResponseResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/DanmakuSearchTaskResponse"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuSearchTaskStatusResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "queuePosition": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "result": {
+            "$ref": "#/components/schemas/DanmakuContentSearchPage"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "queueStats": {
+            "$ref": "#/components/schemas/QueueStats"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DanmakuSearchTaskStatusResponseResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/DanmakuSearchTaskStatusResponse"
           }
         },
         "additionalProperties": false
@@ -6669,11 +7526,11 @@
         },
         "x-payload-args-by-kind": {
           "None": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [ ]
           },
           "TextMessage": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "rawText",
@@ -6683,7 +7540,7 @@
             ]
           },
           "RoomEmojiMessage": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "roomEmojiId",
@@ -6693,7 +7550,7 @@
             ]
           },
           "Gift": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "name",
@@ -6723,7 +7580,7 @@
             ]
           },
           "Guard": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "name",
@@ -6743,7 +7600,7 @@
             ]
           },
           "SuperChat": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "text",
@@ -6758,7 +7615,7 @@
             ]
           },
           "TitleChange": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "previousTitle",
@@ -6773,7 +7630,7 @@
             ]
           },
           "AreaChange": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "previousParentArea",
@@ -6798,7 +7655,7 @@
             ]
           },
           "Warning": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "text",
@@ -6808,7 +7665,7 @@
             ]
           },
           "RecordStart": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "text",
@@ -6818,7 +7675,7 @@
             ]
           },
           "RecordInterrupt": {
-            "kindValue": ,
+            "kindValue": null,
             "args": [
               {
                 "name": "text",
@@ -7199,6 +8056,24 @@
         },
         "additionalProperties": { }
       },
+      "QueueStats": {
+        "type": "object",
+        "properties": {
+          "freeQueued": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "priorityQueued": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "RankInfo": {
         "type": "object",
         "properties": {
@@ -7508,6 +8383,9 @@
         "additionalProperties": false
       },
       "RequsetUpdateRecordingSetting": {
+        "required": [
+          "setting"
+        ],
         "type": "object",
         "properties": {
           "id": {
@@ -7744,6 +8622,104 @@
           "resource": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchPointLedgerItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "delta": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchPointLedgerPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchPointLedgerItem"
+            },
+            "nullable": true
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchPointLedgerPageResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/SearchPointLedgerPage"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchPointsResponse": {
+        "type": "object",
+        "properties": {
+          "earned": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "spent": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "available": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "eventsPerPoint": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchPointsResponseResponseValue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/SearchPointsResponse"
           }
         },
         "additionalProperties": false
@@ -8194,6 +9170,24 @@
         },
         "additionalProperties": false
       },
+      "UserAnalyzeAliasTimelineItem": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "firstSeen": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastSeen": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "UserAnalyzeChannel": {
         "type": "object",
         "properties": {
@@ -8281,6 +9275,56 @@
           "lastLiveIncome": {
             "type": "number",
             "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserAnalyzeChannelAffinity": {
+        "type": "object",
+        "properties": {
+          "channelUid": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "channelName": {
+            "type": "string",
+            "nullable": true
+          },
+          "roomId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "faceUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "messageCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "payment": {
+            "type": "number",
+            "format": "double"
+          },
+          "activeDays": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "liveCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "loyaltyScore": {
+            "type": "number",
+            "format": "double"
+          },
+          "firstActiveAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastActiveAt": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -8396,6 +9440,44 @@
         ],
         "type": "integer",
         "format": "int32"
+      },
+      "UserAnalyzeInsights": {
+        "type": "object",
+        "properties": {
+          "repeaterIndex": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxRepeatedText": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxRepeatedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "emojiRatio": {
+            "type": "number",
+            "format": "double"
+          },
+          "roomEmojiRatio": {
+            "type": "number",
+            "format": "double"
+          },
+          "nightOwlRatio": {
+            "type": "number",
+            "format": "double"
+          },
+          "avgMessageLength": {
+            "type": "number",
+            "format": "double"
+          },
+          "uniqueMessageRatio": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
       },
       "UserAnalyzeJobStatus": {
         "enum": [
@@ -8558,6 +9640,34 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/UserAnalyzeChannelResult"
+            },
+            "nullable": true
+          },
+          "insights": {
+            "$ref": "#/components/schemas/UserAnalyzeInsights"
+          },
+          "aliasTimeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAnalyzeAliasTimelineItem"
+            },
+            "nullable": true
+          },
+          "rhythmMatrix": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "nullable": true
+          },
+          "channelAffinities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAnalyzeChannelAffinity"
             },
             "nullable": true
           }
@@ -8800,6 +9910,24 @@
         },
         "additionalProperties": false
       },
+      "UserHistoryQueueStat": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "available": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "UserHistoryResponeData": {
         "type": "object",
         "properties": {
@@ -8953,6 +10081,9 @@
       "name": "AnonymousDanmakuIdentity"
     },
     {
+      "name": "ArchivedDanmakuCursor"
+    },
+    {
       "name": "AudienceLeaderboard"
     },
     {
@@ -8963,6 +10094,9 @@
     },
     {
       "name": "DanmakuControllers"
+    },
+    {
+      "name": "DanmakuSearch"
     },
     {
       "name": "DanmakuV3"

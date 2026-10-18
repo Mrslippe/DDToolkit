@@ -121,6 +121,12 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/account/{id}/live-sessions` | **手动记录一场**（B2，devlog/454）：体 `{start_at, end_at?, title?, vod_url?}` ⇒ **201** + 合并后的场次详情。时段与**表内已有记录**重叠 ⇒ **409**（`detail` 是一句点名撞上哪一场的中文）；录播地址不合格 / 结束早于开始 / 标题超 80 字 ⇒ **422** + 中文原因；账号不存在 ⇒ 404。只有 self 快照的时段**放行**（合并会把快照并进这一组） |
 | PATCH `/account/{id}/live-sessions/{live_id}` | 编辑场次（B2）：只传要改的字段（`exclude_unset`；`end_at: null` = 清空改回"进行中"，`vod_url: ""` = 清空录播）。**自动抓来的场次只允许 `vod_url`** ⇒ 其余字段 **400**（下次同步会覆盖回去）；不在表内（self 推导的虚拟场次）⇒ **404**；空体 ⇒ 422 |
 | DELETE `/account/{id}/live-sessions/{live_id}` | 删除**手动记录**的场次（B2）⇒ `{deleted, live_id}`；自动抓来的 ⇒ **400**（下次同步会放回来）；不在表内 ⇒ 404。同时清掉该场的分类校正（不留悬空记录） |
+| GET `/account/{id}/live-sessions/{live_id}/vod-candidates` | **给这一场找录播候选**（C1，`devlog/464`）：扫该 V 的 B 站号 + 录播号（`mid=` 可临时再加一个）的投稿，**只读**、给打分的候选与理由，由用户点一下确认（计划口径「误配比漏配更糟」） |
+| GET `/account/{id}/vod-sources` | **列一个号的可扫来源**（B3，`docs/plans/vod-autofill.md`）：`{mid, sources:[{kind: series\|season\|uploads, id, name, total, picked}], picked_id, error}`。`mid` 省略 ⇒ 用该 V 记住的录播号（`vod_account_uid`，**左 = 高优先**），没有则回落到它自己的 B 站号。⚠️ **取不到时 `error` 非空**（不许让"没取到"看起来像"这个号没有合集"）。**只读、不写库** |
+| GET `/vtuber/vod-accounts/resolve` | **录播号资料卡**（2026-10-15，小窗那一行 `\| 昵称 mid 投稿数 \|`）：`?mids=1,2,3`（**中文逗号也认**）⇒ `{items:[{mid, name, avatar, uploads, last_published_at, name_error, uploads_error}]}`，**顺序与请求一致**。昵称/头像走匿名的 `x/web-interface/card`、投稿数走登录态的 `arc/search` ⇒ **两半各自独立失败**（号有效但昵称没取到时界面标黄、仍允许保存）；`uploads` 取不到是 **`null` 不是 0**；每个 mid 两次上游 ⇒ 超过 12 个**截断**。⚠️ 路径形状不许被 `{vtuber_id}` 路由撞上（一段式与 `/vtuber/vod/accounts` 都撞过，症状是 422 `int_parsing`） |
+| POST `/account/{id}/vod-scan` | **整号批量扫描**（B3）⇒ 审查表用的「场次 ↔ 录播」配对：体 `{mids?, sources?, tolerance_minutes=90}`（`mids` 省略 = 记住的录播号 + 自己的号兜底，**顺序即优先级**）。**只读、一个字节都不写**。每条匹配带 `confidence`（0 标题时间+回放词 / 1 有时间无回放词 / 2 同日+时长兜底）、`auto_ok`、`minutes_delta`、`alternates`；配不上的进 `unmatched`（**已有 `vod_url` 的场次既不匹配也不算漏配**，不变量 39）。无可扫的号 ⇒ 422 |
+| POST `/account/{id}/vod-apply` | **把审查表里勾中的写进 `vod_url`**（B3，**整条链路上唯一会写的端点**）：体 `{items:[{live_id, vod_url}]}` ⇒ `{applied, failed, results:[{live_id, ok, vod_url, error}]}`。地址走与手动填**同一个** `normalize_vod`；**逐条独立**（一条不合格不让别的白写，失败原因逐条列出）；空 `items` ⇒ 422；账号不存在 ⇒ 404 |
+| POST `/account/{id}/vod-clear` | **硬清这个账号下所有已匹配的录播地址**（B4 第三版，`devlog/502`）：体 `{dry_run=false}` ⇒ `{cleared, auto, manual, untracked, dry_run, results}`。按 `vod_url IS NOT NULL` **全清**（用户口径「硬性清除所有已匹配项」，不分类）、**一个上游请求都不发**、**只清地址不删场次**；`auto/manual/untracked` 只是分类报数（确认窗要先把"其中手填 N 条"摆出来）。`dry_run=true` 只数不写（也照给 `cleared`）。账号不存在 ⇒ 404 |
 
 **活动 / 预约 / 第三方索引**
 
@@ -311,6 +317,42 @@ retire-when: HTTP 层换框架，或路由整体重排
   消息收不回）。真源：`app/services/messages.py` 头部 + `tests/test_messages.py`。
 
 ---
+
+
+### 3.7 `app/routers/fan.py` — 粉丝结构分析（5 条，2026-10-17 新增）
+
+> 只读，全部从 `datasets/fan-structure/` 的 JSON 事实表现算，**不写库、不联网**。
+> 模型定义见 `docs/plans/fan-model-spec.md`；施工阶段见 `docs/plans/fan-model-execution.md`。
+
+| 方法 + 路径 | 说明 |
+|---|---|
+| GET `/fan/vtubers` | 已注册主播 + 数据是否就位。**不加载事实表**（秒回） |
+| GET `/fan/{vtuber}/sessions?since=&until=` | 区间内有几场、已采几场（**采集前的预估**）。`source` 说明来源：`local` / `upstream` / `none` |
+| POST `/fan/{vtuber}/collect` | 启动采集（body `{since, until}`）。同一主播同时只允许一个任务，已在跑 → **409** |
+| GET `/fan/collect/status?vtuber=` | 采集进度（`state` / `done` / `total` / `failed` / `elapsed`）。不传主播则返回全部 |
+| POST `/fan/collect/cancel?vtuber=` | 取消采集。**已写盘的场次保留**（重采要几分钟，删了不划算） |
+| GET `/fan/{vtuber}/ranked?by=` | 名单。**`by` 必填**（`strength` / `retention` / `income`），缺了 **400** 不是 422；未知主播 404 |
+| GET `/fan/{vtuber}/tags` | 13 条展示标签的说明与本窗口占比。**标签不进排序** |
+| GET `/fan/{vtuber}/health` | 完整性判据 C1–C4 的汇总。无外部源时全部 `unverified`，但**没有一场被弃** |
+| GET `/fan/cross?vtubers=a,b` | 两 V 名单重叠 + **超几何零模型**。**只比层级、不比分数** |
+
+**模块开关**：整组端点由偏好 `fan_workbench`（默认 `off`）控制。**未启用时一律 404** 并说明原因
+（`GET /fan/vtubers` 例外 —— 界面要靠它判断该不该显示入口）。开关**即时生效、不用重启**
+（实测写入 0.007~0.010 秒）。
+
+**窗口**：`since` / `until`（`YYYY-MM-DD` 闭合区间）由用户在界面上选。不传则退化为"最近 `window` 场"。
+⚠️ 换一个区间 ⇒ 分位参照总体变了 ⇒ **跨区间比绝对分位不合法**（与跨主播同一条纪律）。
+
+- **`by` 没有默认值**（规格 §4.1）：一个叫"核心度"的单一数字会被读成价值判断，而它其实只是
+  "行为强度"⇒ 逼调用方显式声明效标。这是**契约层**的选择，不是实现细节。
+- **`retention` / `income` 的权重由前半窗口拟合**，后半窗口出结果（规格 §4.3）。
+  用全窗口预测子会让 `y` 几乎恒为 1，`β` 退化为噪声 —— `compose.fit_criterion_weights`
+  在 `y` 无方差时抛 `DegenerateOutcome` 作为第二道闸门。
+- **`/fan/cross` 不返回任何分数比较**：跨 V 的测量不变性已被否证（三轴 75 分位最多差 4.2 倍），
+  所以接口只给层级与重叠。判读必须看 `lift` 与**两个方向**的尾概率 —— `lift < 1` 且下尾显著
+  是**贫化**（受众在分化），与"无显著差异"是两件事。
+- **首次请求会慢**（单 V 约 10~20 秒，要读几百 MB JSON 并逐人聚合）。进程内有一层按
+  `(主播, 窗口)` 索引的缓存，**不设失效** —— 事实表是冻结快照（不变量 I1），不会读到旧数据。
 
 ## 2. 分层与错误语义
 

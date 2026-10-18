@@ -139,7 +139,12 @@ export default function ManualSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
+      {/* ⚠️ `lc-dlg-layer`：这个窗可能在**场次详情窗之上**打开（详情页下拉栏的「编辑这一场」）
+          ⇒ 抬到第 7 层，让它的遮罩**盖住**底下那个二级窗（用户 2026-10-15 报的第 1 条：
+          「新弹窗的出现让背景遮罩更深色了一点，直播场次详情窗却没有变化，层级像是混在一起」）。
+          层号是 `tokens.css` 的 `--z-dialog-7`，**别在这里写数字**。 */}
+      <DialogContent className="lc-ms lc-dlg-layer p-0 gap-0"
+                     overlayClassName="lc-dlg-backdrop lc-dlg-layer"
                      showCloseButton={false}
                      /* 接管自动聚焦：默认那个会把页面滚出去（`dialogScroll.ts` 记了两次修错） */
                      onOpenAutoFocus={noScrollAutoFocus}

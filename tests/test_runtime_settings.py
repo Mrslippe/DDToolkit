@@ -300,8 +300,10 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     #   f013：手动场次的录播地址（vod_url），devlog/454；f014：V 的企划归属
     #   group_name/group_uuid（B3），devlog/457；f015：V 的录播号 vod_account_uid（C1），devlog/464；
     #   f016：直播场次类型落库 category/category_from（写时定稿 + 惰性回填），devlog/467；
-    #   f017：场次身份 session_key（合并组的锚 ⇒ 按类型聚合能直查索引 + 兜底也落库），devlog/471）。
-    assert info["migration_head"] == "f017"
+    #   f017：场次身份 session_key（合并组的锚 ⇒ 按类型聚合能直查索引 + 兜底也落库），devlog/471；
+    #   f018：`live_sessions.vod_source`（录播地址是谁写的 ⇒ "清空已匹配"不看网络就能清、
+    #         且绝不碰手填的），devlog/501）。
+    assert info["migration_head"] == "f018"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
 

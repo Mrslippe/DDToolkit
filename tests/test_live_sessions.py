@@ -491,6 +491,38 @@ def test_merged_interruption_segments(db):
     assert m["live_id"] in ("uuid-a", "uuid-b")
 
 
+def test_merged_segment_vod_url_from_later_row(db):
+    """★回归（2026-10-15 用户实测，`devlog/502`）：并段里**后一行**的录播地址必须出现在合并视图里。
+
+    真机抓到的形态：一场直播断一次 ⇒ 本表**两行**（gap 6min ⇒ `interrupt`/`restart` 并一组），
+    而对外 `live_id` 取的是 `_SRC_IDS_KEY` 里**同源后写的那一行**（第一段 1990 弹幕、
+    第二段 47845 弹幕，id 是后者）—— 录播批量填充写进去的正是那一行。
+    并段分支只从**主行**取字段 ⇒ 地址落了表、合并视图里却永远是空，于是：
+    "写入成功但日历上不显示、再扫一遍还是同一批"（实测 189 条里 182 条这样）。
+    """
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    a, ae = T0, T0 + timedelta(minutes=9)
+    b, be = ae + timedelta(minutes=7), T0 + timedelta(hours=5)
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
+        _dm_item("uuid-a", "我在底特律没有家", _ms(a), _ms(ae), count=1990),
+        _dm_item("uuid-b", "我在底特律没有家", _ms(b), _ms(be), count=47845),
+    ])
+    vod = "https://www.bilibili.com/video/BV1MV4y1L7zc"
+    assert repo.merged(acc.id)[0]["live_id"] == "uuid-b"      # 对外 id = 后一行
+
+    # 录播填充写的就是「对外 id 那一行」（`vod-apply` 的落点）
+    repo.update_row(repo.get_row(acc.id, "uuid-b"),
+                    {"vod_url": vod, "vod_source": "match"}, settled=None)
+
+    m = repo.merged(acc.id)[0]
+    assert m["live_id"] == "uuid-b"
+    assert m["start_at"] == a                                 # 主数据仍是第一段
+    assert m["vod_url"] == vod, "并段里后一行的录播地址被合并吃掉了（写进去却看不见）"
+    # 合并视图看得见 ⇒ 这一场才能被"已有录播"的规则挡在匹配池外（否则每次扫描都重复出现）
+    assert all(r["vod_url"] for r in repo.merged(acc.id))
+
+
 def test_merged_restart_diff_title_short_gap(db):
     """平台断播重开/快转场（不同标题 gap 3min）→ 并段（观感连续）。"""
     acc = _mk_account(db)

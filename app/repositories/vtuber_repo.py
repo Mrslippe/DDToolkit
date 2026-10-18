@@ -739,9 +739,9 @@ class LiveSessionRepo:
                 g["live_id"] = row.live_id
             if row.cover_url and not g["cover_url"]:
                 g["cover_url"] = row.cover_url
-            # 录播地址是**用户手填**的：上面的 `g.update(...)` 会把没有它的那一侧的
+            # 录播地址是**用户/匹配写进去的**：上面的 `g.update(...)` 会把没有它的那一侧的
             # `vod_url=None` 覆盖上来 ⇒ 合并一次就丢。这里显式兜底（同 `_merge_row_into_group`）。
-            g["vod_url"] = g.get("vod_url") or old_vod
+            self._keep_vod(g, old_vod, row.vod_url)
             if g.get("category") is None and old_cat[0] is not None:
                 g["category"], g["category_from"] = old_cat
             self._keep_category(g, row)
@@ -776,9 +776,35 @@ class LiveSessionRepo:
             g["live_id"] = row.live_id
         if row.cover_url and not g["cover_url"]:
             g["cover_url"] = row.cover_url
+        # ⚠️ 并段（interrupt / restart）是**同一个源的两行**，对外 id 取的是后一行 ⇒
+        # 这一行的录播地址必须并进来（否则"写进去了却看不见"，见 `_keep_vod`）。
+        self._keep_vod(g, row.vod_url)
         self._keep_category(g, row)
         srcs.add(row.source)
         g["source"] = self._join_sources(srcs)
+
+    @staticmethod
+    def _keep_vod(g: dict, *extra: str | None) -> None:
+        """合并组保留录播地址：**已有的不动，没有的从候选里取第一个非空**（不变量 39）。
+
+        两件事一起管：
+
+        1. **不许被合并抹掉**（B2，`devlog/454`）：`live_sessions.vod_url` 是全表唯一
+           "用户手写、没有任何自动源会重新给出来"的字段，而高优分支的
+           `g.update(_row_dict(row))` 会拿 `None` 覆盖它；
+        2. ⚠️ **不许只认主行**（2026-10-15 用户实测，`devlog/502`）：一次直播被切断成两段时
+           本表有**两行**（`restart`/`interrupt` 并成一组），而对外 `live_id` 取的是
+           `_SRC_IDS_KEY` 里**同源后写的那一行** —— 录播匹配写进去的正是那一行。
+           并段分支只从**主行**取字段 ⇒ 地址落了表、合并视图里却永远是空：症状是
+           "写入成功但日历上不显示 ▶、再扫一遍还是这一批"（实测 189 条里 182 条这样）。
+           所以候选里必须带上**正在并入的这一行**的地址。
+        """
+        if g.get("vod_url"):
+            return
+        for v in extra:
+            if v:
+                g["vod_url"] = v
+                return
 
     @staticmethod
     def _keep_category(g: dict, row: LiveSession) -> None:
@@ -896,7 +922,9 @@ class LiveSessionRepo:
                 self._apply_duration(g)
         # 手动补的录播地址**只增不减**（`g.update` 那条路会用 None 冲掉它）：
         # 这是全表唯一一个"用户手写、没有任何自动源会重新给出来"的字段。
-        g["vod_url"] = g.get("vod_url") or old_vod
+        # ⚠️ 候选里还要带上**正在并入的这一行**：同源两行并一组时对外 id 取的是后一行，
+        #    只看主行就会把写在后一行上的地址丢掉（`devlog/502`）。
+        self._keep_vod(g, old_vod, row.vod_url)
         if g.get("category") is None and old_cat[0] is not None:
             g["category"], g["category_from"] = old_cat
         self._keep_category(g, row)

@@ -223,6 +223,11 @@ class LiveSession(Base):
     area_name = Column(String, nullable=True)
     cover_url = Column(String, nullable=True)
     vod_url = Column(String, nullable=True)
+    #: **这条录播地址是谁写的**（f018，2026-10-15）。`'match'` = 自动匹配（`vod-apply`）·
+    #: `'manual'` = 用户手填（PATCH / 手动记录）· `NULL` = 没记账（历史行，**不猜**）。
+    #: 用途只有一个：让"清空已匹配"能**不看网络**就把自动写的那些清掉，同时**绝不碰**手填的
+    #: （不变量 39：`vod_url` 是全表唯一没有自动源的用户字段）。
+    vod_source = Column(String, nullable=True)
     total_income = Column(Float, nullable=True)
     max_online_count = Column(Integer, nullable=True)
     danmakus_count = Column(Integer, nullable=True)

@@ -97,9 +97,14 @@ export default function PostsPage() {
   const [vtuber, setVtuber] = useState<VTuber | null>(null)
   const [stats, setStats] = useState<PostStats | null>(null)
   /** 录播号（C1，f015）的**本地覆盖值**：保存后立刻回显，不等下一次场景刷新。
-   *  换 V 时会被服务端值顶掉（`?? ` 左边只在本次会话有效）—— 这是有意的：
-   *  它只是个"刚存了什么"的提示，真源永远是 `vtubers.vod_account_uid`。 */
-  const [vodUidOverride, setVodUidOverride] = useState<string | null>(null)
+   *
+   *  ⚠️ **必须按 V 记**（2026-10-15 用户实测报回来的 bug）：它原来只是一个字符串，
+   *  而 `?? ` 的左边一旦有值就**永远赢** —— 给明前奶绿存过一次 `94009831` 之后，
+   *  切到任何主播，`vodAccountUid` 都还是那一个 ⇒「所有主播复用了我输入的录播号」。
+   *  更糟的是在别人那儿点保存会把那个号**写进别人的字段**。
+   *  改成"记住是给哪个 V 存的"，别人的 V 自然回落到服务端那份值。 */
+  const [vodUidOverride, setVodUidOverride] =
+    useState<{ vtuberId: number; mids: string } | null>(null)
 
   // 分页机（`posts` / `total` / `page` / `loadingMore` / `loadMoreError` + 哨兵 + 回顶）
   // 在 `hooks/usePostPagination`（M4，devlog/221）—— 它的调用点在 `scene` 之后
@@ -879,9 +884,12 @@ return (
               seedSessions={prefetchSessions}
               /* 录播号（C1，f015）：V 级字段 —— 「找录播」要扫它，所以从这里传下去。
                  保存后服务端有了新值，但这个页面的 `vtuber` 要等下一次场景刷新才更新
-                 ⇒ 本地记一份覆盖值，输入框立刻回显（不必为了一个字段整页重取）。 */
-              vodAccountUid={vodUidOverride ?? vtuber.vod_account_uid ?? null}
-              onVodAccountSaved={(mids) => setVodUidOverride(mids || null)}
+                 ⇒ 本地记一份覆盖值，输入框立刻回显（不必为了一个字段整页重取）。
+                 ⚠️ 覆盖值**带 V 的 id**：只有当前这个 V 才用它（见 state 的注释）。 */
+              vodAccountUid={vodUidOverride?.vtuberId === vtuber.id
+                ? vodUidOverride.mids
+                : vtuber.vod_account_uid ?? null}
+              onVodAccountSaved={(mids) => setVodUidOverride({ vtuberId: vtuber.id, mids })}
             />
             {/* 第二步 = 粉丝趋势卡（参考图 + 项目粉系；Brush 缩放 + 默认 30 天窗口）。
                 ⚠️ 用 `trendTick` 而不是 `refreshTick`（R2 第二步，devlog/080）：

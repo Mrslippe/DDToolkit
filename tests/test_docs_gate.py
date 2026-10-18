@@ -115,7 +115,11 @@ def test_budget_ceilings_match_the_agreed_numbers():
     #    文档劈成两半。**改这个数要连同 `docs_gate.BUDGET_CEILING` 的注释一起改。**
     assert D.BUDGET_CEILING["module"] == 900
     assert D.BUDGET_CEILING["spec"] == 700
-    assert D.BUDGET_CEILING["index"] == 1600      # UI-MAP：索引靠 Ctrl+F，砍长度=砍覆盖率
+    #   ⚠️ `index` 1600 → **2500**（2026-10-15，**用户明确授权**）：它已顶到 1599/1600
+    #      （余量 1 行），于是"再加一个新界面/新按钮"被**预算**卡住、而不是被"该不该写"卡住。
+    #      用户同时定了退役条件 ——「如果之后确实太过臃肿，就彻底拆成不同层次的架构文档集」
+    #      ⇒ **2500 是过渡上限，不是新稳态**；理由全文在 `docs_gate.BUDGET_CEILING` 上方。
+    assert D.BUDGET_CEILING["index"] == 2500      # UI-MAP：索引靠 Ctrl+F，砍长度=砍覆盖率
     assert D.BUDGET_CEILING["plan"] == 1000
     assert D.BUDGET_CEILING["snapshot"] == 1000
     for cls in ("module", "spec", "index", "plan", "snapshot"):

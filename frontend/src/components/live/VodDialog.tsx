@@ -29,6 +29,7 @@ import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import { formatDateTime } from '../../utils/format'
 import { noScrollAutoFocus } from './dialogScroll'
+import { VOD_ACCOUNT_MAX, parseMids } from './VodAccountDialog'
 import { Loader2 } from 'lucide-react'
 
 interface Props {
@@ -58,6 +59,8 @@ export default function VodDialog({
   const [acct, setAcct] = useState(vodAccountUid ?? '')
 
   const liveId = session?.live_id ?? null
+  /** 输入框里那一串的**归一形态**（去空、去重、认中文逗号）—— 存出去的就是它。 */
+  const parsedAcct = parseMids(acct)
 
   // 每次打开（或换一场）都从**服务端那份数据**重新起算
   useEffect(() => {
@@ -121,7 +124,12 @@ export default function VodDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
+      {/* ⚠️ `lc-dlg-layer`：这个窗从**场次详情窗**里打开（封面 ＋ 或下拉栏的「添加录播」）
+          ⇒ 抬到第 7 层，遮罩才会盖住底下那个二级窗（用户 2026-10-15：
+          「打开的小窗和前面提到的症状相同」—— 上一轮只给手动记录/填充/录播号三个窗加了，
+          漏了这一个，于是它的遮罩与面板都落在二级窗**下面**）。层号见 `tokens.css`。 */}
+      <DialogContent className="lc-ms lc-dlg-layer p-0 gap-0"
+                     overlayClassName="lc-dlg-backdrop lc-dlg-layer"
                      showCloseButton={false}
                      /* 接管自动聚焦：默认那个会把页面滚出去（`dialogScroll.ts`） */
                      onOpenAutoFocus={noScrollAutoFocus}>
@@ -156,16 +164,21 @@ export default function VodDialog({
                 {found.window && <span className="lc-vod-cand-win"> · {found.window}</span>}
               </div>
               {/* 录播号（f015）：真机实测 V 自己多半不发回放 ⇒ 这个输入框是**主路径**。
-                  先用「搜索」找一个「XX录播组」，把它的 mid 填进来再找一次。 */}
+                  先用「搜索」找一个「XX录播组」，把它的 mid 填进来再找一次。
+                  ⚠️ 存的口径必须与「录播号」小窗**同一条**（`parseMids` 归一 + 上限 5）：
+                  同一个 `vtubers.vod_account_uid` 两个写入口，规则不一致就会互相拆台。 */}
               {onSaveVodAccount && (
                 <div className="lc-vod-cand-acct">
                   <input className="lc-vod-acct-input" data-vod-account-input="1"
                          value={acct} placeholder="录播号 mid（多个用逗号分隔）"
                          onChange={(e) => setAcct(e.target.value)} />
                   <button type="button" className="lc-ms-btn" data-vod-account-save="1"
-                          disabled={acct.trim() === (vodAccountUid ?? '').trim()}
-                          title="存到这个 V 上，下次「找录播」自动带上它"
-                          onClick={() => void onSaveVodAccount(acct.trim())}>
+                          disabled={parsedAcct.length > VOD_ACCOUNT_MAX
+                                    || parsedAcct.join(',') === parseMids(vodAccountUid).join(',')}
+                          title={parsedAcct.length > VOD_ACCOUNT_MAX
+                            ? `最多 ${VOD_ACCOUNT_MAX} 个号 —— 到「录播号」小窗里拖动排序 / 删除`
+                            : '存到这个 V 上，下次「找录播」自动带上它'}
+                          onClick={() => void onSaveVodAccount(parsedAcct.join(','))}>
                     记住这个号
                   </button>
                 </div>

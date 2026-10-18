@@ -5,7 +5,7 @@ scope: 前端组件与元素的查询索引（组件文件 → CSS 类名 → �
 not-scope: 前端分层、数据流与状态管理；文档里凡写"当前数值"一律以 tokens.css 与各 css 的实际声明为准
 sot: frontend/src/styles/tokens.css, frontend/src/components/, frontend/src/pages/
 verify: python scripts/ui_probe.py --vtuber 15 --seed-accounts 8
-budget: 1600
+budget: 2500
 retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 ---
 
@@ -348,7 +348,7 @@ keyframes 只会重启**）。
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f`。★**单推的沉浸视觉**（需求 6 视觉版，`devlog/431`）：进单推 = **固定顺序**的分段收起 —— **左栏(0) → 工具栏(1 段) → 顶栏(2 段)**，每段 `--solo-step` + `--solo-ease`；**退出倒着来**（靠**基础**规则 `.topbar{0}` / `.icon-rail{1 段}`，没有 JS 状态机；⚠️ 左栏**故意没有**基础延时 —— 那会拖住正常模式的手动收起，`devlog/441`）。★**单推的入口不在工具栏**（用户 2026-10-08 口径，`devlog/450`）：**把某个 V 拖到左栏首位 + 在那一条上 3 秒内连点 10 次**才进单推（计数是纯状态机 `utils/soloGesture.ts`，只在 `index === 0` 的条目上生效；别的条目照旧"点一下就进详情"）；工具栏那枚按钮**只在单推模式下渲染、只负责退出**（正常模式隐藏），退出回到进入前那条路由；**单推模式下不渲染左栏拉手**（需求 1.1 —— 单推里整栏本来就被负外边距推走，`peek` 那个"临时展开"状态随之删除）。★**正常模式左栏的收起/展开与单推解耦**（用户 2026-10-07 口径，`devlog/444`）：左栏吃自己的 `--sidebar-toggle-ms`（`layout.css: :root`，跟 `--motion-scale`、曲线 `--ease-standard`），单推第①段另在 `[data-solo='1']` 那条里钉回 `--solo-step` ⇒ 三段仍同一节奏；⚠️ 代价要知道：**退出单推**那一下左栏跟 `--sidebar-toggle-ms` 走（那时 `data-solo` 已摘掉，纯 CSS 钉不住）。唤出靠 `data-peek='top'/'left'`（**坐标判定**在 `utils/soloPeek.ts`：顶部触发带 `PEEK_TRIGGER_PX`、左缘是工具栏**整宽**；⚠️ **不许**再有 `.solo-hover-*` 贴边窄带覆盖层，它挡点击且会被自己的位移反复触发，`devlog/433`；⚠️ 唤出要把 `transition-delay` 归零）；全收起后再等 `SOLO_IDLE_MS`（`utils/soloPeek.ts`；**CSS 里没有第二份**）⇒ **只在 cards 视图**（`.posts-panel[data-view="cards"]`）把页面元素淡到 `--solo-dim`、下滑 `--solo-hide-shift`、白纱罩一起撤（**背景层本身不动**），过渡 `--solo-hide-ms` + `--solo-ease`（纱罩用同一套 ⇒ "与界面元素入退场匹配"，`devlog/440`）；鼠标一动（超过 `SOLO_IDLE_EPS_PX` 那颗**抖动死区**才算动）就回来。⚠️ **本行提到的旋钮只写名字、不写值** —— 真源在 `layout.css: :root` 与 `utils/soloPeek.ts`（逐颗说明见 `devlog/443` 的调参地图），值会被调、写进文档就会飘。⚠️ 外壳两层（`.topbar` / `.icon-rail`）**必须** `z-index:10` 压过面板里的浮层（`.view-toolbar` 是 3），否则唤出后按钮被盖（`devlog/442`） |
-| 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
+| 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口：帖子浏览 · **数据分析工作台**（2026-10-18，**只在偏好 `fan_workbench=on` 时渲染**，`data-testid="workbench-entry"`，指向 `/workbench`） |
 | 底部组 | `.icon-rail-bottom`（`margin-top:auto`） | 贴栏底；**2026-09-15（R14a）起放齿轮**；**2026-10-07（需求 6，`devlog/429`）齿轮上方加「单推」切换钮**（`.icon-rail-btn` + `aria-pressed` + `data-testid="solo-toggle"`，`Focus` 图标）—— 用户指定位置「最左侧工具栏底部，设置图标上方」；⚠️ **没选中 V 时禁用**（单推总得有个对象），单推中再点一次退出并回到进入前的路由 |
 | 单元格 | `.icon-rail-btn` | **通栏 50×50** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
 | 选中单元格 | `.icon-rail-btn.active` | **实底 `--c-rail-active-bg:#647489` + 全亮** |
@@ -1060,7 +1060,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 | 位置 | 类名 | 说明 |
 |---|---|---|
 | 头部标记 | `.lc-pop-manual` | 与「已校正」（`.lc-pop-corr`）同规格同位置（10px + `--c-accent`）：`manual===true` 时显示「手动记录」——判据是**服务端算的** `manual` 字段（前端不自己拆 `source` 组合串） |
-| 头部按钮 | `.lc-dlg-edit` | 铅笔，26×26 r8，与关闭钮同配方、**紧接标题组之后**（不是右侧动作组 —— 2026-10-14 用户报的居中 bug 就是头部三个孩子撞上 `space-between`，中间那个被推到正中央；现在只有 `.lc-dlg-close` 靠 `margin-left:auto` 单独靠右）（`title`：手动场次「编辑这一场」/ 自动场次「补录播地址」）⇒ 打开 B4 弹窗 |
+| 头部按钮 | `.nav-menu`（`data-lc-dlg-menu="open"｜"closed"`）｜触发钮 `[data-nav-trigger]` | **2026-10-15（B4）起是下拉栏，不再是铅笔按钮**（口径与三项见 §B3c）：触发钮仍是 26×26 铅笔（`.nav-menu` 顶替原 `.lc-dlg-edit` 的位置，`flex:none`），点开的是**不带遮罩**的浮层。**紧接标题组之后**、只有 `.lc-dlg-close` 靠 `margin-left:auto` 单独靠右（2026-10-14 用户报的居中 bug 是头部三个孩子撞 `space-between`；孩子数量与顺序没变，那条口径继续有效） |
 | 封面录播钮 | `.lc-dlg-vodbtn`（`data-vod-action="add"｜"play"`） | **2026-10-13（用户 3.2）**：封面**左上角**的悬浮钮，30×30 圆形浮片。**静止 `opacity: 0`、`.lc-dlg-cover:hover` 或自身 `:focus-visible` 才显形**（只做 hover 等于把键盘用户关在门外）；无 `vod_url` ⇒ `＋` 开「添加录播」小窗（B3b），有 ⇒ `▶` 播放。两个回调都不传时**不渲染**（不摆点了没反应的图标） |
 | ~~右列「录播」行~~ | ~~`.lc-dlg-row` + `.lc-dlg-vod`~~ | **2026-10-13 退役**（用户 3.1：「录播文字行可以不需要」）—— 地址不再作为链接出现在右列，`.lc-dlg-vod` 这条 CSS 规则也一并删掉（posts.css 里留了一行墓碑注释）。原来挤在这一行里的三件事（填地址 / 找录播 / 记住录播号）全部收进 B3b 那个小窗 |
 
@@ -1087,9 +1087,38 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 （不拆的话多 P 录播只播第一段 —— 与 `devlog/329` 修过的是同一类问题）。
 面板右上角留了一条**「在浏览器打开」**的退路（真机上偶有播不动：风控/权益/内核）。
 
+### B3c. 导航下拉栏 `<NavMenu>` 与「录播填充」审查窗（2026-10-15 B4，`docs/plans/vod-autofill.md`）
+
+用户两条口径：详情页铅笔要「**下拉栏而不是独立窗口**……遮罩颜色也不对劲」；日历 `+`「**就是用来添加录播的**」。⇒ `components/live/NavMenu.tsx`（`.nav-menu` + `[data-nav-trigger]` + `.nav-menu-pop` + `[data-nav-item]`）是**面上的一层、不带遮罩**；项可带 `hint`/`danger`/`disabled`（**禁用也说为什么**），Esc/点外/选中自动关。**触发钮两种形态**（2026-10-15 用户：「标题右侧的编辑按钮不用浮片样式，就原本纯图标样式就行」）：默认 `FloatPill` 浮片（日历工具栏）· `bare` 纯图标钮 `.nav-menu-trigger`（26×26/r8/无底色，与 `.lc-dlg-close` 同配方，弹窗头部用）。
+日历 `+`（`data-lc-add-menu`）= 扫描录播填充 · 手动记录（原行为退居第二）· **录播号设置**（就地可改，2026-10-15 用户第 2 条；见 `VodAccountDialog.tsx`）· **清空已匹配的录播**（`danger`，最后一项；`ConfirmDialog` 二次确认，`data-lc-notice` 给回执）。审查窗 `components/live/VodFillDialog.tsx`（`.lvc-fill`，沿用 `.lc-ms` 外壳）打开即 `api.vodScan`（只读）、底部一次 `api.vodApply`（`[data-vod-fill-*]` 一族钩子）。
+⚠️ **`auto_ok=false` 的行默认不勾**，待补那一列（`-gaps`）就是"手动补"的出口。`FloatPill` 起用 `forwardRef`。
+⚠️ **写入回执在概要条上，不在滚动区底部**（2026-10-15 用户：「点击写入之后没有明显的反馈……再次扫描结果还是一样」）：`[data-vod-fill-applied]` 落在 `.lvc-stat-ok`（常驻可见）+ 写成功的行**当场从表里移走**（`[data-vod-fill-matched]` 计数跟着掉）+ 按钮变「已写入 N 条」且禁用；失败项留在表里、原因在 `[data-vod-fill-applied-detail]`。**别再把它放回底部** —— 178 行之后等于没有回执。
+⚠️ **扫描要给出"在动"的证据**（2026-10-15 用户：「一直卡在加载」）：`[data-vod-fill-busy]` 上是 `正在扫描…（已 Ns）` —— 扫描要打上游取整个系列（实测 2–3s），光转圈分不清"在动"与"卡死"。另外 `[data-vod-fill-account-error="<mid>"]` 逐个报"这个号没扫到"（优先级最高的号没有可扫来源时，用户此前只会看到"怎么才配上这么点"）。
+⚠️ 「清空已匹配」的确认钮有 `busy` 态（`正在清空…` + 两枚钮禁用 + Esc 关不掉）：清空本身是纯数据库（一瞬），但危险动作不许连点两下。
+⚠️ **弹窗层叠是命名的层**（`tokens.css` 的 `--z-dialog-6/-7` + `data-slot='dialog-overlay'/'dialog-content'` 两条兜底规则）：默认第 6 层（60/61），从二级窗里开出来的**必须**加 `lc-dlg-layer`（第 7 层 70/71；`.lc-ms`/`.lvc-fill`/`VodAccountDialog`/`VodDialog` 都加了）。**新弹窗别再自己写 z-index** —— 漏写就吃基座 `z-50`、掉到遮罩（60）下面 ⇒ "点哪都被当点外部"（`devlog/498`/`499`）。⚠️ 这一族漏一个类**不会有任何行为报错**，所以有源码级判据 `dialogLayer.test.ts` 盯着名单，真机层号由 `ui_probe --vod-fill` 守着。
+
+### B3d. 「录播号」小窗 = **条目化 + 拖动排序**（`components/live/VodAccountDialog.tsx`，2026-10-15 第二版，`devlog/506`）
+
+用户口径：「输入录播号后保存为固定条目，展示为 `| 昵称 mid 投稿数 |`」·「拖动条目的上下位置进行排序，越上面的优先级越高」；拍板：新号进**末尾** · 昵称查不到**允许保存** · 显示**最近投稿** · **上限 5 条**。
+
+| 部件 | 钩子 / 类名 | 说明 |
+|---|---|---|
+| 优先级说明 | `[data-vod-acct-prio]` `.lvc-acct-prio` | 「越靠上优先级越高」——**这句必须常驻**：顺序是这个窗唯一的语义 |
+| 条目列表 | `.lvc-acct-rows` + `[data-vod-acct-rows=N]` | 一行一个号，行高定死 38px（拖动靠 `rect` 中线判前后，行高一抖判定就偏） |
+| 一行 | `[data-vod-acct-row="<mid>"]` | 手柄 `⠿` · **素数字序号** `.lvc-acct-no`（11px 灰 + `tabular-nums`，`aria-hidden`；**第一行**加深加粗）· 头像 · `[data-vod-acct-name]`（昵称） · mid · `[data-vod-acct-stat]`（`1093 条投稿 · 最近 2026.10.11`） · `[data-vod-acct-del]` |
+| 主号标记 | `.lvc-acct-row:first-child` | **只加一条 3px 主色竖条（`inset box-shadow`）+ 极浅粉底** —— 2026-10-15 用户「这个序号好丑」后从 6 版方案里选的 **B+**（`_probe/mockups/vod-account-priority.html`）。⚠️ **墓碑**：原来这里是实心粉圆圈 + 白字，别再改回去（浅色行里它最跳，而信息本来就在左边数字上） |
+| 拖动排序 | `draggable` + `[data-vod-acct-grip]` | HTML5 拖动；手柄是**可聚焦按钮**，`↑/↓` 也能换位（键盘可达，也是 jsdom 里唯一测得动的那条路）。⚠️ 拖完**必须**写回那个逗号串（`vod_account_uid`，左 = 高优先），否则"拖了个寂寞" |
+| 新增 | `[data-vod-acct-input]` + `[data-vod-acct-query]` → `[data-vod-acct-preview]` → `[data-vod-acct-add="<mid>"]` | 输入吃 **mid 或主页链接**（`midFromInput` 抠数字）；查一次先给预览，确认才进列表（**进末尾**） |
+| 查不到 | `.lvc-acct-row.unknown` + `[data-vod-acct-add-error]` | 昵称没取到 ⇒ 标黄 + 「昵称未取到」+「投稿数未取到」，**仍然能加**（号本身有效） |
+| 上限 | `VOD_ACCOUNT_MAX = 5` | 满了 ⇒ 输入框与查询钮都禁用、说明改「（已满）」；**已有的一个都不许静默丢**（旧值超过 5 条时照旧能保存） |
+
+数据来自 `GET /vtuber/vod-accounts/resolve?mids=…`（昵称/头像匿名接口、投稿数登录态接口，两半各自独立失败）。⚠️ 头像走 `ProxyImage`（`hdslb.com` 在 `/img-proxy` 白名单里），拿不到图时画**首字圆片**，别留破图。
+⚠️ 同一个字段还有第二个写入口：「添加录播」小窗里的"记住这个号"（`[data-vod-account-save]`）—— 两处**必须同源**：都走 `parseMids` 归一 + 同一个 5 条上限（`VodDialog` 从本组件 import 这两个东西，别各写一套）。
+
 ### B4. 手动记录 / 编辑场次弹窗（`components/live/ManualSessionDialog.tsx`，2026-10-08 B2 `devlog/454`）
 
-两处入口共用**同一个实例**：日历工具栏的「+」（`新建`，默认今天 20:00–22:00）与详情弹窗的铅笔（`编辑`）。
+两处入口共用**同一个实例**：日历工具栏的「+」下拉栏第二项（`新建`，默认今天 20:00–22:00）
+与详情弹窗下拉栏的第一项（`编辑`，自动抓取的场次该项**禁用**）。
 DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段」「时间原样提交」「自动行只可改录播」等；
 时间字段的设值在用例里走**用户那条路**（点字段 → 翻月 → 点日 → 点时刻列），值格式也一并被验。
 

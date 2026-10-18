@@ -513,14 +513,72 @@ def _prepare_logged_out() -> Path:
     return data
 
 
+#: 探针的**标准参考号**（用户 2026-10-15 点名）。⚠️ 只是**优先**，不是硬编码：
+#: 它必须同时满足"主账号是 B 站"，否则退回"第一个主账号是 B 站的 V"。
+#: 这样数据变了（那个 V 被删/没账号了）也不会让探针静默空转。
+PROBE_VTUBER_NAME = "明前奶绿"
+
+
+def _primary_bilibili_vtuber(port: int) -> int | None:
+    """**探针的标准参考号**：库里**主账号是 B 站**的那个 V（用户 2026-10-15 口径）。
+
+    用户原话：「换成**明前奶绿**，并且记住，**只有主账号才能够作为默认参考**，
+    而不是库中有的 b 站账号就可以做探针参考号」。
+
+    ⇒ 判据不是"这个 V 有没有 B 站账号"，而是**它的主账号是不是 B 站**
+    （主账号 = `settings.PRIMARY_PLATFORM_ORDER` 里排名最靠前的那个，与
+    `scheduler._primary_accounts` 同一口径）。一个 V 若有微博 + B 站但微博排在前面，
+    那它的"主活动平台"就不是 B 站 —— 直播日历/场次这类探针段落会量不到东西。
+
+    选法：**优先 `PROBE_VTUBER_NAME`**（若它合格），否则挑第一个合格的。
+    顺带解决一个会**静默空转**的坑：`gate.py` 曾经写死 `--vtuber 15`，而库里的数据是活的、
+    那个 V 后来没有账号了 ⇒ 探针报「一个账号都没有，种不了」。现在挑法跟着数据走。
+    """
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/vtuber/list",
+                                     headers=DEV_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            vtubers = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+    # 主账号优先级：与后端同一个真源（`app/core/config.py` 的 PRIMARY_PLATFORM_ORDER）。
+    # ⚠️ 这里**故意**复制了一份顺序：探针不该 import 后端（它是外部脚本，跑在开发机上），
+    #    而顺序变了这条判据只会"挑错 V"、不会静默通过 —— `_seed_accounts` 那一关会报出来。
+    order = ("bilibili", "weibo", "xiaohongshu", "douyin")
+    ok_ids: list[tuple[int, str]] = []
+    for v in vtubers:
+        try:
+            req2 = urllib.request.Request(
+                f"http://127.0.0.1:{port}/vtuber/{v['id']}/accounts", headers=DEV_HEADERS)
+            with urllib.request.urlopen(req2, timeout=10) as r2:
+                accs = [a for a in json.loads(r2.read().decode("utf-8"))
+                        if a.get("platform_uid")]
+        except Exception:
+            continue
+        if not accs:
+            continue
+        accs.sort(key=lambda a: order.index(a["platform"])
+                  if a["platform"] in order else len(order))
+        if accs[0]["platform"] == "bilibili":
+            ok_ids.append((int(v["id"]), str(v.get("name") or "")))
+    if not ok_ids:
+        return None
+    for vid, name in ok_ids:                 # 优先点名的那个
+        if name == PROBE_VTUBER_NAME:
+            return vid
+    return ok_ids[0][0]
+
+
 def _first_vtuber(port: int) -> int | None:
-    """取库里第一个 V 的 id（没传 `--vtuber` 时的兜底）。
+    """没传 `--vtuber` 时挑参考号：**先挑"主账号是 B 站"的 V**，再退回第一个 V。
 
     ⚠️ **必须带开发态 token**（S1 起业务端点都要它）：原先这里是裸 `urlopen` ⇒ 恒定 401
     ⇒ 静默返回 None ⇒ 路由落到 `/`，探针只量到一段 `empty`、所有断言空转
-    （正是 DEV-LOOP §二·五「探针完整性」那条假通过路径）。`gate.py` 一直显式传
-    `--vtuber 15`，所以只有手动裸跑探针才会撞上。
+    （正是 DEV-LOOP §二·五「探针完整性」那条假通过路径）。
     """
+    picked = _primary_bilibili_vtuber(port)
+    if picked is not None:
+        return picked
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/vtuber/list",
                                      headers=DEV_HEADERS)
@@ -592,6 +650,8 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             # R45-E4：日历格子 hover 悬浮窗那一段（`?probe=cell-pop`）——
             # ⚠️ 白名单不登记=静默丢掉，页面明明写了脚本侧只拿到 None（本文件已踩过一次）
             "cellPop": data.get("cellPop"),
+            # 录播填充审查窗的层叠与可点性（`?probe=vod-fill`，2026-10-15 B4 补）
+            "vodFill": data.get("vodFill"),
             # 日期+时刻选择器的真浏览器读数（`?probe=archive` 里顺带采，2026-10-13）
             # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过三次，见上面那几条注释）
             "dtp": data.get("dtp"),
@@ -639,6 +699,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "closeAsk": None, "switchPerf": None, "profileSync": None,
             "pinned": None, "board": None, "motionCards": None, "deck": None,
             "messages": None, "viewBtnCount": None, "viewsExpected": [],
+            "vodFill": None,
             "degraded": [], "dom": dom_file}
 
 
@@ -3110,6 +3171,21 @@ def main() -> int:
              "**触控板惯性只切一张** / 键盘五键 / 圆点可点 / 非前卡 inert+aria-hidden",
     )
     ap.add_argument(
+        "--vod-fill",
+        action="store_true",
+        help="只跑一档宽度：**录播填充审查窗**（B4/`devlog/497`）的层叠与可点性 —— "
+             "日历 `+` 下拉 → 扫描录播并自动填充 → 面板中心点**命中的必须是面板自己**"
+             "（用户 2026-10-15 报的「点任意处都关窗、按钮选不中」就是命中被遮罩拿走）。"
+             "⚠️ 页面侧给上游打了桩（判据钉层叠，不钉网络）",
+    )
+    ap.add_argument(
+        "--shot-vod-fill",
+        action="store_true",
+        help="额外存图：`--vod-fill` 那一档把**审查窗开着**的界面截一张"
+             "（`_ui_probe_tmp/vod-fill-<宽>.png`）—— 「遮罩把面板盖住了」这类毛病"
+             "只有看图才算验过（与 `--shot-cell-pop` 同一条理由）",
+    )
+    ap.add_argument(
         "--reservations",
         action="store_true",
         help="只跑一档宽度：**种一条明天的预约**（写进数据目录副本）→ 档案视图断言"
@@ -3202,8 +3278,10 @@ def main() -> int:
         "--vtuber",
         type=int,
         default=0,
-        help="指定 VTuber id（默认取 /vtuber/list 的第一条）。"
-             "用于命中特定形态的数据，例如平台药丸多枚的 V（切集/排序只在 >1 枚时才有意义）。",
+        help="指定 VTuber id。**省略 ⇒ 自动挑**：优先「明前奶绿」，"
+             "否则取第一个**主账号是 B 站**的 V（用户 2026-10-15 口径：只有主账号才算，"
+             "不是库里随便有个 B 站账号就能当参考号）。"
+             "显式指定用于命中特定形态的数据（例如平台药丸多枚的 V）。",
     )
     ap.add_argument(
         "--scene",
@@ -5220,6 +5298,90 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.vod_fill:
+            # 录播填充审查窗（B4）的**层叠与可点性** —— 用户 2026-10-15 报的第 3 条：
+            # 「半透明黑色遮罩盖住了窗口，点击任意处都会直接关闭窗口，无法选中按钮」。
+            # 判据只有一条核心：面板**中心点**命中的必须是面板自己（不是遮罩）。
+            # 页面侧已给上游打桩，所以这里**不依赖真扫描结果**（尺子不该建在网络上）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=vod-fill"
+            print(f"[probe] vod-fill @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "vod-fill")
+            vf = ((res or {}).get("vodFill") or {})
+            if res and not vf:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  入口：+ 下拉={vf.get('addMenuFound')} 可点={vf.get('triggerClickable')} "
+                  f"菜单项={vf.get('fillItemFound')} 录播号项={vf.get('midItemFound')}"
+                  f"(可点={vf.get('midItemEnabled')})")
+            print(f"  面板：出现={vf.get('panelFound')} 行数={vf.get('rowCount')} "
+                  f"扫描错误={vf.get('scanError')!r}")
+            print(f"  层叠：{vf.get('zGap')}（面板严格高于遮罩={vf.get('panelAboveOverlay')}）")
+            print(f"  命中：面板中心={vf.get('panelCenterHit')} "
+                  f"（被遮罩拿走={vf.get('panelCenterHitIsOverlay')} "
+                  f"命中元素={vf.get('panelCenterHitTag')!r}）勾选框可达={vf.get('checkboxReachable')}")
+            print(f"  点「写入」之后：仍开着={vf.get('stillOpenAfterClick')} "
+                  f"（点前 {vf.get('rowsBeforeClick')} 行 / 点后 {vf.get('rowsAfterClick')} 行）")
+            if not vf:
+                failures.append(f"@{w} vod-fill: 没量到审查窗段（探针未跑完？）")
+            else:
+                if not vf.get("addMenuFound"):
+                    failures.append(f"@{w} vod-fill: 日历工具栏上找不到 `+` 下拉"
+                                    f"（`[data-lc-add-menu]`）—— 入口没了，判据会空转")
+                if not vf.get("fillItemFound"):
+                    failures.append(f"@{w} vod-fill: `+` 下拉里没有「扫描录播并自动填充」那项")
+                if not vf.get("midItemEnabled"):
+                    failures.append(f"@{w} vod-fill: `+` 下拉里的「录播号设置」**不可点** —— "
+                                    f"用户 2026-10-15 第 2 条要的就是「在这里就能设置」")
+                if not vf.get("panelFound"):
+                    failures.append(f"@{w} vod-fill: 点了菜单项但**审查窗没打开**"
+                                    f"（scanError={vf.get('scanError')!r}）")
+                elif not vf.get("panelAboveOverlay"):
+                    failures.append(
+                        f"@{w} vod-fill: 面板没有严格高于遮罩（{vf.get('zGap')}）—— "
+                        f"这就是用户报的「点任意处都关窗、按钮选不中」的根因")
+                elif not vf.get("panelCenterHit"):
+                    failures.append(
+                        f"@{w} vod-fill: 面板中心点命中的是 {vf.get('panelCenterHitTag')!r}，"
+                        f"**不是面板自己**（{vf.get('zGap')}）")
+                elif not vf.get("checkboxReachable"):
+                    failures.append(f"@{w} vod-fill: 行里的勾选框够不着（被盖住）")
+                if vf.get("panelFound") and not vf.get("stillOpenAfterClick"):
+                    failures.append(f"@{w} vod-fill: 点了面板里的按钮之后**窗口关了** —— "
+                                    f"点击被遮罩当成了「点外部」")
+                if vf.get("rowCount") == 0 and not vf.get("scanError"):
+                    failures.append(f"@{w} vod-fill: 桩数据下一条都没配上（判据会空转）")
+                # ★ 写入回执（2026-10-15 用户报「点了写入没有任何反馈」）：
+                #   回执要在概要条上、且写成功的行要**当场移出列表**。
+                receipt = str(vf.get("appliedReceipt") or "")
+                applied_n = int(vf.get("rowsBeforeClick") or 0) - int(
+                    vf.get("rowsAfterApply") or 0)
+                print(f"  写入回执={receipt!r} 按钮={vf.get('applyBtnText')!r} "
+                      f"（点前 {vf.get('rowsBeforeClick')} 行 → 点后 {vf.get('rowsAfterApply')} 行）")
+                if not receipt:
+                    failures.append(
+                        f"@{w} vod-fill: 点了「写入」之后概要条上没有回执"
+                        f"（`[data-vod-fill-applied]` 空）—— 用户看不到「到底写没写进去」")
+                elif "已写入" not in receipt:
+                    failures.append(f"@{w} vod-fill: 写入回执没有说清条数：{receipt!r}")
+                elif applied_n <= 0:
+                    failures.append(
+                        f"@{w} vod-fill: 回执说写成功了，可列表里的行**一条都没少**"
+                        f"（{vf.get('rowsBeforeClick')} → {vf.get('rowsAfterApply')}）—— "
+                        f"这正是用户报的「再次扫描结果还是一样」")
+                if not failures:
+                    print("  [ok] 录播填充窗：入口可点 / 面板严格高于遮罩 / 中心点命中自己 / "
+                          "勾选框可达 / 点按钮不关窗 / 写入有回执且成功的行当场移出列表")
+            # 视觉存档（`--shot-vod-fill`）：`?probe=vod-fill` 跑完时窗是**开着**的，
+            # 直接落盘就能拍到它 —— 用户报的正是"遮罩盖住/按钮点不着"，留一张能看的图。
+            if args.shot_vod_fill:
+                shot = WORK / f"vod-fill-{w}.png"
+                _run_shot(edge, url, w, args.height, shot)
+                print(f"  截图 → {shot}")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.reservations:
             # R13 端到端：种好的预约必须**渲染到日历格**并能在 hover 浮层里看到。
             # 断言的是"从 posts.body_json → 服务端解析 → API → 格子/浮层"整条链路，
@@ -6755,6 +6917,7 @@ def main() -> int:
         # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
         if (not failures and not args.shot and not args.shot_board
                 and not args.shot_toolbar and not args.shot_cell_pop
+                and not args.shot_vod_fill
                 and not args.shot_resv and not args.shot_dtp):
             shutil.rmtree(WORK, ignore_errors=True)
 

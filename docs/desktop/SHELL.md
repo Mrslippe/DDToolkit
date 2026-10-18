@@ -84,10 +84,15 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
 > 一行绝对路径、原子写（临时文件 + rename）。目标目录不存在 / 不是绝对路径 / 读失败 ⇒
 > **回退默认目录并把原因带给界面（关于页红字），绝不在坏路径上新建空库**。
 >
-> ⚠️ **指针文件不带构建标识 ⇒ dev 构建与安装版共用同一份迁移记录**（2026-09-16 实测踩到：
-> 用户装完构建产物后发现两边用同一个库 —— 在 dev 里迁到 `E:\test\DDToolkit-data`，安装版读到
-> 同一条记录就跟了过去）。对**普通用户无影响**（只装一份安装版）；另外**卸载时 NSIS 不会删这个指针**。
-> 收口方案（指针按构建分家 + 加"清除迁移记录"入口）记在 `docs/TODO.md` §1.4。
+> ✅ **指针已按构建分家**（2026-10-18，`devlog/522`）：发布构建读 `data-dir.txt`、
+> dev 构建（`tauri dev` / `cargo test`）读 **`data-dir-dev.txt`**（`datadir.rs` 的
+> `pointer_file()` 按 `cfg!(debug_assertions)` 选）。此前两者共用一个指针 ——
+> 2026-09-16 实测踩到、2026-10-08 又因此把 64 MB 好库改名成 `.failed` 并换上空库。
+> **默认目录早就有 `-dev` 后缀，这次补上的是指针那一半。**
+> 当前约定（用户 2026-10-18 定）：release → `E:\work\Project\database\release`、
+> dev → `E:\work\Project\database\dev`。
+> ⚠️ 仍未做：**「清除迁移记录（回到默认目录）」入口**（见 `docs/TODO.md` §5）；
+> 另外**卸载时 NSIS 不会删指针**（它不是安装清单里的文件）⇒ 卸载后重装会沿用旧记录。
 
 > ⚠️ 两条 PRAGMA（`auto_vacuum` / `VACUUM`）**不能在事务里执行** —— 维护代码走 DBAPI 的
 > autocommit 连接，不套 SQLAlchemy 的隐式事务（`tests/test_db_maintenance.py` 用真库钉住）。

@@ -7,6 +7,7 @@ import { useSoloIdle, useSoloPeek } from './utils/soloPeek'
 import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
+import WorkbenchPage from './pages/WorkbenchPage'
 import ErrorBoundary from './components/ErrorBoundary'
 import LegalNotice from './components/LegalNotice'
 import { api } from './api/api'
@@ -117,6 +118,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<EmptyState />} />
               <Route path="/vtubers/:id" element={<PostsPage />} />
+              <Route path="/workbench" element={<WorkbenchPage />} />
               <Route path="*" element={<EmptyState />} />
             </Routes>
           </main>

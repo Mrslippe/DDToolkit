@@ -4767,22 +4767,338 @@ img.hero-avatar {
   color: var(--c-accent);
 }
 
-/* 详情弹窗头部的「编辑/补录播地址」铅笔（B2）：与关闭按钮同尺寸同悬停配方，
-   放在它左边 —— 头部驻留区只有这两个按钮，位置固定不随内容滚动。 */
-.lc-dlg-edit {
+/* ⚠️ `.lc-dlg-edit`（详情弹窗头部那枚铅笔按钮）**2026-10-15 随下拉栏一起退役**
+   （用户：「我希望打开的是下拉栏而不是独立窗口」）—— 触发钮现在由 `<NavMenu>` 渲染，
+   样式与位置见下面的 `.nav-menu`（它的触发钮仍是 26×26 的 FloatPill 方钮）。
+   别再把这两条规则加回来。 */
+
+/* ── 导航下拉栏 `<NavMenu>`（B4，`docs/plans/vod-autofill.md`）────────────────   用户 2026-10-15 的两条口径：
+   ① 详情页铅笔「**我希望打开的是下拉栏而不是独立窗口**，因为详情页本身已经是独立窗口，
+      如果再打开一个小窗会显得层级关系混乱，背景遮罩颜色也不对劲」
+      ⇒ 这是**面上的一层**：不带遮罩，因此不会与详情弹窗那层遮罩叠出第二种颜色；
+   ② 日历工具栏那枚 `+`「就是用来添加录播的」⇒ 它变成一个三选一的下拉栏。
+   视觉沿用 `② 药丸族` + 16px 浮置深度（与 `.lc-month-pop` 同一套配方）。 */
+
+.nav-menu {
+  position: relative;
+  display: inline-flex;
+  /* ⚠️ `flex: none` 不能少：它顶替的是原来那枚 `.lc-dlg-edit`（`flex: none` 的方块钮），
+     而 `.lc-dlg-head` 是 flex 容器 —— 少了它，头部一挤（标题很长时）菜单容器会被压扁。 */
   flex: none;
+}
+
+/* 纯图标触发钮（`bare`，弹窗头部用）：与关闭钮 `.lc-dlg-close` 同一套配方 ——
+   26×26 / r8 / 无底色、hover 淡灰底。**没有斜切白卡、没有阴影**
+   （用户 2026-10-15：「不用浮片样式，就原本纯图标样式就行」）。 */
+.nav-menu-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
+  padding: 0;
+  border: none;
   border-radius: 8px;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.nav-menu-trigger:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--c-text-main);
+}
+
+.nav-menu-trigger[aria-expanded='true'] {
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+}
+
+.nav-menu-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 208px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 靠右的按钮（详情弹窗铅笔）：菜单右对齐，免得溢出窗口 */
+.nav-menu-pop.end {
+  left: auto;
+  right: 0;
+}
+
+.nav-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--c-text-main);
+}
+
+.nav-menu-item:hover:not(:disabled) {
+  background: var(--sel-bg);
+}
+
+.nav-menu-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.nav-menu-item.danger {
+  color: #b3352f;
+}
+
+.nav-menu-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 1px;
   color: var(--c-text-sub);
 }
 
-.lc-dlg-edit:hover {
-  background: rgba(15, 23, 42, 0.05);
+.nav-menu-item.danger .nav-menu-icon {
+  color: inherit;
+}
+
+.nav-menu-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nav-menu-label {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.nav-menu-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--c-text-sub);
+  white-space: normal;
+}
+
+/* ── 「录播填充」审查窗（B4）──────────────────────────────────────────
+   左列场次、右列命中的录播，底部一次写入。**沿用详情弹窗那层遮罩**（`.lc-dlg-backdrop`），
+   不叠第二层颜色 —— 与上面下拉栏同一条口径。 */
+
+.lvc-fill {
+  width: 760px;
+  max-width: calc(100vw - 48px);
+  max-height: min(640px, calc(100vh - 72px));
+  display: flex;
+  flex-direction: column;
+}
+
+.lvc-summary {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--c-border);
+  font-size: 12px;
   color: var(--c-text-main);
+}
+
+.lvc-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lvc-stat-dim {
+  color: var(--c-text-sub);
+}
+
+.lvc-stat-warn {
+  color: #b3352f;
+}
+
+/* 写入回执（2026-10-15）：**成功要显眼** —— 用户报过"点了写入看不出有没有写进去"，
+   所以它落在概要条上（常驻、不被滚动藏住），颜色用成功绿而不是普通正文色。 */
+.lvc-stat-ok {
+  color: #1f7a45;
+  font-weight: 600;
+}
+
+.lvc-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.lvc-empty {
+  padding: 22px 18px;
+  font-size: 13px;
+  color: var(--c-text-sub);
+}
+
+.lvc-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--c-primary-deep);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.lvc-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.lvc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--c-border);
+  cursor: pointer;
+}
+
+.lvc-row:hover {
+  background: var(--sel-bg);
+}
+
+.lvc-row[data-vod-fill-checked='0'] {
+  opacity: 0.62;
+}
+
+.lvc-check {
+  flex: none;
+}
+
+.lvc-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lvc-col-session {
+  flex: none;
+  width: 168px;
+}
+
+.lvc-col-vod {
+  flex: 1;
+}
+
+.lvc-time {
+  font-size: 12px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.lvc-session-title,
+.lvc-vod-title {
+  font-size: 13px;
+  color: var(--c-text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lvc-vod-meta {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lvc-badge {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 10.5px;
+}
+
+/* 低置信（同日兜底）：换中性色，与"读出来的时间"区分开 */
+.lvc-badge.low {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--c-text-sub);
+}
+
+.lvc-swap {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+  font-size: 11px;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.lvc-swap:hover {
+  color: var(--c-primary-deep);
+  border-color: var(--c-primary);
+}
+
+.lvc-gaps {
+  padding: 10px 18px 16px;
+  border-top: 1px solid var(--c-border);
+}
+
+.lvc-gaps-head {
+  font-size: 12px;
+  color: var(--c-text-sub);
+  margin-bottom: 6px;
+}
+
+.lvc-gap {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.lvc-gap .lvc-session-title {
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.lvc-gap-more {
+  color: var(--c-text-sub);
+  font-style: italic;
+}
+
+.lvc-applied {
+  margin: 10px 18px 16px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--sel-bg);
+  font-size: 12px;
+}
+
+.lvc-applied-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--c-text-main);
+}
+
+.lvc-applied-row {
+  margin-top: 4px;
+  color: #b3352f;
 }
 
 /* ⚠️ `.lc-dlg-vod`（右列那条「录播」链接的样式）**2026-10-13 随那一行一起退役**
@@ -4793,6 +5109,89 @@ img.hero-avatar {
    头部（胶囊+标题+日期副行+关闭）→ 两栏主体（左 200px 封面图+状态徽章 ｜
    右直播信息行式卡片）→ 满宽「弹幕信息」「内容分析」卡片；
    配色沿用项目浮片族（--c-bg-card / --shadow-dialog / #faf7f8 区卡片）。 */
+
+/* ── 弹窗层叠：**一族命名的层**（2026-10-15，`devlog/498`）─────────────────────
+   背景（用户报的第 3 条）：「半透明黑色遮罩盖住了窗口，点击任意处都会直接关闭窗口，
+   无法选中按钮」。真机探针量出来是**面板在遮罩之下**：
+       遮罩 z=60（`.lc-dlg-backdrop`） vs 面板 z=50（Radix 基座 `z-50`）
+   —— `.lc-dlg` 之所以没这个毛病，只因为它**显式写了 61**；`.lc-ms` / `.lvc-fill`
+   这两个后来者没写，于是"以为继承得到"，实际上被遮罩盖住 ⇒ 点哪都被当"点外部"。
+
+   ⇒ 现在面板不再自己猜数字，**统一由这两条 `data-slot` 规则给**：
+     遮罩 = `--z-dialog-6`（60）· 面板 = 遮罩 + 1（61）；
+     要在二级窗（场次详情）**之上**再开一层（手动记录 / 录播填充），面板加 `lc-dlg-layer`
+     ⇒ 第 7 层（70/71），于是"新遮罩盖住底下的二级窗"，两层不会看起来混在一起。
+   ⚠️ 这两条是**兜底**：具体弹窗若显式写了 z-index（如 `.lc-dlg` 的历史写法）以它为准，
+      但**新弹窗别再写数字**，加类就行。 */
+[data-slot='dialog-overlay'] {
+  z-index: var(--z-dialog-6, 60);
+}
+
+[data-slot='dialog-content'] {
+  z-index: calc(var(--z-dialog-6, 60) + 1);
+}
+
+[data-slot='dialog-overlay'].lc-dlg-layer {
+  z-index: var(--z-dialog-7, 70);
+}
+
+[data-slot='dialog-content'].lc-dlg-layer {
+  z-index: calc(var(--z-dialog-7, 70) + 1);
+}
+
+/* 确认窗（`AlertDialog`，2026-10-15）与上面同一套层：它的基座也是 `z-50`，
+   同样必须由这里给号（否则"从二级窗里点清空"时确认窗会掉到遮罩下面）。 */
+[data-slot='alert-dialog-overlay'] {
+  z-index: var(--z-dialog-6, 60);
+}
+
+[data-slot='alert-dialog-content'] {
+  z-index: calc(var(--z-dialog-6, 60) + 1);
+}
+
+[data-slot='alert-dialog-overlay'].lc-dlg-layer {
+  z-index: var(--z-dialog-7, 70);
+}
+
+[data-slot='alert-dialog-content'].lc-dlg-layer {
+  z-index: calc(var(--z-dialog-7, 70) + 1);
+}
+
+/* 确认窗本体：与 `.lc-ms` 同族（白卡 / 12px / `--shadow-dialog`）+ 一点内距 */
+.lc-confirm {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-dialog);
+}
+
+.lc-confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.lc-confirm-body {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--c-text-main);
+}
+
+.lc-confirm-lines p {
+  margin: 0 0 6px;
+}
+
+.lc-confirm-dim {
+  color: var(--c-text-sub);
+}
+
+.lc-confirm-warn {
+  color: #b3352f;
+}
 
 .lc-dlg-backdrop {
   position: fixed;
@@ -7777,3 +8176,212 @@ img.hero-avatar {
 .lc-ms-btn.danger { border-color: transparent; background: var(--sel-bg); color: #b3352f; }
 
 .lc-ms-btn.danger:hover:not(:disabled) { background: var(--sel-bg-hover); }
+
+/* ── 「录播号」小窗的条目列表（2026-10-15 第二版：条目化 + 拖动排序） ──────────
+   一行 = 一个录播号，`| 昵称 mid 投稿数 |`；**顺序就是优先级**，靠 HTML5 拖动改。
+   行高定死 34px：拖动时 `dropAt` 用 `getBoundingClientRect` 的中线判前后，
+   行高一变（比如加载态换文案）判定就会抖。 */
+.lvc-acct { width: 470px; }
+
+.lvc-acct-prio {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid #ffe0e7;
+  border-radius: 8px;
+  background: #fff6f8;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
+.lvc-acct-prio b { color: var(--c-primary-deep); }
+
+.lvc-acct-empty {
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--c-border);
+  border-radius: 9px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.lvc-acct-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 192px;
+  overflow-y: auto;
+}
+
+.lvc-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 9px;
+  background: #fff;
+}
+
+/* 主号（第一行）只加**一条左侧竖条 + 极浅粉底** —— 不跟序号抢注意力
+   （2026-10-15 用户：「这个序号好丑」；方案稿 6 版里选的 B+，见 `_probe/mockups/vod-account-priority.html`）。
+   ⚠️ 墓碑：这里原来是 `background: var(--c-primary)` 的**实心粉圆圈 + 白字** ——
+   在浅色行里它是最跳的元素，而它承载的信息（第几）本来就在左边数字上。别再改回去。 */
+.lvc-acct-row:first-child {
+  border-color: #ffd3de;
+  background: #fffafc;
+  box-shadow: inset 3px 0 0 var(--c-primary-deep);
+}
+
+.lvc-acct-row.dragging { opacity: .45; }
+
+.lvc-acct-row.unknown { border-color: #f3d9b4; background: #fffdf7; }
+
+.lvc-acct-grip {
+  flex: none;
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b9c3cf;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+  cursor: grab;
+}
+
+.lvc-acct-grip:active { cursor: grabbing; }
+.lvc-acct-grip:focus-visible { outline: 2px solid var(--c-primary); border-radius: 4px; }
+
+/* 序号 = 优先级。**素数字**：11px、`tabular-nums`（换位时不抖）、不占底色；
+   第一行加深加粗，与那条竖条一起读成"主号"。`aria-hidden`（顺序由 DOM 顺序表达）。 */
+.lvc-acct-no {
+  flex: none;
+  width: 12px;
+  text-align: right;
+  font-size: 11px;
+  color: #aab4c0;
+  font-variant-numeric: tabular-nums;
+}
+
+.lvc-acct-row:first-child .lvc-acct-no {
+  color: var(--c-primary-deep);
+  font-weight: 700;
+}
+
+.lvc-acct-ava {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #f1f4f8;
+}
+
+.lvc-acct-ava-fb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-primary-deep));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lvc-acct-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+
+.lvc-acct-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lvc-acct-row.unknown .lvc-acct-name { color: #b3352f; font-weight: 500; }
+
+.lvc-acct-mid {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lvc-acct-stat {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.lvc-acct-row.unknown .lvc-acct-stat { color: #b3352f; }
+
+.lvc-acct-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: #e8a33d;
+}
+
+.lvc-acct-del {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa7b6;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.lvc-acct-del:hover { background: #fdeef2; color: var(--c-primary-deep); }
+
+.lvc-acct-add { gap: 8px; }
+
+.lvc-acct-pv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px dashed #ffd3de;
+  border-radius: 9px;
+  background: #fff8fa;
+  font-size: 12px;
+}
+
+.lvc-acct-go {
+  flex: none;
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--c-accent);
+  color: #fff;
+  font-size: 12px;
+}
+
+.lvc-acct-warn { margin: 0; font-size: 11.5px; line-height: 16px; color: #b3352f; }
+
+/* 说明文字**满宽**（2026-10-15 用户：「下面红框中的内容为什么左侧空了一块」）。
+   `.lc-ms-hint` 那条 `padding-left: 54px` 是给 `ManualSessionDialog` 的四行表单用的
+   （44px 标签 + 10px 间距 ⇒ 文字与输入框左缘对齐）；本窗**没有标签**，
+   照搬那 54px 就成了一块莫名其妙的空档。 */
+.lvc-acct-hint { padding-left: 0; }

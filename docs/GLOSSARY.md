@@ -18,6 +18,9 @@ budget: 300
 
 ## 1. 领域名词
 
+> **数据分析工作台**（2026-10-18）：可选模块，开关 = 偏好 `fan_workbench`（默认关）。按时间区间采全量弹幕 → 参与强度 / 类型标注 / 效标加权；关掉时 `/fan` 全部 404。**不是「粉丝趋势」**（那是 ECharts 粉丝数曲线）。
+> 代码 `app/services/fan/` + `routers/fan.py`，规格 `plans/fan-model-spec.md`。**事实表** = 每个 (观众,场次) 对压成一条、逐人聚合（不存原文/逐条单价），落盘即冻结、只读。
+
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
 | **表情 token**（2026-10-13，`devlog/482`；**两级解析** `devlog/483`；**两类大小** `devlog/485`） | 正文里那种方括号词：`[UPOWER_<uid>_贴贴]`、`[明前奶绿收藏集表情包_石化]` —— B站动态的表情引用 | `app/services/bili_emote.py`（解析）· `frontend/src/utils/emojiText.ts`（切分）· `frontend/src/components/common/PostText.tsx`（渲染）· `scripts/check_emoji_coverage.py`（真机覆盖探针） | 真机 5,060 帖里 **6,176 次 / 498 个不同 token**。**两级解析**：①**第一源 = 我们自己载荷**（`posts.raw_json` 的 `rich_text_nodes[*].emoji`，离线）⇒ **99.0% 种类 / 96.8% 次数**，缺的 5 个（`1P`/`▓▓`/`0P`/`9P`/`2P`）**根本不是表情**；②第二源 = 上游整表 ⇒ **28%、账号相关**，只当兜底。**大小 = B站 自己的 `emoji.size`**（`1` = 小表情/与文字同大小 · `2` = 大表情/贴纸，占命中次数的 **83%** · `null` ⇒ 按小画）：⚠️ 判别**不能**按"官方还是自定义"（`/bfs/emote/` 里也有 812 个 `size=2` 的装扮/收藏集）。⚠️ 解析不出来的两类兜底**不一样**：带下划线的给**名字 chip**，不带下划线的（`[1P]`）**原样保留文字**；`[话题]` 是微博话题标记，**不是表情** |
@@ -42,7 +45,7 @@ budget: 300
 | **直播卡片 / live_rcmd** | 动态流里的开播卡片，**不入 posts**，转存 `live_sessions` | `fetcher._is_live_rcmd/_map_live_rcmd`；`scheduler._route_live_item` | 见「直播场次」 |
 | **直播场次 / live session** | 一次开播（标题/起止/分区/收益/弹幕数/录播地址/**类型**），多源合一 | `models/vtuber.py::LiveSession`；`LiveSessionRepo.merged()` | danmakus + feed + **manual（用户手填）** + self 快照 |
 | **场次类型落库 / category**（T1，2026-10-12，devlog/467；f017 收口 devlog/471/473） | 场次类型**写时定稿**：入库那一刻只看**这一场自己**的标题/分区推一次，写进 `live_sessions.category` / `category_from` 就冻住。用户口径：新增场次**不改动**已入库的历史场次 | 定稿入口 `app/services/live_settle.py`（`settle` / `settle_fields`）；身份补齐 `app/services/live_identity.py`（启动期 + 写点之后）；列在迁移 `f016`，场次身份 `session_key` 在 `f017`；读口径在 `routers/vtuber.py::_resolve_categories` + `_stored_by_live_id`（**只读**） | 生效顺序 **校正 > 落库值 > 同一口径现算 > 中性**；**兜底也落库**（`category='live'` + `category_from='fallback'`；`category_from IS NULL` 才是"还没定稿"）—— f016 时是"兜底写 NULL"，f017 改掉是因为那让按类型聚合**看不见约 55% 的场次**；**只有代表行**带 `session_key`/`category`（同组其余行 NULL）⇒ 按类型查询/统计可直查 `(account_id, category)` 索引且与日历**逐类等数**；`series`/`learned` 两档随本批**下线**（要看全账号历史，与"只看这一场"冲突）⇒ 校正不再外溢 |
-| **手动记录 / manual 场次**（B2，devlog/454） | 用户在日历上补的一场：时间 + 可选标题 + 可选**录播地址**；`source='manual'`，id 是自造的 `manual-<uuid4>` | 端点 `POST/PATCH/DELETE /account/{id}/live-sessions[/{live_id}]`；纯口径 `app/domain/live_manual.py`；界面 `components/live/ManualSessionDialog.tsx` | 只有它**可改时间/可删**（自动抓来的只能补录播地址）；录播地址在合并里只增不减（不变量 39） |
+| **手动记录 / manual 场次**（B2，devlog/454） | 用户在日历上补的一场：时间 + 可选标题 + 可选**录播地址**；`source='manual'`，id 是自造的 `manual-<uuid4>` | 端点 `POST/PATCH/DELETE /account/{id}/live-sessions[/{live_id}]`；纯口径 `app/domain/live_manual.py`；界面 `components/live/ManualSessionDialog.tsx` | 只有它**可改时间/可删**（自动抓来的只能补录播地址）；录播地址在合并里只增不减**且组里任何一行都算数**（不变量 39，`devlog/502`）；「清空已匹配」是**硬清**（连手填的一起清，`devlog/502`） |
 | **直播状态三态 / live_status** | **0 未开播 / 1 直播中 / 2 轮播**（房间里循环放录像）—— 判"是不是在播"**只认 1**：轮播既不该触发开播通知，也代表上一场已经结束 | `app/core/live_status.py`（单一真源）；消费方 `scheduler.live_sweep_core`（开播边沿）、`AccountStatSnapshotRepo.live_sessions`（自观测场次）、前端 `utils/accountHistory.ts::liveStatusLabel` | 2026-10-02（devlog/276）：原先多处当布尔用 ⇒ 恬豆发芽了两次 `0→2` 各推一条「开播了」，顶栏胶囊挂着一条**从未发生**的开播；自观测场次也只认 0 收场 ⇒ `1→2→1` 被并成一场（明前奶绿那场时长跨天） |
 | **统计快照 / snapshot** | 账号粉丝数/直播状态时间序列（涨粉趋势、场次推导的数据源） | `models/vtuber.py::AccountStatSnapshot`；`scheduler._record_stat_snapshot` | T0 直播跳变也写一条 |
 | **礼物日聚合 / gift day** | 第三方日粒度礼物/大航海/SC 金额 | `models/vtuber.py::LiveGiftDay`；`externals/zeroroku.py` | 金额存字符串保精度 |
@@ -222,7 +225,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f017`（30 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f018`（31 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |

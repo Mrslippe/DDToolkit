@@ -24,8 +24,23 @@ use std::path::{Path, PathBuf};
 
 /// 指针文件所在目录（与数据目录平级：删数据目录不会连它一起删）
 const POINTER_DIR: &str = "DDToolkit";
-/// 指针文件名（内容是一行绝对路径）
+/// 指针文件名（内容是一行绝对路径）—— **发布构建**用这个
 const POINTER_FILE: &str = "data-dir.txt";
+/// dev 构建（`tauri dev` / `cargo test`）用**另一个指针文件**。
+///
+/// 为什么：`tauri dev` 的 bundle identifier 与直装版相同 ⇒ 两者读同一个
+/// `%APPDATA%\DDToolkit\data-dir.txt` ⇒ **共享同一个数据目录**。2026-10-08
+/// 那次迁移事故就是把开发中的读写作用到了真数据上。分开之后各走各的。
+const POINTER_FILE_DEV: &str = "data-dir-dev.txt";
+
+/// 当前构建该用的指针文件名。`debug_assertions` = dev（`tauri dev` / `cargo test`）。
+fn pointer_file() -> &'static str {
+    if cfg!(debug_assertions) {
+        POINTER_FILE_DEV
+    } else {
+        POINTER_FILE
+    }
+}
 
 /// 解析结果：最终用哪个目录 + 界面需要知道的两种"异常"
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,11 +53,11 @@ pub struct Resolved {
     pub pointer_unusable: Option<String>,
 }
 
-/// 指针文件的完整路径：`%APPDATA%\DDToolkit\data-dir.txt`。
+/// 指针文件的完整路径：`%APPDATA%\DDToolkit\<pointer_file()>`。
 /// 非 Windows（不发布）没有 `APPDATA` ⇒ `None`，整套机制自动停用。
 pub fn pointer_path() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(base).join(POINTER_DIR).join(POINTER_FILE))
+    Some(PathBuf::from(base).join(POINTER_DIR).join(pointer_file()))
 }
 
 // ── 纯函数层（路径由调用方给，便于用临时目录测真行为）────────────────
@@ -220,7 +235,7 @@ mod tests {
         if std::env::var_os("APPDATA").is_some() {
             let p = pointer_path().expect("Windows 上应当有指针路径");
             assert!(p.is_absolute());
-            assert!(p.ends_with(Path::new(POINTER_DIR).join(POINTER_FILE)));
+            assert!(p.ends_with(Path::new(POINTER_DIR).join(pointer_file())));
         }
     }
 

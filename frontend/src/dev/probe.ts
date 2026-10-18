@@ -2800,6 +2800,141 @@ export async function runUiProbe(): Promise<void> {
     document.title = 'UI_PROBE_DONE'
     return
   }
+  if (mode === 'vod-fill') {
+    // 录播填充审查窗（B4，`docs/plans/vod-autofill.md`）的**层叠与可点性**判据。
+    //
+    // 起因（用户 2026-10-15 报的第 3 条）：「点击扫描录播并自动填充后，半透明黑色遮罩盖住了
+    // 窗口，此时**点击任意处都会直接关闭窗口，无法选中按钮**」。
+    //
+    // ⚠️ 用 `--dump-dom` 没法手点，所以这里**先给上游打桩**（拦 `api.bilibili.com` 的取数，
+    //    回一份固定 archives）：判据钉的是**层叠与命中**，不是数据 —— 让真扫描决定了
+    //    "量得到量不到"，那是把尺子建在网络上。
+    const result: Record<string, unknown> = {}
+    const origFetch = window.fetch.bind(window)
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input
+        : input instanceof URL ? input.href : (input as Request).url
+      if (url.includes('api.bilibili.com/x/series/archives')) {
+        const archives = [0, 1, 2, 3, 4].map((i) => ({
+          bvid: `BV1stub${String(i).padStart(5, '0')}`,
+          title: `【直播回放】桩数据第 ${i} 场 2026年09月0${i + 1}日19点场`,
+          pubdate: 1788000000 + i * 86400,
+          duration: 18000, pic: '', stat: { view: 0 },
+        }))
+        return Promise.resolve(new Response(
+          JSON.stringify({ code: 0, message: 'OK', data: { archives, total: archives.length } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      }
+      return origFetch(input as RequestInfo, init)
+    }) as typeof window.fetch
+
+    const waitFor = async (fn: () => unknown, ms = 12000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(120)
+      }
+      return null
+    }
+
+    clickView('数据视图')
+    await sleep(2200)
+    const trigger = document.querySelector<HTMLElement>(
+      '[data-lc-add-menu] [data-nav-trigger]')
+    result.addMenuFound = !!trigger
+    result.triggerClickable = !!trigger && !(trigger as HTMLButtonElement).disabled
+    trigger?.click()
+    await sleep(300)
+    const fillItem = document.querySelector<HTMLElement>('[data-nav-item="fill"]')
+    result.fillItemFound = !!fillItem
+    // 第 3 项「录播号设置」要**可点**（用户 2026-10-15 第 2 条：改前它是禁用的，
+    // 等于把"加录播号"这个前置动作指到别的入口去）
+    const midItem = document.querySelector<HTMLElement>('[data-nav-item="mid"]')
+    result.midItemFound = !!midItem
+    result.midItemEnabled = !!midItem && !(midItem as HTMLButtonElement).disabled
+    fillItem?.click()
+    result.dialogAppeared = !!(await waitFor(
+      () => document.querySelector('[data-vod-fill-check]')
+        || document.querySelector('[data-vod-fill-error]'),
+      15000))
+    result.rowCount = document.querySelectorAll('[data-vod-fill-check]').length
+    result.scanError = document.querySelector('[data-vod-fill-error]')?.textContent ?? null
+
+    // 量之前先杀入场动画（虚拟时间下动画不推进 ⇒ opacity 恒报 0，那是尺子问题）
+    const kill = document.createElement('style')
+    kill.textContent = '.lvc-fill{animation:none !important}.lc-dlg-backdrop{animation:none !important}'
+    document.head.appendChild(kill)
+    await sleep(120)
+
+    const panel = document.querySelector<HTMLElement>('.lvc-fill')
+    const overlay = document.querySelector<HTMLElement>(
+      '[data-slot="dialog-overlay"]:not([data-slot="dialog-content"])')
+    result.panelFound = !!panel
+    const cs = panel ? getComputedStyle(panel) : null
+    const os = overlay ? getComputedStyle(overlay) : null
+    result.overlayStyle = os ? { zIndex: os.zIndex, pointerEvents: os.pointerEvents,
+                                 bg: os.backgroundColor } : null
+    result.panelStyle = cs ? { zIndex: cs.zIndex, pointerEvents: cs.pointerEvents } : null
+    // ★ 层叠的**结构级**判据（不依赖 elementFromPoint 的运气）：面板必须严格高于遮罩
+    const oz = Number.parseInt((os?.zIndex ?? '0'), 10)
+    const pz = Number.parseInt((cs?.zIndex ?? '0'), 10)
+    result.panelAboveOverlay = Number.isFinite(oz) && Number.isFinite(pz) && pz > oz
+    result.zGap = `遮罩 ${os?.zIndex} → 面板 ${cs?.zIndex}`
+    if (panel && overlay) {
+      const pr = panel.getBoundingClientRect()
+      const or = overlay.getBoundingClientRect()
+      result.panelRect = { x: Math.round(pr.left), y: Math.round(pr.top),
+                           w: Math.round(pr.width), h: Math.round(pr.height) }
+      result.overlayRect = { x: Math.round(or.left), y: Math.round(or.top),
+                             w: Math.round(or.width), h: Math.round(or.height) }
+      result.panelInViewport = pr.left >= 0 && pr.top >= 0
+        && pr.right <= window.innerWidth && pr.bottom <= window.innerHeight
+      // ★ 核心判据：面板**中心点**命中的应该是面板自己（或其后代）——
+      //   若命中的是遮罩，就是用户报的"点任意处都关窗、按钮选不中"
+      const cx = Math.min(Math.max(pr.left + pr.width / 2, 1), window.innerWidth - 1)
+      const cy = Math.min(Math.max(pr.top + pr.height / 2, 1), window.innerHeight - 1)
+      const hit = document.elementFromPoint(cx, cy)
+      result.panelCenterHit = !!hit && (panel === hit || panel.contains(hit))
+      result.panelCenterHitIsOverlay = !!hit && hit === overlay
+      result.panelCenterHitTag = hit
+        ? `${hit.tagName.toLowerCase()}.${(hit.className || '').toString().split(' ')[0]}`
+        : null
+      // 再验一个**够得到的按钮**：面板内第一个 checkbox 的中心点
+      const box = document.querySelector<HTMLElement>('[data-vod-fill-check]')
+      if (box) {
+        const br = box.getBoundingClientRect()
+        const bh = document.elementFromPoint(
+          Math.min(Math.max(br.left + br.width / 2, 1), window.innerWidth - 1),
+          Math.min(Math.max(br.top + br.height / 2, 1), window.innerHeight - 1))
+        result.checkboxReachable = !!bh && (box === bh || box.contains(bh))
+      }
+    }
+    // 真点一次「写入」：若被遮罩挡住，会变成关窗（用户报的正是这个）
+    const before = document.querySelectorAll('[data-vod-fill-check]').length
+    document.querySelector<HTMLElement>('[data-vod-fill-apply]')?.click()
+    await sleep(400)
+    result.stillOpenAfterClick = !!document.querySelector('.lvc-fill')
+    result.rowsAfterClick = document.querySelectorAll('[data-vod-fill-check]').length
+    result.rowsBeforeClick = before
+    // ★ 写入回执（2026-10-15 用户：「点击写入之后没有明显的反馈……再次扫描结果还是一样」）：
+    //   回执必须落在**概要条**上（常驻可见，不是滚动区最底下），且写成功的行**当场移出列表**。
+    //   ⚠️ 只判"回执存在"不够 —— 上一版它挂在滚动区底部，DOM 里也有、就是看不见，
+    //      所以这里连"行数变少"一起量（那是"确实写进去了"最直接的证据）。
+    await sleep(1600)
+    result.rowsAfterApply = document.querySelectorAll('[data-vod-fill-check]').length
+    result.appliedReceipt = document.querySelector<HTMLElement>(
+      '[data-vod-fill-applied]')?.textContent?.trim() ?? null
+    result.applyBtnText = document.querySelector<HTMLElement>(
+      '[data-vod-fill-apply]')?.textContent?.trim() ?? null
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'vod-fill', views: [], vodFill: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
   if (mode === 'scene') {
     // 场景切换机（`PostsPage` 的预取门控 + 原子提交）的**诊断 + 护栏**（devlog/080）。
     //

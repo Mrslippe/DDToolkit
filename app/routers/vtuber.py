@@ -59,8 +59,16 @@ from app.services import assets
 from app.services import notices as notices_service
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut,
-                                VodCandidateOut, VodCandidatesOut)
+                                VodCandidateOut, VodCandidatesOut,
+                                VodAccountProfileOut, VodAccountProfilesOut,
+                                VodAccountScanOut, VodAltOut, VodApplyIn, VodApplyItemIn,
+                                VodApplyOut, VodApplyResultOut, VodClearIn, VodClearOut,
+                                VodMatchOut, VodScanIn,
+                                VodScanOut, VodSourceListOut, VodSourceOut,
+                                VodUnmatchedOut)
 from app.services import vod_finder
+from app.services import vod_scan as vod_scan_svc
+from app.services import vod_source as vod_source_svc
 from app.services.post_text import extract_post_text
 from app.services import messages as message_hub
 
@@ -1326,6 +1334,9 @@ def update_live_session(account_id: int, live_id: str, data: LiveSessionUpdateIn
             touched = True
         if "vod_url" in fields:
             apply["vod_url"] = vod         # "" → None（清空用户填的链接）
+            # ⚠️ 记账（f018）：**用户写的**标 `manual`，清空时因此被保护；
+            #    清空动作本身把这一格也清回 NULL（否则会留下"这是手填的"的谎）。
+            apply["vod_source"] = "manual" if vod else None
     new_start = apply.get("start_at", row.start_at)
     new_end = apply.get("end_at", row.end_at) if "end_at" in fields else row.end_at
     _check_span(new_start, new_end)
@@ -1406,6 +1417,283 @@ async def live_session_vod_candidates(account_id: int, live_id: str,
         hint=None if items else ("这些账号在开播前后都没有投稿 —— "
                                  "可能回放在别的录播号上，把它的 mid 填进来再试"),
     )
+
+
+# ── 录播批量填充（`docs/plans/vod-autofill.md` B3）──────────────────────
+#
+# 与上面 C1「找录播」的分工：C1 是**单场**、扫投稿、给候选让人点一下；
+# 这里是一组**整号批量**的端点：列来源 → 扫描（只读）→ 显式写入。
+#
+# ⚠️ 三条端点的读写纪律（与 `vod-candidates` 同源）：
+#   `vod-sources` / `vod-scan` **绝不写库**；`vod-apply` 只写**显式列出来的** items。
+
+
+@router.get("/account/{account_id}/vod-sources", response_model=VodSourceListOut)
+async def list_vod_sources(account_id: int, mid: str = Query(""),
+                           db: Session = Depends(get_db)):
+    """列一个 B 站号下**可扫的来源**（系列 / 合集 / 投稿），并给出自动挑中的那一个。
+
+    `mid` 省略 ⇒ 用该 V 记住的录播号里的**第一个**（`vtubers.vod_account_uid` 左 = 高优先）。
+
+    为什么要有这个端点：扫哪个来源**不能猜死**。实测平台侧的自动挑（名字优先、条数次之）
+    在这一个号上是对的（挑中「直播回放」942 条），但**名字里没有关键词的系列照样可能全是回放**
+    ⇒ 界面上必须能把自动挑的结果改掉。
+    """
+    account, _ov = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    target = (mid or "").strip()
+    if not target:
+        mids = vod_scan_svc.ordered_mids(
+            account.platform_uid if account.platform == "bilibili" else None,
+            getattr(account.vtuber, "vod_account_uid", None))
+        target = mids[0] if mids else ""
+    if not target:
+        return VodSourceListOut(mid="", sources=[],
+                                error="这个 V 还没有可扫的号 —— 先把录播号填上")
+    try:
+        sources = await vod_source_svc.list_sources(target)
+    except Exception as e:                                   # noqa: BLE001
+        # 取不到要**如实说**：空列表与"这个号没有合集"是两件事
+        return VodSourceListOut(mid=target, sources=[],
+                                error=f"没取到来源清单：{type(e).__name__}: {e}")
+    picked = vod_source_svc.pick_source(
+        [s for s in sources if s["kind"] != "uploads" and (s.get("total") or 0) > 0])
+    # ⚠️ **没有合集/系列时挑中的是投稿流**（2026-10-15 修）：与 `vod_scan.resolve_source`
+    #    同一条口径 —— 一个号可能"全是投稿"（实测 `94009831`：清单 HTTP 200 但两个列表都空，
+    #    1093 条投稿全是录播）。两边口径不一致的话，界面显示的"自动挑中的来源"会和
+    #    扫描真正用的那个不是同一个。
+    if picked is None:
+        picked = next((s for s in sources if s["kind"] == "uploads"), None)
+    # 投稿流的 `id` 是空串 ⇒ `picked` 标记不能只靠 id 比，按 `kind` 兜一下
+    picked_id = (picked or {}).get("id") if picked else ""
+    return VodSourceListOut(
+        mid=target,
+        sources=[VodSourceOut(**{**s, "picked": bool(
+            picked and s["kind"] == picked["kind"] and str(s["id"]) == str(picked["id"]))})
+            for s in sources],
+        picked_id=picked_id or None,
+    )
+
+
+@router.get("/vtuber/vod-accounts/resolve", response_model=VodAccountProfilesOut)
+async def resolve_vod_accounts(mids: str = Query("")):
+    """**录播号资料卡**：`mid` → `| 昵称 · mid · 投稿数 |`（2026-10-15 小窗改版）。
+
+    「录播号」小窗里每一行要显示昵称/头像/投稿数，而这两样来自**两个不同的上游接口**
+    （昵称走匿名的 `x/web-interface/card`、投稿数走登录态的 `arc/search`）——
+    都收在服务层 `vod_source.resolve_account_profiles`，这里只做参数与并发编排。
+
+    - `mids` 逗号分隔（中文逗号也认），**顺序即返回顺序**；
+    - **两半各自独立失败**：`name_error` / `uploads_error` 分开给。号有效但昵称没取到时
+      界面标黄、**仍然允许保存**（用户 2026-10-15 拍板："允许"）；
+    - 超过 `MAX_PROFILE_MIDS` 的**截断**（每个 mid 要打两次上游，不限量就是放大器）。
+
+    ⚠️ 路径得挑**没有 `{vtuber_id}` 路由会撞上**的形状（2026-10-15 实测踩了两次）：
+    `/vtuber/vod-accounts`（一段式）被**先注册**的 `/vtuber/{vtuber_id}` 抢走；
+    改成两段的 `/vtuber/vod/accounts` 又被 `/vtuber/{vtuber_id}/accounts` 抢走 ——
+    两次的症状都是 **422 `int_parsing`（`vtuber_id` 解析不了 `vod`）**，
+    而路由根本没进来，看起来像"参数写错了"。现在这一段以 `resolve` 结尾，
+    没有任何 `{vtuber_id}` 路由的第二段叫这个名字（`devlog/083` 同款坑）。
+    """
+    want = [m.strip() for m in (mids or "").replace("，", ",").split(",") if m.strip()]
+    items = await vod_source_svc.resolve_account_profiles(want)
+    return VodAccountProfilesOut(items=[VodAccountProfileOut(**it) for it in items])
+
+
+@router.post("/account/{account_id}/vod-scan", response_model=VodScanOut)
+async def scan_vod_sessions(account_id: int, data: VodScanIn,
+                            db: Session = Depends(get_db)):
+    """**只读**扫描：按优先级扫多个录播号，与场次配对 → 给审查表。
+
+    ## 口径（用户 2026-10-14 拍板）
+
+    - **先审查再写**：本端点**一个字节都不写**，结果里每条带 `confidence` / `auto_ok` /
+      `minutes_delta`，由用户勾完再走 `vod-apply`；
+    - **多号优先级兜底**：`mids` 的顺序就是优先级（左 = 高优先）。
+      一个场次被高优先号配上后**不再参与**后面的号 ⇒ 低优先只补缺、不可能覆盖高优先；
+    - **已有 `vod_url` 的场次全程不参与**：那是用户手填的（不变量 39），
+      也**不算漏配**（不会出现在 `unmatched` 里）。
+
+    ## 为什么不做成后台任务
+
+    实测整个系列 942 条 = 5 个请求（`ps=200`）、单页 0.05–0.13s，端到端不到 2s。
+    做成任务反而要轮询、要进度条、要处理"任务丢了"。真机实测见
+    `_probe/vod_e2e_probe.py` 的头注释（870/942 配上，时间差中位 50 分）。
+    """
+    account, _ov = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    own = account.platform_uid if account.platform == "bilibili" else None
+    mids = ([str(m).strip() for m in (data.mids or []) if str(m).strip()]
+            or vod_scan_svc.ordered_mids(own, getattr(account.vtuber, "vod_account_uid", None)))
+    if not mids:
+        raise HTTPException(422, "没有可扫的号：先把这个 V 的录播号填上（或显式传 mids）")
+    rows = LiveSessionRepo(db).merged(account_id, with_ids=True)
+    src_map = {k: v for k, v in (data.sources or {}).items() if isinstance(v, dict)}
+
+    async def _resolve(mid: str):
+        return await vod_scan_svc.resolve_source(mid, want=src_map.get(mid))
+
+    result = await vod_scan_svc.scan(
+        rows, mids, resolve=_resolve,
+        tolerance_minutes=max(1, min(24 * 60, int(data.tolerance_minutes or 90))))
+
+    return VodScanOut(
+        account_id=account_id, mids=mids,
+        matches=[_vod_match_out(m) for m in result.matches],
+        unmatched=[VodUnmatchedOut(live_id=str(r["live_id"]), start_at=r["start_at"],
+                                   live_title=r.get("live_title"),
+                                   source=str(r.get("source") or ""))
+                   for r in result.unmatched],
+        accounts=[VodAccountScanOut(
+            mid=a.mid, ok=a.ok,
+            source_kind=str((a.source or {}).get("kind") or ""),
+            source_name=str((a.source or {}).get("name") or ""),
+            item_count=a.item_count, matched=a.matched, error=a.error)
+            for a in result.accounts],
+        items_total=result.items_total,
+        tolerance_minutes=int(data.tolerance_minutes or 90),
+    )
+
+
+def _vod_match_out(m) -> VodMatchOut:
+    """内部 `Match` → 出参（**逐条**带上"为什么是它"的三个字段）。"""
+    c = m.candidate
+    return VodMatchOut(
+        live_id=m.live_id, start_at=m.start_at, live_title=m.live_title,
+        bvid=c.bvid, title=c.title, permalink=c.permalink, cover_url=c.cover_url,
+        published_at=c.published_at,
+        duration_minutes=int(c.duration_seconds // 60) if c.duration_seconds else None,
+        mid=c.mid, source_name=c.source_name,
+        confidence=m.confidence, minutes_delta=m.minutes_delta, auto_ok=m.auto_ok,
+        title_hour=(None if (c.hint is None or c.hint.date_only) else c.hint.at.hour),
+        date_only=bool(c.hint and c.hint.date_only),
+        alternates=[VodAltOut(
+            bvid=a.bvid, title=a.title, permalink=a.permalink, mid=a.mid,
+            duration_minutes=int(a.duration_seconds // 60) if a.duration_seconds else None,
+            confidence=m.confidence) for a in m.alternates],
+    )
+
+
+@router.post("/account/{account_id}/vod-apply", response_model=VodApplyOut)
+def apply_vod_matches(account_id: int, data: VodApplyIn, db: Session = Depends(get_db)):
+    """把审查表里**勾中的那些**写进 `vod_url`（这是整条链路上唯一会写的端点）。
+
+    三条纪律：
+
+    1. **只写传进来的 items**（没有"顺便全填"这种模式）—— 用户勾了什么就写什么；
+    2. **逐条独立**：某一条的地址不合格（422）不让别的失败，结果里逐条给原因
+       （静默吞掉一半写入是最难查的形态）；
+    3. **地址走与手动填同一个 `normalize_vod`** —— 两条路的规范形态必须一致
+       （`VOD_CANONICAL`，`devlog/464`），否则库里会出现两种形态的同一个地址。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    if not data.items:
+        raise HTTPException(422, "没有要写入的条目")
+    repo = LiveSessionRepo(db)
+    out = VodApplyOut()
+    dirty = False
+    for it in data.items:
+        live_id = str(it.live_id or "").strip()
+        row = repo.get_row(account_id, live_id) if live_id else None
+        if row is None:
+            out.failed += 1
+            out.results.append(VodApplyResultOut(
+                live_id=live_id, ok=False,
+                error="这一场不在表内（自动推导的场次没有 id，补不了录播）"))
+            continue
+        try:
+            vod = normalize_vod(it.vod_url)
+        except VodUrlError as e:
+            out.failed += 1
+            out.results.append(VodApplyResultOut(live_id=live_id, ok=False, error=str(e)))
+            continue
+        if not vod:
+            out.failed += 1
+            out.results.append(VodApplyResultOut(
+                live_id=live_id, ok=False, error="录播地址是空的"))
+            continue
+        # 与 PATCH 同一条写路径：`touched=False` ⇒ 不重算类型（只补录播地址，没有新输入）
+        # `vod_source='match'`（f018）：记账"这是自动匹配写的" ⇒ "清空已匹配"能**不看网络**
+        # 就把它们清掉，同时绝不碰手填的（不变量 39）。
+        repo.update_row(row, {"vod_url": vod, "vod_source": "match"}, settled=None)
+        dirty = True
+        out.applied += 1
+        out.results.append(VodApplyResultOut(live_id=live_id, ok=True, vod_url=vod))
+    if dirty:
+        # 行变了 ⇒ 场次身份要重算（与手动增删改同一条口径，`devlog/475`）
+        mark_identity_dirty(db, account_id)
+        materialize_group_identity(
+            db, account_id, LiveSessionRepo(db).merged(account_id, with_ids=True))
+    return out
+
+
+@router.post("/account/{account_id}/vod-clear", response_model=VodClearOut)
+def clear_vod_matches(account_id: int, data: VodClearIn, db: Session = Depends(get_db)):
+    """**硬清这个账号下所有已匹配的录播地址**（用户 2026-10-15，第二次改口径）。
+
+    ## 口径：全清，不分类
+
+    用户原话：「清空已匹配的录播功能应该**硬性清除所有已匹配项**」。
+    上一版只清 `vod_source='match'`（自动匹配写的），把 `'manual'`（手填）与 `NULL`
+    （历史写入）留成"清不掉" —— 实测反馈是**看着像功能坏了**：库里 693 条有地址的
+    一条都没清掉，回执只能说"这些清不掉"。现在**只要 `vod_url` 非空就清**。
+
+    ⚠️ 代价如实说：**手填的那些地址会一起没**，而它们是不可再生的（不变量 39 说的正是
+    "合并里不许抹掉手填的地址"，不是"用户不能自己清"）。所以：
+
+    - 回执给出**分类计数**（`auto` / `manual` / `untracked`），确认窗把三类都摆出来
+      ⇒ 用户在按下去之前就知道会清掉几条手填的；
+    - 清空**只清地址、不删场次**，且 `vod_source` 一起归 `NULL`
+      ⇒ 想再拿回来只需重跑一次「扫描录播并自动填充」。
+
+    ## 为什么**不扫描**（这是第一版最大的毛病，用户实测报回来）
+
+    第一版先按 `vod-scan` 的口径真扫一遍（19 次上游请求、十几秒）再逐条清。后果两条：
+
+    1. **看起来像"数据库卡住了"**：请求挂在事件循环里十几秒，而路由里每清一条都
+       `commit` 一次 —— 880 次提交把写锁攥住，别的读请求排队（用户报的"阻塞读写"）；
+    2. **判据脆**：只能靠"库里这地址等不等于本次扫描结果"，上游抖一下结果就不同。
+
+    ⇒ 现在**纯数据库操作**：一条 `WHERE vod_url IS NOT NULL` 取行、一次 `commit`，
+    **一个上游请求都不发**（判据：把三条取数路径全换成会抛错的桩，清空照样成功）。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    repo = LiveSessionRepo(db)
+    rows = (db.query(LiveSession)
+            .filter(LiveSession.account_id == account_id,
+                    LiveSession.vod_url.isnot(None))
+            .all())
+    out = VodClearOut(dry_run=bool(data.dry_run))
+    # 分类计数只为**如实报出范围**（确认窗要在动手前把"其中手填 N 条"说清楚）——
+    # 它**不参与过滤**：三类一样清。
+    for row in rows:
+        if row.vod_source == "match":
+            out.auto += 1
+        elif row.vod_source == "manual":
+            out.manual += 1
+        else:
+            out.untracked += 1
+    # ⚠️ dry-run 也要报"**会清几条**" —— 第一版只在真清分支里赋 `cleared`，
+    #    于是界面拿到的 dry-run 回执是 cleared=0，看起来像"没有可清的"
+    #    （2026-10-15 实测：`matched:1 / cleared:0` 自相矛盾，用例当场抓到）。
+    out.cleared = len(rows)
+    if data.dry_run:
+        return out
+    for row in rows:
+        row.vod_url = None
+        row.vod_source = None
+        out.results.append(VodApplyResultOut(live_id=row.live_id or "", ok=True))
+    db.commit()
+    if rows:
+        # 行变了 ⇒ 场次身份要重算（与手动增删改同一条口径，`devlog/475`）
+        mark_identity_dirty(db, account_id)
+        materialize_group_identity(
+            db, account_id, LiveSessionRepo(db).merged(account_id, with_ids=True))
+    return out
 
 
 @router.get("/account/{account_id}/live-sessions/{live_id}/upstream",

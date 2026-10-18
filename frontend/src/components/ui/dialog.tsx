@@ -37,6 +37,11 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
+        /* ⚠️ `z-50` 是**兜底默认**，本仓的弹窗族一律用 `data-[slot]` 那条更高优先级的规则
+           覆盖它（见 `posts.css` 的「弹窗层叠」那一段）：遮罩 `--z-dialog-6`、
+           面板 `--z-dialog-6 + 1`，嵌套层由 `.lc-dlg-layer` 抬到第 7 层。
+           2026-10-15 之前 `.lvc-fill` / `.lc-ms` **没写 z-index** ⇒ 吃这里的 `z-50`，
+           而遮罩是 60 ⇒ 面板在遮罩之下（点哪都关窗）。**别把那条规则删掉。** */
         "fixed inset-0 z-50 bg-[rgba(15,23,42,0.32)] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className
       )}

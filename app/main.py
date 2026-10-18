@@ -18,6 +18,7 @@ from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth, video_proxy, emoji
 from app.routers import settings as settings_router
 from app.routers import messages as messages_router
+from app.routers import fan as fan_router
 # 小红书探活循环（`devlog/453`）：模块很轻（只 import 登录态），不拖冷启动
 from app.services import xhs_probe
 
@@ -82,7 +83,7 @@ async def _warm_tokenizer() -> None:
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
-MIGRATION_HEAD = "f017"
+MIGRATION_HEAD = "f018"
 
 
 def _alembic_config():
@@ -550,6 +551,7 @@ app.include_router(settings_router.router)
 # 推送通道（M0，devlog/241）：SSE over fetch，token 走 header。
 # ⚠️ debug 路由走**带守卫的助手**（仅 dev 注册）—— 生产构建里那条路径不存在。
 app.include_router(messages_router.router)
+app.include_router(fan_router.router)
 messages_router.include_debug_routes(app)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问

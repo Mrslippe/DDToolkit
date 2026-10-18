@@ -490,11 +490,15 @@ describe('⑦ 头部排布：铅笔紧接标题（2026-10-14 用户报的居中 
     expect(ruleOf('.lc-dlg-close'), '关闭钮没靠右 ⇒ 头部会散开').toMatch(/margin-left:\s*auto/)
   })
 
-  it('DOM 顺序：标题 → 铅笔 → ×（铅笔属于标题那一组，不是右侧动作组）', () => {
+  it('DOM 顺序：标题 → 这一场的操作（下拉栏）→ ×（操作钮属于标题那一组，不是右侧动作组）', () => {
     render(detailOf(), { onEditSession: () => {} })
     const head = panel()!.querySelector('.lc-dlg-head')!
+    // ⚠️ 2026-10-15（B4）：原来这里是 `.lc-dlg-edit` 那枚**铅笔按钮**；
+    //    用户要求「打开的是下拉栏而不是独立窗口」⇒ 它换成了 `.nav-menu` 容器
+    //    （触发钮 + 弹出面板都住在里面）。三个孩子的数量与顺序没变 —— 那条 bug 的
+    //    前提（三个孩子 + space-between）依然成立，所以这条断言继续守着它。
     expect([...head.children].map((el) => (el as HTMLElement).className)).toEqual([
-      'lc-dlg-title', 'lc-dlg-edit', 'lc-dlg-close',
+      'lc-dlg-title', 'nav-menu', 'lc-dlg-close',
     ])
   })
 })

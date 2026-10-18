@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useLocation, matchPath } from 'react-router-dom'
-import { FileText, Focus, Settings } from 'lucide-react'
+import { BarChart3, FileText, Focus, Settings } from 'lucide-react'
 import {
   Tooltip,
   TooltipContent,
@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/tooltip'
 import AppSettingsDialog from './AppSettingsDialog'
 import { exitSolo, useSolo } from '../utils/soloMode'
+import { usePrefs } from '../hooks/usePrefs'
 import './../styles/layout.css'
 
 /**
@@ -26,6 +27,12 @@ export default function IconRail() {
   const location = useLocation()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const solo = useSolo()
+  /* 数据分析工作台入口（2026-10-18，用户）：**只在模块启用时出现**。
+     `usePrefs` 每次调用各拉一次偏好；这里那一次很便宜（`GET /settings/prefs`），
+     换来的是"开关一改、入口立刻出现/消失"，不用重启。 */
+  const prefs = usePrefs()
+  const workbenchOn = prefs.values.fan_workbench === 'on'
+  const workbenchActive = matchPath('/workbench', location.pathname) !== null
 
   // 帖子入口高亮：当前应用唯一界面即「侧栏+内容主栏」，路由恒匹配；
   // 未来新增页面时此判断自动收窄
@@ -59,6 +66,23 @@ export default function IconRail() {
           </TooltipTrigger>
           <TooltipContent side="right">帖子浏览</TooltipContent>
         </Tooltip>
+
+        {workbenchOn && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className={`icon-rail-btn${workbenchActive ? ' active' : ''}`}
+                aria-label="数据分析工作台"
+                data-testid="workbench-entry"
+                onClick={() => navigate('/workbench')}
+              >
+                <BarChart3 className="h-[18px] w-[18px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">数据分析工作台</TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
       {/* 底端：设置（R14a）。放在 rail 底部而不是顶部，是为了让"打开设置"与

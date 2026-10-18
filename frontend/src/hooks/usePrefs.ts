@@ -26,7 +26,7 @@ export function usePrefs() {
    *  ⚠️ 每次加一项都要**两处**都补（这里与下面 `load()` 里那份）：漏一处会读到 `undefined`，
    *  而症状是"开关显示成关着、其实后端是开"（后端那份是 `_load_prefs` 给的真值）。 */
   const [values, setValues] = useState<Record<string, string>>({
-    theme: 'light', close_action: 'ask', widget_enabled: 'off',
+    theme: 'light', close_action: 'ask', widget_enabled: 'off', fan_workbench: 'off',
     widget_click_through: 'off', widget_hide_fullscreen: 'on',
     vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
   })
@@ -53,7 +53,7 @@ export function usePrefs() {
       setValues({
         theme: 'light', close_action: 'ask',
         widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
-        vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
+        vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT), fan_workbench: 'off',
         group_badge: GROUP_BADGE_DEFAULT,
         ...r.values,
       })

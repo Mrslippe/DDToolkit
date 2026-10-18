@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -622,6 +622,56 @@ export const api = {
       { method: 'DELETE' },
     ),
 
+  /* ── 录播批量填充（B3，`docs/plans/vod-autofill.md`）─────────────────
+   *
+   * 三段式：**列来源 → 扫描（只读）→ 显式写入**。
+   * ⚠️ `vodScan` 一个字节都不写；只有 `vodApply` 会落库，且**只写传进去的那些**。
+   */
+
+  /** 列一个 B 站号的可扫来源（系列/合集/投稿）+ 自动挑中的那一个 */
+  vodSources: (accountId: number, mid?: string) =>
+    request<VodSourceList>(
+      `/account/${accountId}/vod-sources` + (mid ? `?mid=${encodeURIComponent(mid)}` : '')),
+
+  /**
+   * **录播号资料卡**（小窗那一行 `| 昵称 mid 投稿数 |`）：
+   * 昵称/头像走匿名接口、投稿数走登录态接口，两半各自独立失败（见 `VodAccountProfile`）。
+   * 一次可以传多个 mid（**返回顺序与请求一致**）；服务端有并发上限。
+   */
+  vodAccounts: (mids: string[]) =>
+    request<VodAccountProfilesOut>(
+      `/vtuber/vod-accounts/resolve?mids=${encodeURIComponent(mids.join(','))}`),
+
+  /** **只读**扫描：按优先级扫多个录播号 → 审查表用的「场次 ↔ 录播」配对 */
+  vodScan: (accountId: number, data: VodScanIn) =>
+    request<VodScanResult>(`/account/${accountId}/vod-scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  /** 把审查表里**勾中的那些**写进 `vod_url`（整条链路上唯一会写的调用） */
+  vodApply: (accountId: number, items: { live_id: string; vod_url: string }[]) =>
+    request<VodApplyOut>(`/account/${accountId}/vod-apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
+
+  /**
+   * **硬清这个账号下所有已匹配的录播地址**（用户 2026-10-15：「硬性清除所有已匹配项」）。
+   *
+   * ⚠️ 只要 `vod_url` 非空就清，**不分类**：手填的也会一起没（不可再生 ⇒ 确认窗里必须
+   * 先把 `manual` 的条数摆出来）。只清地址、不删场次，想拿回来重扫一次即可。
+   * `dry_run=true` 只数不写（界面上先给用户看"会清掉几条"）。
+   */
+  vodClear: (accountId: number, data: { dry_run?: boolean } = {}) =>
+    request<VodClearOut>(`/account/${accountId}/vod-clear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
   /** 第三方 VTuber 索引精确查询（企划/公会/房间号） */
   externalsVtuberByUid: (uid: string) =>
     request<ThirdpartyVtuber[]>(`/externals/vtubers/by-uid?uid=${encodeURIComponent(uid)}`),
@@ -992,6 +1042,40 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ line }),
     }),
+
+  // ── 数据分析工作台（2026-10-18，用户）──────────────────────────────────
+  /** 已注册的主播 + 数据是否就位 + **模块是否启用**（`enabled`） */
+  fanVtubers: () => request<FanVtuberList>('/fan/vtubers'),
+  /** 区间内有多少场可采（采集前的预估） */
+  fanSessions: (name: string, since: string, until: string) =>
+    request<FanSessionPreview>(
+      `/fan/${encodeURIComponent(name)}/sessions?since=${since}&until=${until}`),
+  /** 启动采集（同一主播同时只允许一个任务；已在跑 → 409） */
+  fanCollect: (name: string, since: string, until: string) =>
+    request<{ ok: boolean; vtuber: string; since: string; until: string; state: string }>(
+      `/fan/${encodeURIComponent(name)}/collect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ since, until }),
+      }),
+  /** 采集进度（不传 name 则返回全部任务） */
+  fanCollectStatus: (name?: string) =>
+    request<{ items: FanCollectProgress[]; count: number }>(
+      `/fan/collect/status${name ? `?vtuber=${encodeURIComponent(name)}` : ''}`),
+  /** 取消采集（已写盘的场次保留） */
+  fanCollectCancel: (name: string) =>
+    request<{ ok: boolean }>(
+      `/fan/collect/cancel?vtuber=${encodeURIComponent(name)}`, { method: 'POST' }),
+  /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
+  fanRanked: (name: string, by: 'strength' | 'retention' | 'income',
+              opts?: { since?: string; until?: string; window?: number; limit?: number }) => {
+    const q = new URLSearchParams({ by })
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    if (opts?.window) q.set('window', String(opts.window))
+    if (opts?.limit) q.set('limit', String(opts.limit))
+    return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)
+  },
 
   /** 保存偏好（枚举白名单在后端；不在集合内 → 400） */
   savePrefs: (values: Record<string, string>) =>

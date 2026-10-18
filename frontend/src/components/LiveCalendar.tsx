@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+         CalendarPlus, Eraser, Link2, Plus, Sparkles } from 'lucide-react'
 import type { LiveSession, UpcomingReservation } from '../api/types'
 import { api } from '../api/api'
 import OverlayScroll from './OverlayScroll'
@@ -24,6 +25,12 @@ import LiveSessionDialog from './live/LiveSessionDialog'
 import ManualSessionDialog from './live/ManualSessionDialog'
 import ReservationDialog from './live/ReservationDialog'
 import VodDialog from './live/VodDialog'
+// 录播批量填充（B4，`docs/plans/vod-autofill.md`）：工具栏 `+` 是它的入口
+import VodFillDialog from './live/VodFillDialog'
+// 录播号设置（B4）：`+` 下拉的第三项，就地改（用户 2026-10-15 第 2 条）
+import VodAccountDialog from './live/VodAccountDialog'
+import ConfirmDialog from './live/ConfirmDialog'
+import NavMenu from './live/NavMenu'
 import VodPlayerDialog from './live/VodPlayerDialog'
 /* ⚠️ 纯函数 `vodTarget` 与本组件的 state `vodTarget`（目标场次）**同名** ——
    这里别名导入，免得读代码时把"解析地址"和"选中的那一场"看成一件事 */
@@ -136,6 +143,16 @@ const LiveCalendar = memo(function LiveCalendar(
   /** 「添加录播」小窗（3.2）：详情弹窗封面上的 ＋ 打开它 */
   const [vodOpen, setVodOpen] = useState(false)
   const [vodTarget, setVodTarget] = useState<LiveSession | null>(null)
+  /** 「录播填充」审查窗（B4）：工具栏 `+` 的第一项。打开即扫（`vod-scan` 只读） */
+  const [fillOpen, setFillOpen] = useState(false)
+  /** 「录播号」设置小窗（B4，用户 2026-10-15 第 2 条）：`+` 下拉的第三项就地改 */
+  const [acctOpen, setAcctOpen] = useState(false)
+  /** 「清空已匹配」的二次确认（用户要求放进 `+` 下拉栏）：先 dry-run 数一遍再确认。
+   *  `manual > 0` 时确认窗要多说一句 —— 用户口径是**全清**，手填的也会没。 */
+  const [clearAsk, setClearAsk] = useState<{ toClear: number; auto: number; manual: number;
+                                             untracked: number } | null>(null)
+  /** 正在清空（危险动作不能连点两下） */
+  const [clearing, setClearing] = useState(false)
   /** 录播播放器（3.2）：封面上的 ▶ 打开它 */
   const [playerOpen, setPlayerOpen] = useState(false)
   const [playerTarget, setPlayerTarget] = useState<LiveSession | null>(null)
@@ -308,6 +325,85 @@ const LiveCalendar = memo(function LiveCalendar(
     setManualOpen(false)
     setDetail(null)
     reload()
+  }
+
+  /**
+   * 详情弹窗下拉栏里的「删除这一场」（B4）。
+   *
+   * 与 `manualOpen` 那条路不同：这里**没有**手动记录表单开着，删的是详情里正看着的那一场。
+   * 服务端只允许删手动场次（自动场次 400，下次同步会放回来）⇒ 失败就**如实报**，
+   * 顺手刷新详情（失败也可能已经改了什么）。
+   */
+  const deleteSession = async (s: LiveSession) => {
+    if (!accountId || !s.live_id) return
+    try {
+      await api.deleteLiveSession(accountId, s.live_id)
+      setDetail(null)
+      reload()
+    } catch (e) {
+      setError((e as Error).message || '删除失败')
+      await reloadDetail(s.live_id)
+    }
+  }
+
+  /** 一行「刚才发生了什么」的瞬时提示（复用 `.card-src-note` 那一格，不引新控件）。 */
+  const [notice, setNotice] = useState<string | null>(null)
+  const notify = (text: string) => setNotice(text)
+
+  /** 录播填充写完之后：关窗 + 重拉日历（格子上立刻出现 ▶）+ 详情开着的话刷新它 */
+  const onVodFilled = () => {
+    reload()
+    const lid = detail?.sessions[detail.idx]?.live_id
+    if (lid) void reloadDetail(lid)
+    // 这一批写入可能顺带改了录播号（在填充窗里改的）⇒ 让父组件重取 V 列表，
+    // 否则 `vodAccountUid` 的回显要等到下一次场景刷新才更新。
+    if (onVodAccountSaved) void onVodAccountSaved(vodAccountUid ?? '')
+  }
+
+  /**
+   * 「清空已匹配」（用户 2026-10-15：**放进 `+` 下拉栏**）。
+   *
+   * 点一下 ⇒ 先 `dry_run` 数一遍（**纯数据库、不打上游**，所以是"点了立刻有回执"）⇒
+   * 把"会清几条 / 其中手填的几条"摆出来 ⇒ 确认才真清。
+   *
+   * ⚠️ 2026-10-15 第二次改口径：**全清**（用户：「硬性清除所有已匹配项」）。
+   * 上一版只清自动匹配写的，库里 693 条有地址的一条都没清掉，看着像功能坏了。
+   * 现在手填的也会一起清 —— 所以确认窗**必须**把手填的条数摆出来。
+   *
+   * ⚠️ 第一版把这个动作放在填充窗里、且**每次先真扫一遍**（19 次上游请求、逐条 commit）
+   * ⇒ 用户实测报成"阻塞数据库读写 + 清完地址还在"。现在服务端一条 SQL 取行、
+   * 一次提交，两个症状一起没了。
+   */
+  const armVodClear = async () => {
+    if (accountId == null) return
+    try {
+      const dry = await api.vodClear(accountId, { dry_run: true })
+      setClearAsk({ toClear: dry.cleared, auto: dry.auto, manual: dry.manual,
+                    untracked: dry.untracked })
+    } catch (e) {
+      setError((e as Error).message || '清空失败')
+    }
+  }
+
+  const doVodClear = async () => {
+    if (accountId == null) return
+    setClearing(true)                     // 清空是纯数据库（一瞬），但按钮仍要给出"在动"的态
+    try {
+      const out = await api.vodClear(accountId)
+      setClearAsk(null)
+      reload()
+      const lid = detail?.sessions[detail.idx]?.live_id
+      if (lid) void reloadDetail(lid)
+      const parts = [out.cleared > 0 ? `已清空 ${out.cleared} 条录播地址`
+                                     : '没有可清的录播地址']
+      if (out.cleared > 0) parts.push('重跑一次「扫描录播并自动填充」可以再扫回来')
+      notify(parts.join(' · '))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message || '清空失败')
+    } finally {
+      setClearing(false)
+    }
   }
 
   /** 预约保存成功（2026-10-13）：关弹窗 + **立刻重取预约** —— 格子上马上要出现那一条，
@@ -637,6 +733,11 @@ const LiveCalendar = memo(function LiveCalendar(
         {error && sessions.length > 0 && (
           <span className="card-refresh-failed" title={error}>刷新失败，显示上次数据</span>
         )}
+        {/* 「清空已匹配」的结果回执（2026-10-15）：**清了几条、哪些被保护**要留一句，
+            否则用户点了确认之后没有任何反馈（那正是"看起来没生效"的成因之一）。 */}
+        {notice && (
+          <span className="card-src-note" data-lc-notice="1" title={notice}>{notice}</span>
+        )}
       </div>
 
       {/* 导航行：左=月份浮片组（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
@@ -651,12 +752,60 @@ const LiveCalendar = memo(function LiveCalendar(
           <FloatPill shape="icon" title="下个月" onClick={() => moveMonth(1)}>
             <ChevronsRight className="lc-nav-icon" />
           </FloatPill>
-          {/* 手动记录入口（B2，devlog/454）。用户 2026-09-08 说过入口「不明确」——
-              那时确实**没有**手动入口（场次全靠自动回填/同步）；这一条补上那个缺口：
-              收录不到的场次（平台没留记录、当时没开工具）在这里手填。 */}
-          <FloatPill shape="icon" title="手动记录一场直播" onClick={() => openManual(null)}>
-            <Plus className="lc-nav-icon" />
-          </FloatPill>
+          {/* 「补录播 / 记一场」入口（B4，用户 2026-10-15）。
+              ⚠️ 这一枚的**主语义改成了「添加录播」** —— 用户原话：「图二红框圈出来这个按钮
+              就是用来添加录播的」。原来它只开「手动记录一场」，那条路仍在，只是退到第二项。
+              第三项是"录播号填在哪"的指路（那个字段在档案设置里，不在日历上）。 */}
+          <NavMenu
+            label="添加录播"
+            title="添加录播"
+            icon={<Plus className="lc-nav-icon" />}
+            probe="lc-add-menu"
+            items={[
+              {
+                key: 'fill',
+                label: '扫描录播并自动填充',
+                icon: <Sparkles className="lc-nav-icon" />,
+                hint: vodAccountUid
+                  ? `扫录播号 ${vodAccountUid}（确认后一次写入）`
+                  : '还没填录播号 —— 先扫 V 自己的号',
+                disabled: accountId == null,
+                disabledReason: '先选一个账号',
+                onSelect: () => setFillOpen(true),
+              },
+              {
+                key: 'manual',
+                label: '手动记录一场直播',
+                icon: <CalendarPlus className="lc-nav-icon" />,
+                hint: '平台没留记录、当时没开工具时用这条',
+                onSelect: () => openManual(null),
+              },
+              {
+                key: 'mid',
+                label: '录播号设置',
+                icon: <Link2 className="lc-nav-icon" />,
+                hint: vodAccountUid
+                  ? `当前：${vodAccountUid}`
+                  : '还没填 —— 点这里填（填了才扫得到回放）',
+                // ⚠️ 2026-10-15（用户报的第 2 条）：这一项**改成就地可编辑**。
+                //    改前它是 disabled + "在档案设置里改"，等于把前置动作指到别的入口去。
+                disabled: vtuberId == null,
+                disabledReason: '这个视图里没有 V 的 id（改不了）',
+                onSelect: () => setAcctOpen(true),
+              },
+              {
+                key: 'clear',
+                label: '清空已匹配的录播',
+                icon: <Eraser className="lc-nav-icon" />,
+                hint: '只清自动匹配写入的；你手填的一条都不动',
+                // 危险动作放最后（用户 2026-10-15：「把清空匹配的功能放在点开加号的下拉栏里面」）
+                danger: true,
+                disabled: accountId == null,
+                disabledReason: '先选一个账号',
+                onSelect: () => void armVodClear(),
+              },
+            ]}
+          />
 
           {/* 月份选择浮窗：年切换 + 12 月宫格 */}
           {monthPopOpen && (
@@ -771,7 +920,73 @@ const LiveCalendar = memo(function LiveCalendar(
            顺序叠：后渲染的那个才在上面（两个面板同 z，`devlog/217` 那条口径）。 */
         onAddVod={(s) => openVodDialog(s)}
         onPlayVod={(s) => void playVod(s)}
+        /* 下拉栏（B4）：编辑 / 换录播 / 删除三合一。删除只对手动场次可用（自动场次会回来）。 */
+        onDeleteSession={(s) => void deleteSession(s)}
       />
+      {/* 录播批量填充（B4）：工具栏 `+` 的第一项打开它。**只读扫描 → 审查 → 一次写入** */}
+      <VodFillDialog
+        open={fillOpen}
+        accountId={accountId}
+        vodAccountUid={vodAccountUid}
+        onClose={() => setFillOpen(false)}
+        onApplied={onVodFilled}
+        onEditVodAccount={() => setAcctOpen(true)}
+      />
+      {/* 录播号设置（B4，用户 2026-10-15 第 2 条）：工具栏 `+` 下拉的第三项就地改 ——
+          "加录播号"是「扫描录播」的前置动作，不该把人指到别的入口去。 */}
+      <VodAccountDialog
+        open={acctOpen}
+        vtuberId={vtuberId ?? null}
+        value={vodAccountUid}
+        onClose={() => setAcctOpen(false)}
+        onSaved={async (mids) => { await onVodAccountSaved?.(mids) }}
+      />
+      {/* 「清空已匹配」的二次确认（用户要求放进 `+` 下拉栏）。**先说清范围再动手**：
+          会清几条 · 其中手填的几条（**它们也会被清掉**，不可再生）。 */}
+      <ConfirmDialog
+        open={clearAsk != null}
+        title="清空已匹配的录播"
+        confirmText="确认清空"
+        busy={clearing}
+        busyText="正在清空…"
+        danger
+        onCancel={() => setClearAsk(null)}
+        onConfirm={() => void doVodClear()}
+        testId="vod-clear-ask"
+      >
+        {clearAsk && (
+          <div className="lc-confirm-lines">
+            <p>
+              会清掉 <b>{clearAsk.toClear}</b> 条录播地址（这个 V 下**所有已匹配的**）。
+            </p>
+            {(clearAsk.manual > 0 || clearAsk.untracked > 0) && (
+              <p className="lc-confirm-dim" data-vod-clear-breakdown={clearAsk.toClear}>
+                {clearAsk.auto > 0 && <>其中自动匹配写的 <b>{clearAsk.auto}</b> 条</>}
+                {clearAsk.manual > 0 && (
+                  <>
+                    {clearAsk.auto > 0 ? ' · ' : ''}
+                    你自己填的 <b>{clearAsk.manual}</b> 条
+                  </>
+                )}
+                {clearAsk.untracked > 0 && (
+                  <>
+                    {(clearAsk.auto > 0 || clearAsk.manual > 0) ? ' · ' : ''}
+                    旧版本写入的 <b>{clearAsk.untracked}</b> 条
+                  </>
+                )}
+              </p>
+            )}
+            {clearAsk.manual > 0 && (
+              <p className="lc-confirm-warn" data-vod-clear-manual={clearAsk.manual}>
+                ⚠️ 手填的那些**也会一起清掉**，而它们不会再被扫回来。
+              </p>
+            )}
+            <p className="lc-confirm-dim">
+              只清地址、**不删场次**；想拿回来重跑一次「扫描录播并自动填充」。
+            </p>
+          </div>
+        )}
+      </ConfirmDialog>
       {/* 「添加录播」小窗（3.2）：录播的**唯一入口**在封面上，所有录播操作收在这一个窗里 */}
       <VodDialog
         open={vodOpen}

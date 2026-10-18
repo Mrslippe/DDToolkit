@@ -31,7 +31,7 @@
  * 打开即可读。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Pencil, Play, Plus, X } from 'lucide-react'
+import { ChevronDown, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 
 import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail } from '../../api/types'
 import { api } from '../../api/api'
@@ -50,6 +50,7 @@ import {
 } from './liveCalendarFmt'
 import { glanceCapsules } from './sessionGlance'
 import { vodLabel } from './manualSessionForm'
+import NavMenu from './NavMenu'
 
 /** 上游指标行（顺序即展示顺序）。**恒定四行**是 R36 的前提：未到位时按同尺寸骨架占位，
  *  到位后原位换成真值 —— 行数一样，弹窗高度才不变（`在线排名` 另有保留位，见 CSS）。 */
@@ -89,6 +90,8 @@ interface Props {
   onAddVod?: (s: LiveSession) => void
   /** 封面上那枚「▶ 播放录播」→ 父组件打开播放器（3.2）。不传则不显示那枚钮。 */
   onPlayVod?: (s: LiveSession) => void
+  /** 下拉栏里的「删除这一场」（B4）。**只有手动场次可用** —— 自动场次删了下次同步会回来。 */
+  onDeleteSession?: (s: LiveSession) => void
 }
 
 export default function LiveSessionDialog({
@@ -104,6 +107,7 @@ export default function LiveSessionDialog({
   onEditSession,
   onAddVod,
   onPlayVod,
+  onDeleteSession,
 }: Props) {
   /**
    * 关闭动画期间继续渲染的那一份详情（Q2 批次 14，devlog/217）。
@@ -333,18 +337,50 @@ export default function LiveSessionDialog({
                 <span className="lc-pop-manual">手动记录</span>
               )}
             </div>
-            {/* 「手动记录/编辑」入口（B2）：手动场次 = 编辑这一场；自动场次 = 补录播地址。
-                标题随 `s.manual` 变（服务端算的标记，前端不自己拆 `source`）。 */}
+            {/* 「这一场」的操作入口（B4，用户 2026-10-15）：**下拉栏，不是独立窗口** ——
+                「详情页本身已经是独立窗口，如果再打开一个小窗会显得层级关系混乱，
+                背景遮罩颜色也不对劲」。所以这里只开一层不带遮罩的浮层。
+                ⚠️ 自动抓来的场次**只能补录播**（时间/标题改了下次同步会被覆盖回去），
+                所以"编辑这一场"对它是**禁用 + 说明**，而不是藏起来（不给假入口，也不给空白）。 */}
             {onEditSession && (
-              <button
-                type="button"
-                className="lc-dlg-edit"
-                title={s.manual ? '编辑这一场' : '补录播地址'}
-                aria-label={s.manual ? '编辑这一场' : '补录播地址'}
-                onClick={() => onEditSession(s)}
-              >
-                <Pencil className="size-3.5" />
-              </button>
+              <NavMenu
+                label="这一场的操作"
+                title="这一场的操作"
+                icon={<Pencil className="size-3.5" />}
+                probe="lc-dlg-menu"
+                align="end"
+                /* 纯图标钮（用户 2026-10-15：「不用浮片样式，就原本纯图标样式就行」）——
+                   与关闭钮同一套配方，不再是斜切白卡浮片 */
+                bare
+                items={[
+                  {
+                    key: 'edit',
+                    label: s.manual ? '编辑这一场' : '编辑这一场（自动抓取，只能补录播）',
+                    icon: <Pencil className="size-3.5" />,
+                    disabled: !s.manual,
+                    disabledReason: '时间/标题来自平台，改了下次同步会被覆盖回去',
+                    onSelect: () => onEditSession(s),
+                  },
+                  {
+                    key: 'vod',
+                    label: s.vod_url ? '更换录播' : '添加录播',
+                    icon: <Play className="size-3.5" />,
+                    hint: s.vod_url ? vodLabel(s.vod_url) : undefined,
+                    disabled: !s.live_id || !onAddVod,
+                    disabledReason: '这一场没有可挂录播的记录（自动推导的场次）',
+                    onSelect: () => onAddVod?.(s),
+                  },
+                  {
+                    key: 'delete',
+                    label: '删除这一场',
+                    icon: <Trash2 className="size-3.5" />,
+                    danger: true,
+                    disabled: !s.manual || !onDeleteSession,
+                    disabledReason: '只有手动记录的场次能删（自动场次删了下次同步会回来）',
+                    onSelect: () => onDeleteSession?.(s),
+                  },
+                ]}
+              />
             )}
             <DialogClose asChild>
               <button type="button" className="lc-dlg-close" aria-label="关闭">

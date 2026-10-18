@@ -102,3 +102,14 @@ docs/design/logo-example/
 scripts/backend-8000.bat
 # 工具卸载残留备份（非本项目资产：DSH 安装器的 package.json / lock / 设置副本）
 _dsh_uninstall_backup/
+
+# 一次性探针与实测脚本（2026-10-18 确认：历史上从未提交过，但文档有 26 处引用它）
+/_probe/
+
+# 粉丝结构分析的实测数据（2026-10-17 从 _probe/.cache 迁入）：
+# `raw/` 与 `names/` 约 392 MB，且是"上游快照"（会漂移）⇒ 不入库，但**绝不当缓存删**
+/datasets/fan-structure/*/raw/
+/datasets/fan-structure/*/names/
+/datasets/fan-structure/*/stats/
+/datasets/fan-structure/curves/
+/datasets/fan-structure/ranked/

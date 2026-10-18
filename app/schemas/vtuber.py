@@ -720,6 +720,214 @@ class VodCandidatesOut(BaseModel):
     hint: str | None = None                  # 一条都没有时如实说为什么、下一步做什么
 
 
+# ── 录播批量填充（`docs/plans/vod-autofill.md` B3）──────────────────────
+#
+# 与上面 C1「找录播」的分工：C1 是**单场**、按时间窗扫投稿、给候选让人点一下；
+# 下面这一组是**整号批量**：扫系列/合集/投稿，按标题里的场次时间对齐，先审查再写。
+# 两条路都只读、都由用户确认后才写 —— 区别只是粒度。
+
+
+class VodSourceOut(BaseModel):
+    """一个**可扫的来源**（系列 / 合集 / 投稿）。"""
+
+    #: `series` / `season` / `uploads`
+    kind: str
+    #: 系列/合集的 id；投稿为空串
+    id: str = ""
+    name: str = ""
+    #: 上游声明的总条数（投稿那条为 None：不得为此多打一次请求）
+    total: int | None = None
+    cover: str = ""
+    #: 自动挑中的那一个（`vod_source.pick_source` 的口径：**名字优先、条数次之**）
+    picked: bool = False
+
+
+class VodSourceListOut(BaseModel):
+    """`GET /account/{id}/vod-sources` 的响应。"""
+    mid: str
+    sources: list[VodSourceOut] = []
+    #: 自动挑中的来源 id（前端据此高亮 / 预选）
+    picked_id: str | None = None
+    #: 取不到时如实说（**别让"没取到"看起来像"这个号没有合集"**）
+    error: str | None = None
+
+
+class VodAccountProfileOut(BaseModel):
+    """一个录播号的**资料卡**（`GET /vtuber/vod-accounts`）—— 小窗那一行 `| 昵称 mid 投稿数 |`。
+
+    两半各自独立失败（昵称走匿名接口、投稿数走登录态接口）⇒ 分开给两个错误字段：
+    界面上是"标黄但仍可保存"，不是"整条查不出来"。
+    """
+
+    mid: str
+    name: str = ""
+    avatar: str = ""
+    #: 投稿总数（`arc/search` 的 `page.count`）；取不到是 `None`，**不是 0**
+    uploads: int | None = None
+    #: 最新一条投稿的发布时间（朴素 UTC）—— 用来确认"没填错号"
+    last_published_at: datetime | None = None
+    name_error: str | None = None
+    uploads_error: str | None = None
+
+
+class VodAccountProfilesOut(BaseModel):
+    """`GET /vtuber/vod-accounts?mids=…` 的响应（**顺序与请求一致**）。"""
+    items: list[VodAccountProfileOut] = []
+
+
+class VodAccountScanOut(BaseModel):
+    """一个录播号这一轮的扫描记账（审查表按号分组显示）。"""
+
+    mid: str
+    #: 这次取数**成没成**（不是"有多少条"）：`ok=True, item_count=0` = 该号确实是空的
+    ok: bool = False
+    source_kind: str = ""
+    source_name: str = ""
+    item_count: int = 0
+    #: 这个号**新配上**的场次数（兜底阶段才算 —— 高优先占位后低优先看不到那些场次）
+    matched: int = 0
+    error: str | None = None
+
+
+class VodMatchOut(BaseModel):
+    """一条「场次 ↔ 录播」配对（**审查表的一行**）。"""
+
+    live_id: str
+    start_at: datetime
+    live_title: str | None = None
+    bvid: str
+    title: str = ""
+    permalink: str = ""
+    cover_url: str = ""
+    published_at: datetime | None = None
+    duration_minutes: int | None = None
+    #: 来自哪个录播号 / 哪个来源（"为什么是它"）
+    mid: str = ""
+    source_name: str = ""
+    #: 0=标题时间对上且含回放词 · 1=时间对上但没回放词 · 2=靠"同日+时长"兜底
+    confidence: int = 2
+    #: 录播标题里的时刻 − 场次开播（分钟）；兜底路径为 None
+    minutes_delta: float | None = None
+    #: 标题里标的**小时**（0–23，北京）；标题没给时刻则为 None。
+    #: 用途：`<= 5` 的是"早场"（录播号按惯例标前一天，窗口放宽到 6 小时）——
+    #: 界面据此标一下，审查的人才知道"这条差 5 小时是正常的"。
+    title_hour: int | None = None
+    #: 标题只给了日期、没给时刻（按"同一天"配上的）
+    date_only: bool = False
+    #: 默认勾选吗（只有读出来的时间对得上才算，兜底那条要人看一眼）
+    auto_ok: bool = False
+    #: 同一场次的其他分段/其他号命中（供审查表切换）
+    alternates: list[VodAltOut] = []
+
+    @field_serializer("start_at", "published_at")
+    def _ser_times(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class VodAltOut(BaseModel):
+    """主选之外的备选（同场拆段 / 另一个号也命中）。"""
+    bvid: str
+    title: str = ""
+    permalink: str = ""
+    duration_minutes: int | None = None
+    mid: str = ""
+    confidence: int = 2
+
+
+class VodUnmatchedOut(BaseModel):
+    """没配上的场次 —— **这就是"手动补"那一列**（不硬凑，如实列出来）。"""
+    live_id: str
+    start_at: datetime
+    live_title: str | None = None
+    source: str = ""
+
+    @field_serializer("start_at")
+    def _ser_start(self, v: datetime):
+        return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
+
+
+class VodScanIn(BaseModel):
+    """`POST /account/{id}/vod-scan` 入参（**只读**，不写任何东西）。
+
+    - `mids` 省略 ⇒ 用该 V 记住的录播号（`vtubers.vod_account_uid`，**左 = 高优先**）+ 它自己的 B 站号兜底；
+    - `sources` 显式指定某号扫哪个来源（`{"<mid>": {"kind": "series", "id": "2484684"}}`），
+      省略就自动挑（`vod_source.pick_source`）—— **自动挑的结果一定要能改**，这是设计口径。
+    """
+    mids: list[str] | None = None
+    sources: dict[str, dict] | None = None
+    #: 容差（分钟）：实测标题时刻与开播差中位 48 分 / p90 0 分 ⇒ 默认 90
+    tolerance_minutes: int = 90
+
+
+class VodScanOut(BaseModel):
+    """扫描结果（**只读**）。`matches` 里 `auto_ok=false` 的那些默认不勾选。"""
+    account_id: int
+    mids: list[str] = []
+    matches: list[VodMatchOut] = []
+    unmatched: list[VodUnmatchedOut] = []
+    accounts: list[VodAccountScanOut] = []
+    items_total: int = 0
+    tolerance_minutes: int = 90
+
+
+class VodApplyItemIn(BaseModel):
+    """要写入的一条。`vod_url` 走与手动填**同一个** `normalize_vod`（不合格 → 该条失败，不影响别的）。"""
+    live_id: str
+    vod_url: str
+
+
+class VodApplyIn(BaseModel):
+    """`POST /account/{id}/vod-apply` 入参：只写显式列出来的这些场次。"""
+    items: list[VodApplyItemIn] = []
+
+
+class VodApplyResultOut(BaseModel):
+    """一条写入的结果（失败**逐条**列出原因，不静默吞）。"""
+    live_id: str
+    ok: bool
+    vod_url: str | None = None
+    error: str | None = None
+
+
+class VodApplyOut(BaseModel):
+    applied: int = 0
+    failed: int = 0
+    results: list[VodApplyResultOut] = []
+
+
+class VodClearIn(BaseModel):
+    """`POST /account/{id}/vod-clear` 入参（**危险动作**）。
+
+    ⚠️ 2026-10-15 第三版：**全清**（用户口径「硬性清除所有已匹配项」）——
+    只要 `vod_url` 非空就清，不再区分它当初是谁写的。
+    不需要 mids / sources / tolerance：清空是纯数据库操作，一个上游请求都不发。
+    保留 `dry_run`（界面上先给用户看"会清掉几条"）。
+    """
+    dry_run: bool = False
+
+
+class VodClearOut(BaseModel):
+    """清空回执。
+
+    - `cleared`：**会清 / 已清**的条数（= 这个账号下 `vod_url` 非空的全部行）。
+      dry_run 也照给 —— 界面靠它说"会清掉几条"；
+    - `auto` / `manual` / `untracked`：其中分别是"自动匹配写的"（f018 记的 `'match'`）、
+      "用户手填的"（`'manual'`）、"历史写入、没记账的"（`NULL`）。
+      ⚠️ 这三个**只是分类报数，不参与过滤**：三类一样清。手填的地址不可再生，
+      所以确认窗必须把它们摆出来再让用户按。
+    """
+    cleared: int = 0
+    auto: int = 0
+    manual: int = 0
+    untracked: int = 0
+    dry_run: bool = False
+    results: list[VodApplyResultOut] = []
+    dry_run: bool = False
+    results: list[VodApplyResultOut] = []
+
+
 class LiveUpstreamOut(BaseModel):
     """场次详情里「必须打第三方」的那两格（2026-09-13，devlog/063）。
 

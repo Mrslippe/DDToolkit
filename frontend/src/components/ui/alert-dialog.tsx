@@ -46,14 +46,17 @@ function AlertDialogOverlay({
 
 function AlertDialogContent({
   className,
+  overlayClassName,
   size = "default",
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm"
+  /** 遮罩的附加类（与 `DialogContent` 同款参数）—— 需要把确认窗抬到某个层时用它 */
+  overlayClassName?: string
 }) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay className={overlayClassName} />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         data-size={size}

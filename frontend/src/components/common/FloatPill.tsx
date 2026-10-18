@@ -1,3 +1,4 @@
+import { forwardRef } from 'react'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 type Size = 'sm' | 'md'
@@ -22,9 +23,12 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
  * focus-visible 环全部挂在 `::before` 上（styles/layout.css），不得外包一层 div 或换成
  * 其它元素——换元素会丢斜切与焦点环。
  *
- * 其余属性（title / disabled / aria-* / onClick …）原样透传。
+ * ⚠️ **必须 `forwardRef`**（2026-10-15 加）：`<Tooltip><TooltipTrigger asChild>` 这类
+ * Radix 组合要把 ref 挂到子元素上才算得出锚点位置。此前本组件是普通函数组件 ⇒
+ * Radix 报 "Function components cannot be given refs"，工具提示**拿不到锚点**。
+ * 其余属性（title / disabled / aria-* / onClick …）照旧原样透传。
  */
-export default function FloatPill({
+const FloatPill = forwardRef<HTMLButtonElement, Props>(function FloatPill({
   size,
   shape = 'plain',
   danger,
@@ -32,7 +36,7 @@ export default function FloatPill({
   className,
   children,
   ...rest
-}: Props) {
+}, ref) {
   const cls = [
     'float-pill',
     size && `float-pill--${size}`,
@@ -46,8 +50,10 @@ export default function FloatPill({
     .join(' ')
 
   return (
-    <button type="button" className={cls} {...rest}>
+    <button ref={ref} type="button" className={cls} {...rest}>
       {children}
     </button>
   )
-}
+})
+
+export default FloatPill

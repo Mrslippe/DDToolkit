@@ -1,0 +1,10 @@
+{
+  "account_id": 26,
+  "mid": "401315430",
+  "api": "v2/live",
+  "page_size": 100000,
+  "lossless": true,
+  "recon_tol": 0.1,
+  "vtb_lives": 322,
+  "started_at": "2026-10-17T17:49:02"
+}

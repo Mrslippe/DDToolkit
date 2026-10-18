@@ -230,8 +230,173 @@ export interface VodCandidatesResult {
   hint: string | null
 }
 
-export interface Post {
-  id: number
+/* ── 录播批量填充（B3/B4，`docs/plans/vod-autofill.md`）───────────────────
+ *
+ * 与上面 C1「找录播」的分工：C1 是**单场**、扫投稿、给候选让人点一下；
+ * 这一组是**整号批量**：扫系列/合集/投稿，按录播标题里的场次时间对齐，先审查再写。
+ */
+
+/** 一个**可扫的来源**（系列 / 合集 / 投稿） */
+export interface VodSource {
+  kind: 'series' | 'season' | 'uploads'
+  /** 系列/合集的 id；投稿为空串 */
+  id: string
+  name: string
+  /** 上游声明的总条数（投稿那条为 null） */
+  total: number | null
+  cover: string
+  /** 自动挑中的那一个（名字优先、条数次之） */
+  picked: boolean
+}
+
+/** `GET /account/{id}/vod-sources` 的响应 */
+export interface VodSourceList {
+  mid: string
+  sources: VodSource[]
+  picked_id: string | null
+  /** 取不到时非空 —— **不许**把"没取到"显示成"这个号没有合集" */
+  error: string | null
+}
+
+/** 主选之外的备选（同场拆段 / 另一个号也命中） */
+export interface VodAlt {
+  bvid: string
+  title: string
+  permalink: string
+  duration_minutes: number | null
+  mid: string
+  confidence: number
+}
+
+/**
+ * 一条「场次 ↔ 录播」配对（**审查表的一行**）。
+ *
+ * `confidence`：0=标题时间对上且含回放词 · 1=时间对上但没回放词 · 2=靠"同日+时长"兜底。
+ * `auto_ok`：默认勾选吗 —— **只有读出来的时间对得上才算**（兜底那条要人看一眼）。
+ */
+export interface VodMatch {
+  live_id: string
+  start_at: string
+  live_title: string | null
+  bvid: string
+  title: string
+  permalink: string
+  cover_url: string
+  published_at: string | null
+  duration_minutes: number | null
+  /** 来自哪个录播号 / 哪个来源（"为什么是它"） */
+  mid: string
+  source_name: string
+  confidence: number
+  /** 录播标题里的时刻 − 场次开播（分钟）；兜底路径为 null */
+  minutes_delta: number | null
+  /** 标题里标的小时（0–23，北京）；标题没给时刻则为 null。`<=5` 是"早场" */
+  title_hour: number | null
+  /** 标题只给了日期、没给时刻（按"同一天"配上的） */
+  date_only: boolean
+  auto_ok: boolean
+  alternates: VodAlt[]
+}
+
+/** 没配上的场次 —— **这就是"手动补"那一列** */
+export interface VodUnmatched {
+  live_id: string
+  start_at: string
+  live_title: string | null
+  source: string
+}
+
+/** 一个录播号这一轮的扫描记账 */
+export interface VodAccountScan {
+  mid: string
+  /** 这次取数**成没成**（不是"有多少条"）：`ok=true, item_count=0` = 该号确实是空的 */
+  ok: boolean
+  source_kind: string
+  source_name: string
+  item_count: number
+  /** 这个号**新配上**的场次数（兜底阶段才算） */
+  matched: number
+  error: string | null
+}
+
+/** `POST /account/{id}/vod-scan` 的入参（**只读**，不写任何东西） */
+export interface VodScanIn {
+  /** 省略 ⇒ 用该 V 记住的录播号（**左 = 高优先**）+ 它自己的 B 站号兜底 */
+  mids?: string[]
+  /** 显式指定某号扫哪个来源；省略就自动挑 */
+  sources?: Record<string, { kind: string; id: string }>
+  tolerance_minutes?: number
+}
+
+/** `POST /account/{id}/vod-scan` 的响应 */
+export interface VodScanResult {
+  account_id: number
+  mids: string[]
+  matches: VodMatch[]
+  unmatched: VodUnmatched[]
+  accounts: VodAccountScan[]
+  items_total: number
+  tolerance_minutes: number
+}
+
+/** 一条写入的结果（失败**逐条**带原因，不静默吞） */
+export interface VodApplyResult {
+  live_id: string
+  ok: boolean
+  vod_url: string | null
+  error: string | null
+}
+
+/** `POST /account/{id}/vod-apply` 的响应 */
+export interface VodApplyOut {
+  applied: number
+  failed: number
+  results: VodApplyResult[]
+}
+
+/**
+ * `POST /account/{id}/vod-clear` 的响应（**硬清**这个账号下所有已匹配的录播地址）。
+ *
+ * 用户 2026-10-15 的口径：「硬性清除所有已匹配项」⇒ 只要 `vod_url` 非空就清，
+ * 不再区分当初是谁写的。`auto` / `manual` / `untracked` 只是**分类报数**
+ * （自动匹配写的 / 手填的 / 历史写入没记账的），用来在确认窗里说清范围 ——
+ * 手填的地址不可再生，界面上必须把它们摆出来再让用户按。
+ */
+export interface VodClearOut {
+  /** 会清 / 已清的条数（dry_run 也照给） */
+  cleared: number
+  auto: number
+  manual: number
+  untracked: number
+  dry_run: boolean
+  results: VodApplyResult[]
+}
+
+/**
+ * 一个录播号的**资料卡**（`GET /vtuber/vod-accounts`）——
+ * 「录播号」小窗里那一行 `| 昵称 mid 投稿数 |`。
+ *
+ * 两半**各自独立失败**：昵称/头像走匿名的 `x/web-interface/card`、投稿数走登录态的
+ * `arc/search` ⇒ 分开两个错误字段。号有效但昵称没取到时标黄、**仍然允许保存**。
+ */
+export interface VodAccountProfile {
+  mid: string
+  name: string
+  avatar: string
+  /** 投稿总数；**取不到是 null，不是 0** */
+  uploads: number | null
+  /** 最新一条投稿的发布时间（朴素 UTC，`YYYY-MM-DDTHH:mm:ss`） */
+  last_published_at: string | null
+  name_error: string | null
+  uploads_error: string | null
+}
+
+export interface VodAccountProfilesOut {
+  /** 顺序与请求里的 mids 一致 */
+  items: VodAccountProfile[]
+}
+
+export interface Post {  id: number
   platform: string
   platform_uid: string
   platform_post_id: string
@@ -1290,4 +1455,74 @@ export interface PrefsSaved {
   ok: boolean
   changed: string[]
   values: Record<string, string>
+}
+
+// ── 数据分析工作台（2026-10-18）──────────────────────────────────────────────
+export interface FanVtuber {
+  name: string
+  short: string
+  mid: string
+  subdir: string
+  has_data: boolean
+  sessions: number
+}
+
+export interface FanVtuberList {
+  items: FanVtuber[]
+  count: number
+  /** 模块是否启用（偏好 `fan_workbench`）。关闭时下面的端点一律 404 */
+  enabled: boolean
+  data_root: string | null
+  error: string | null
+}
+
+export interface FanSessionPreview {
+  vtuber: string
+  since: string
+  until: string
+  total: number
+  already: number
+  to_collect: number
+  first: string | null
+  last: string | null
+}
+
+export interface FanCollectProgress {
+  vtuber: string
+  since: string
+  until: string
+  state: 'idle' | 'running' | 'done' | 'failed' | 'cancelled'
+  total: number
+  done: number
+  failed: number
+  skipped: number
+  current: string
+  message: string
+  elapsed: number
+}
+
+export interface FanRankedRow {
+  rank: number
+  uid: string
+  type: string
+  strength: number
+  axis_percentiles: Record<string, number>
+  att_sessions: number
+  att_rate: number
+  pay_total: number
+  msg_total: number
+  tags: string[]
+}
+
+export interface FanRanked {
+  vtuber: string
+  window: number
+  sessions: number
+  since: string | null
+  until: string | null
+  by: string
+  purity_threshold: number
+  total_in_pool: number
+  count: number
+  items: FanRankedRow[]
 }
