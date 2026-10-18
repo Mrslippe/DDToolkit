@@ -146,8 +146,6 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
 
   const picked = sessions.slice(start, start + size)
   const coll = picked.filter((s) => s.c).length
-  const first = picked[0]
-  const last = picked[picked.length - 1]
 
   return (
     <div className="wb-zoom">
@@ -191,7 +189,8 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       </div>
 
       <div className="wb-zoom-read" data-testid="zoom-read">
-        <span><b>{first?.at.slice(0, 10) ?? '—'}</b> ~ <b>{last?.at.slice(0, 10) ?? '—'}</b></span>
+        {/* 日期不再重复显示（2026-10-19）：下面的「区间」按钮已经写着范围，
+            这里两行日期会让人以为是两个不同的东西。 */}
         <span>{size} 场 · 已采 <b>{coll}</b> · 待采 <b className={size - coll ? 'acc' : ''}>{size - coll}</b></span>
         <span>（共 {total} 场）</span>
       </div>

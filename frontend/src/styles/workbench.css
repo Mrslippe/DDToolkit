@@ -621,6 +621,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* 翻页组不许被压缩，也不许被卡片右缘裁掉（2026-10-19 截图：右箭头跑到卡外） */
+  min-width: 0;
+  flex-wrap: nowrap;
 }
 
 .wb-hm-years {
@@ -893,7 +896,8 @@
 .wb-zoom-read .acc { color: var(--c-primary-deep); }
 
 .wb-result {
-  min-height: 200px;
+  /* 空态只有一小段文案，留 200px 会在下面拖出一大片白（2026-10-19 截图） */
+  min-height: 0;
 }
 
 
@@ -1212,4 +1216,93 @@
 /* 区间按钮顶在右下角那一行的最左 */
 .wb-hm-actions-left {
   margin-right: auto;
+}
+
+/* 年份翻页（2026-10-19）：`.lc-nav-icon` 定义在 posts.css（只随帖子页加载），
+   工作台拿不到尺寸 —— 图标改内联 `size`，这里只兜住对齐与点击区。 */
+.wb-hm-years {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.wb-hm-years .float-pill {
+  min-width: 26px;
+  padding: 0 6px;
+}
+
+.wb-hm-nav-icon {
+  display: block;
+}
+
+.wb-hm-year-text {
+  white-space: nowrap;
+}
+
+.wb-hm-arrow {
+  display: block;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--c-text-main);
+}
+
+/* 年份翻页（2026-10-19）：**不用浮片族** —— 那两个钮在窄行里会被压成 0 宽。
+   白底 + 发丝边 + 卡片内圆角，看上去与浮片一致。 */
+.wb-hm-years {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-hm-years > button {
+  /* flex 子项默认会收缩 —— 中间那块的 "2026" 就被压成 "202"，必须钉住宽度 */
+  flex: none;
+}
+
+.wb-hm-nav-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  background: var(--c-bg-card);
+  box-shadow: var(--pill-shadow);
+  font-size: 15px;
+  line-height: 1;
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+
+.wb-hm-nav-btn:hover:not(:disabled) {
+  color: var(--c-primary-deep);
+  border-color: rgba(201, 64, 111, 0.35);
+}
+
+.wb-hm-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.wb-hm-year-btn-mid {
+  height: 26px;
+  /* 显式给足宽度：只靠 padding 时它被压到 ~40px，"2026" 露不全 */
+  min-width: 74px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  background: var(--c-bg-card);
+  box-shadow: var(--pill-shadow);
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+
+.wb-hm-year-btn-mid:hover {
+  color: var(--c-primary-deep);
+  border-color: rgba(201, 64, 111, 0.35);
 }

@@ -1,7 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronsLeft, ChevronsRight } from 'lucide-react'
-import FloatPill from '../common/FloatPill'
 import type { HmSession } from '../../api/types'
 
 interface DayStat {
@@ -22,7 +20,9 @@ interface Props {
 }
 
 /** 格子边长与间距都是常量 ⇒ **一格必然是正方形**（不用 `1fr` 自适应） */
-const CELL = 11
+/* 53 周 × 13px = 689px，比卡片内容区（~683px）**宽 6px** —— 网格溢出会把头部行撑宽，
+   右侧的年份翻页因此被卡片裁掉（2026-10-19 截图：右箭头跑到卡外）。缩到 10px 正好收进来。 */
+const CELL = 10
 const GAP = 2
 
 const MONTHS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
@@ -90,12 +90,6 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
     return { weeks, cells, labels, janCol }
   }, [year])
 
-  const yearSessions = useMemo(
-    () => Object.entries(days)
-      .filter(([k]) => k.startsWith(`${year}-`))
-      .reduce((sum, [, v]) => sum + v.n, 0),
-    [days, year],
-  )
 
   return (
     <>
@@ -104,19 +98,17 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
         {/* 与直播日历的导航栏**同构**（2026-10-19 用户："直接参考直播日历卡片上的按钮实现"）：
             `FloatPill` 用**默认尺寸**（不传 size —— 传 sm 会把图标挤掉），图标用
             `ChevronsLeft/Right` + 日历那套 `lc-nav-icon` / `lc-nav-text` 类。 */}
-        <div className="wb-hm-years lc-nav" ref={navRef}>
-          <FloatPill shape="icon" title="上一年" onClick={() => setYear((y) => y - 1)}
-                     disabled={year <= minYear} data-testid="hm-prev">
-            <ChevronsLeft className="lc-nav-icon" />
-          </FloatPill>
-          <FloatPill shape="text" title="选择年份" onClick={() => setPick((p) => !p)}
-                     data-testid="hm-year">
-            <span className="lc-nav-text">{year} · {yearSessions} 场</span>
-          </FloatPill>
-          <FloatPill shape="icon" title="下一年" onClick={() => setYear((y) => y + 1)}
-                     disabled={year >= maxYear} data-testid="hm-next">
-            <ChevronsRight className="lc-nav-icon" />
-          </FloatPill>
+        <div className="wb-hm-years" ref={navRef}>
+          {/* 不依赖浮片族：这两个钮在窄行里会被压成 0 宽（2026-10-19 截图复现），
+              改用自带尺寸的普通按钮 —— 视觉上与浮片一致（白底 + 发丝边 + 卡片内圆角）。 */}
+          <button type="button" className="wb-hm-nav-btn" title="上一年"
+                  onClick={() => setYear((y) => Math.max(minYear, y - 1))} data-testid="hm-prev">‹</button>
+          <button type="button" className="wb-hm-year-btn-mid" title="选择年份"
+                  onClick={() => setPick((p) => !p)} data-testid="hm-year">
+            {year}
+          </button>
+          <button type="button" className="wb-hm-nav-btn" title="下一年"
+                  onClick={() => setYear((y) => Math.min(maxYear, y + 1))} data-testid="hm-next">›</button>
           {pick && (
             <div className="wb-hm-year-menu" data-testid="hm-year-menu">
               {years.map((y) => (
