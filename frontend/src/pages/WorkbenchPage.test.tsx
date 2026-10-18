@@ -81,7 +81,9 @@ async function mount(): Promise<void> {
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
 }
 
-const q = (sel: string) => host.querySelector(sel)
+function q<T extends Element = HTMLElement>(sel: string): T | null {
+  return host.querySelector(sel) as T | null
+}
 
 beforeEach(() => {
   fanVtubers.mockReset().mockResolvedValue(VTUBERS)

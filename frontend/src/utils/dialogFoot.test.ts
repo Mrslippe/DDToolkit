@@ -28,6 +28,8 @@ const WITH_FOOT = [
   // 「第三方数据」小窗（2026-10-05，devlog/354）：页脚一枚「补拉这个 V 的第三方数据」
   'ThirdpartyDataDialog.tsx',
   'VtuberSettingsDialog.tsx',
+  // 添加模块（2026-10-18）：页脚「取消 / 确认」，确认是主操作
+  'ModulePickerDialog.tsx',
 ]
 
 /** 确认过"本来就没有页脚按钮"的弹窗，不属于这批的范围 */
