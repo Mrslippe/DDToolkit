@@ -21,11 +21,21 @@ from app.services.fan import FanDataError, load_window, resolve_data_dir, summar
 from app.services.fan.loader import VTUBERS, get_vtuber
 
 # ── P0-1 与探针一致 ─────────────────────────────────────────────────────────
-#: 黄金值来源：`_probe/fan_output_model.py` 的同一窗口聚合（2026-10-17 冻结）
+#: 黄金值来源：`_probe/fan_output_model.py` 的同一窗口聚合
+#:
+#: ⚠️ **必须钉住截止日**（2026-10-19）：这组值原本按"最近 75 场"冻结，可数据是会长的 ——
+#: 用户在应用里点一次采集，窗口就会滑动，本用例随即变红（实测 `stats` 从 75 涨到 77，
+#: 最新写入 2026-10-19 01:59）。加 `FROZEN_UNTIL` 之后，之后新采的场次不会再移动窗口。
+#:
+#: 但**补采老场**仍会落在冻结区间内部 —— 2026-10-19 明前奶绿就补采了 1 场（71 → 72），
+#: 那一半只能重记数值。所以：**冻结区间内一旦补采，必须重新冻结本表**。
+FROZEN_UNTIL = "2026-10-17"
+
 GOLDEN: dict[str, tuple[int, int, int, int, int, float]] = {
     #           场次    人数       Σatt       Σ弹幕      ΣSC       Σ付费
     "pilot_v3_mizuki": (75, 72_012, 459_934, 762_864, 3_728, 416_769.70),
-    "pilot_v3_mingqian": (71, 168_619, 1_100_061, 2_155_930, 7_147, 533_777.60),
+    # 2026-10-19 重记：区间内补采 1 场（71 → 72），六项全部按新窗口重算
+    "pilot_v3_mingqian": (72, 170_470, 1_118_922, 2_182_543, 7_069, 537_228.80),
     "pilot_v3_xingtong": (75, 246_308, 1_119_739, 1_484_837, 7_640, 1_096_966.70),
 }
 
@@ -43,7 +53,7 @@ def test_matches_probe_golden_values(v) -> None:
     _data_dir_or_skip()
     if not (resolve_data_dir() / v.subdir / "stats").is_dir():
         pytest.skip(f"{v.short} 的数据目录不存在")
-    s = summary(load_window(v, 75))
+    s = summary(load_window(v, 75, until=FROZEN_UNTIL))
     got = (s["sessions"], s["users"], s["att_total"], s["m_total"],
            s["sc_total"], s["pay_total"])
     want = GOLDEN[v.subdir]
