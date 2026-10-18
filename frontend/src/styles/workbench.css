@@ -802,33 +802,25 @@
 
 .wb-win {
   position: absolute;
-  top: -1px;
-  bottom: -1px;
-  /* 照抄 dataZoom：选中区只有 1px 细边 + 淡粉填充，边界靠把手强调 */
-  border-left: 1px solid var(--c-primary-deep);
-  border-right: 1px solid var(--c-primary-deep);
+  top: 0;
+  bottom: 0;
   background: rgba(255, 162, 180, 0.16);
   cursor: grab;
 }
 
+/* ★ 把手 = 选中区的两端边本身（2026-10-18 第三次改）。
+   前几版都在"带的边上再套一个白色小把手"，于是既要处理它探出带宽、又要处理它探出轨道，
+   怎么调都会有一截露在外面。现在不套了：
+   带的两端就是两条 3px 的深玫红竖条 —— 带宽已被 JS 夹在轨道内，竖条必然也在轨道内。 */
 .wb-win .h {
-  /* 把手**填满带高**、贴在带内缘：与 dataZoom 的手柄同构。
-     窗口已被 JS 夹在轨道内 ⇒ 把手必然在轨道内。 */
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 5px;
-  border: 1px solid var(--c-primary-deep);
-  border-radius: 2px;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
+  width: 3px;
+  border-radius: 1.5px;
+  background: var(--c-primary-deep);
 }
 
-/* 手柄**贴在窗口内侧**（2026-10-18 用户：拖动时不要超出外层时间窗口）。
-   原来用 `-6px` 让手柄探出窗口外 —— 窗口贴到轨道最左/最右时，手柄就跑到轨道外面去了。 */
-/* 把手**完全落在轨道内**（用户 2026-10-18 第二次反馈：依旧越界）。
-   做法：窗口自己不再画左右边框，边界由把手表达；把手贴在窗口内缘 1px 处，
-   宽 6px、圆角、带描边 —— 看得出手感，又永远在窗口（= 轨道）里面。 */
 .wb-win .h.l { left: 1px; cursor: ew-resize; }
 .wb-win .h.r { right: 1px; cursor: ew-resize; }
 
@@ -865,36 +857,33 @@
 }
 
 
-/* 主播切换器（2026-10-18）：用项目自己的 Radix 下拉，长在名字的位置上。
-   `ui/select` 默认是 Pill 尺寸的表单控件，这里把它**降级成一个文字按钮**：
-   去掉边框/底色，字号跟随名字；右侧的小三角与菜单项样式统一由 `.wb-name-menu` 定。 */
-.wb-name-trigger {
-  height: auto;
-  padding: 0 20px 0 0;
-  border: 0;
-  background: transparent;
+/* 主播切换器（2026-10-18）：**独立按钮、靠右固定**。
+   不套在名字上 —— 触发器宽度会随名字长短变、箭头跟着跑；而且 `ui/select` 自带的内联类
+   会压过 `width:100%`。做成 flex 行里的最后一个元素 + `margin-left:auto` 就与名字无关了。 */
+.wb-switch-trigger {
+  flex: none;
+  margin-left: auto;
+  width: auto;
+  min-width: 84px;
+  height: 28px;
+  padding: 0 10px;
+  gap: 4px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  background: rgba(255, 255, 255, 0.86);
   box-shadow: none;
-  font-size: clamp(18px, 1.6vw, 23px);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: #2f3a46;
-  gap: 2px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
 }
 
-.wb-name-trigger:hover {
-  background: transparent;
+.wb-switch-trigger:hover {
+  border-color: rgba(201, 64, 111, 0.35);
   color: var(--c-primary-deep);
 }
 
-.wb-name-trigger:focus-visible {
+.wb-switch-trigger:focus-visible {
   box-shadow: var(--focus-ring-inset);
-  border-radius: 6px;
-}
-
-.wb-name-trigger [data-slot='select-value'] {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border-color: transparent;
 }
 
 .wb-name-menu {

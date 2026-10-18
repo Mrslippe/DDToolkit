@@ -108,29 +108,7 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
             fallback={<span>{v.name.slice(0, 1)}</span>}
           />
           <div className="wb-profile-id">
-            {/* 主播切换器就长在名字上：不给它单独一行，也不藏进别处 */}
-            {options.length > 1 && onPick ? (
-              /* 用项目自己的下拉（Radix `ui/select`，与账号选择器同一套）——
-                 原生 `<select>` 的选项列表由系统绘制，改不动样式，与整体风格不统一。 */
-              <Select value={name} onValueChange={onPick}>
-                <SelectTrigger
-                  className="wb-name-trigger"
-                  aria-label="切换主播"
-                  title={v.name}
-                  data-testid="workbench-vtuber">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="wb-name-menu">
-                  {options.map((o) => (
-                    <SelectItem key={o.name} value={o.name}>
-                      {o.short}{o.has_data ? '' : '（无数据）'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
-            )}
+            <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
             {/* A 区：最多 3 项 */}
             <div className="wb-profile-meta" data-testid="profile-meta">
               <span>
@@ -142,6 +120,28 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
               <span>最近 <b>{mmdd(s.last)}</b></span>
             </div>
           </div>
+          {/* 切换器**独立成一枚按钮、靠右固定**（2026-10-18 用户第二次反馈）。
+              之前把下拉套在名字上：触发器宽度受名字长短影响，箭头跟着文字跑，
+              而且 `ui/select` 自带的内联类会压过我的 `width:100%` —— 与其和它抢级联，
+              不如让按钮**不参与**名字的宽度计算。 */}
+          {options.length > 1 && onPick && (
+            <Select value={name} onValueChange={onPick}>
+              <SelectTrigger
+                className="wb-switch-trigger"
+                aria-label="切换主播"
+                title={v.name}
+                data-testid="workbench-vtuber">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="wb-name-menu">
+                {options.map((o) => (
+                  <SelectItem key={o.name} value={o.name}>
+                    {o.short}{o.has_data ? '' : '（无数据）'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {/* B 区：最多 3 块，缺了就整块不渲染 */}
