@@ -216,6 +216,19 @@ describe('数据分析工作台', () => {
     expect(fanCollectStatus.mock.calls.length).toBeGreaterThan(0)
   })
 
+  it('删除已采集：按钮打开确认弹窗，并显示预览（不可恢复的操作先给数字）', async () => {
+    await mount()
+    const btn = document.querySelector('[data-testid="workbench-purge"]') as HTMLElement
+    expect(btn).not.toBeNull()
+    await act(async () => { btn.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    // AlertDialog 走 Portal，内容挂在 document.body 上
+    expect(document.querySelector('[data-testid="purge-dialog"]')).not.toBeNull()
+    // 确认按钮在预览回来之前不可点（防止"没看清就删"）
+    const ok = document.querySelector('[data-testid="purge-confirm"]') as HTMLButtonElement | null
+    expect(ok).not.toBeNull()
+  })
+
   it('「分析」按 strength 取，结果显示为两张小卡片', async () => {
     await mount()
     await act(async () => {

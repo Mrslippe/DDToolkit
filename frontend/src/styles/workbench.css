@@ -605,15 +605,23 @@
 }
 
 .wb-hm-years button {
-  width: 22px;
-  height: 22px;
+  /* 与项目里的药丸同一套：白底 + 发丝边 + 轻阴影，圆角取档案卡的内圆角 */
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--c-border);
   background: var(--c-bg-card);
-  border-radius: 6px;
+  border-radius: var(--pcard-radius-inner);
+  box-shadow: var(--pill-shadow);
   cursor: pointer;
   color: var(--c-text-sub);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.wb-hm-years button:hover:not(:disabled) {
+  color: var(--c-primary-deep);
+  border-color: rgba(201, 64, 111, 0.35);
 }
 
 .wb-hm-years button:disabled {
@@ -813,12 +821,17 @@
    怎么调都会有一截露在外面。现在不套了：
    带的两端就是两条 3px 的深玫红竖条 —— 带宽已被 JS 夹在轨道内，竖条必然也在轨道内。 */
 .wb-win .h {
+  /* **白色胶囊**跨在红条上（2026-10-19 用户第 3 条，照 ECharts dataZoom）：
+     红条是选中区的边，白胶囊是它的抓手 —— 两者叠在一起才是"能拖"的样子。 */
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  border-radius: 1.5px;
-  background: var(--c-primary-deep);
+  top: 50%;
+  width: 6px;
+  height: 22px;
+  margin-top: -11px;
+  border: 1.5px solid var(--c-primary-deep);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
 }
 
 .wb-win .h.l { left: 1px; cursor: ew-resize; }

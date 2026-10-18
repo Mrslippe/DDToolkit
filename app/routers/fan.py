@@ -656,6 +656,7 @@ def fan_activity(
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
             "  and s.start_at is not null "
+            "  and s.session_key is not null and s.session_key != '' "
             "group by d order by d"
         ),
         {"vid": row.id},
@@ -675,6 +676,7 @@ def fan_activity(
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
             "  and s.start_at is not null "
             "  and s.live_id is not null and length(s.live_id) > 20 "
+            "  and s.session_key is not null and s.session_key != '' "
             "order by s.start_at desc limit :lim"
         ),
         {"vid": row.id, "lim": limit},
@@ -743,7 +745,8 @@ def fan_profile(
             "select count(*), min(date(s.start_at)), max(date(s.start_at)) "
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
-            "  and s.start_at is not null"
+            "  and s.start_at is not null "
+            "  and s.session_key is not null and s.session_key != ''"
         ),
         {"vid": row.id},
     ).one()

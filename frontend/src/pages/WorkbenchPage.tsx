@@ -212,11 +212,9 @@ export default function WorkbenchPage() {
             ? <ProfileCard name={picked} options={vtubers} onPick={setPicked} />
             : <div className="wb-card" />}
 
+          {/* 卡片里**不再放重复标题**（2026-10-19 用户第 4 条）：热力图组件自带一行
+              「直播与采集 + 年份翻页」，页面上再写一遍就是两个一模一样的标题。 */}
           <section className="wb-card wb-hm-card" data-testid="workbench-heatmap">
-            <div className="wb-hm-head">
-              <h2 className="wb-card-title">直播与采集</h2>
-            </div>
-
             {activity ? (
               <>
                 <Heatmap days={activity.days} years={activity.years}
