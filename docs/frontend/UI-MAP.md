@@ -1182,6 +1182,31 @@ DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段
 
 ---
 
+### B6. 数据分析工作台 `<WorkbenchPage>`（pages/WorkbenchPage.tsx + styles/workbench.css，2026-10-18 devlog/525）
+
+可选模块，入口由工具栏的「＋」添加（见 A2）。视觉**只复用不新造**：
+
+| 项 | 取值 | 来源 |
+|---|---|---|
+| 卡片 | `border-radius: var(--pcard-radius)`（12px）+ `--pcard-shadow` + `--pcard-ring` + 发丝边框 | 档案卡族（`tokens.css`） |
+| 页面底 | `--c-bg-page`（近白），内容宽 `max-width: 980px` 居中 | 同上 |
+| 按钮 | 一律 `FloatPill`（`size="md" shape="text"`，主操作带 `active`） | 全站唯一交互层元件 |
+| 输入框 | 内圆角 `--pcard-radius-inner`（8px）+ `--focus-ring-inset` | 同上 |
+| 标签 | `.wb-tag` 圆角胶囊；**类型**用中性底（`.is-type`）与展示标签区分 | 本页 |
+
+结构：页头（标题 + 副标题纵向）→ 卡 1「采集设置」（三列表单网格 + 预估读数 + 进度条）→
+卡 2「粉丝名单」（表格）→ 页脚口径说明。
+
+⚠️ 三条刻意的克制：
+1. **表头不做 sticky** —— 卡片不是独立滚动容器，`top: 0` 会贴到页面顶部而不是卡片里；
+2. **不做负边距出血** —— 出血要 `overflow: hidden`，它会把 sticky 掐死；改让单元格左右内边距
+   与卡片内边距对齐（20px），视觉同样"齐"；
+3. **标签每行最多 3 枚 + `+N`** —— 实测一个人常带 5~6 条，全展开能把一行撑成三行，
+   行高参差就扫不动了。
+
+表单网格 `minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) auto`（第 4 列是按钮，宽窗同行）；
+视口 `< 1100px` 退成单列 —— 左侧主播栏固定占宽，内容区在那以下会挤到裁字。
+
 ## C. 设计令牌（styles/tokens.css 与 index.css 同步）
 
 | 令牌 | 值 | 用途 |

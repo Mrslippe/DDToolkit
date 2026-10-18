@@ -1,0 +1,395 @@
+/*
+ * 数据分析工作台（2026-10-18，用户："对齐项目的总体设计语言，以圆角卡片作为主要展示形式"）。
+ *
+ * **只复用、不新造**：语言全部来自 `tokens.css` 的**档案卡族**（`--pcard-*`）——
+ * 12px 圆角 + 双层柔和阴影 + 顶部高光内描边；白卡浮在近白页面上，发丝级描边。
+ * 交互层一律 `FloatPill`（全站唯一交互层元件），这里不定义任何按钮样式。
+ *
+ * 命名统一 `wb-` 前缀，避免与 `posts.css` / `layout.css` 的类撞车。
+ *
+ * ⚠️ 两处刻意的克制：
+ * ① **表头不做 sticky** —— 卡片不是独立滚动容器，`top: 0` 会贴到页面顶部而不是卡片里；
+ * ② **不做负边距出血** —— 出血要 `overflow: hidden`，而它会把 sticky 掐死。改为
+ *    单元格左右内边距与卡片内边距对齐（20px），视觉上同样"齐"，但没有这些副作用。
+ */
+
+/* ── 页面 ─────────────────────────────────────────────────────────────── */
+.wb-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 22px 24px 40px;
+  background: var(--c-bg-page);
+}
+
+.wb-inner {
+  width: 100%;
+  max-width: 980px;          /* 内容宽度上限：表格再宽也留住可扫视的行长 */
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;                 /* 卡片间距：明显大于卡内间距（14 vs 14 靠边框分隔） */
+}
+
+.wb-head {
+  display: flex;
+  flex-direction: column;   /* 副标题放标题**下方**：推到最右会被读成两件不相干的东西 */
+  align-items: flex-start;
+  gap: 3px;
+  padding: 2px 2px 4px;
+}
+
+.wb-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--c-text-main);
+  letter-spacing: 0.2px;
+}
+
+.wb-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+/* ── 卡片（档案卡族）────────────────────────────────────────────────── */
+.wb-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px 20px;
+  border-radius: var(--pcard-radius);
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--pcard-shadow), var(--pcard-ring);
+}
+
+.wb-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wb-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.wb-card-note {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+}
+
+/* ── 配置行 ───────────────────────────────────────────────────────────── */
+/* 三列网格而不是 flex-wrap：flex 在窄窗下会把「结束日期」和按钮挤到同一行，
+   视觉上像按钮属于那个日期字段。网格列固定 ⇒ 字段永远三列对齐，按钮永远独占一行。 */
+.wb-form {
+  display: grid;
+  /* 第 4 列是按钮：宽窗与字段同行（不浪费一整行），窄窗由下条媒体查询退成单列 */
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+/* 视口窄于 1100 时（左侧主播栏固定占宽，内容区会很窄）退成单列，避免日期框被挤到裁字 */
+@media (max-width: 1100px) {
+  .wb-form {
+    grid-template-columns: 1fr;
+  }
+
+  .wb-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+.wb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wb-field-label {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  letter-spacing: 0.3px;
+}
+
+/* 输入控件：与 FloatPill 同一套内圆角（`--pcard-radius-inner` = 8px） */
+.wb-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--c-text-main);
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  outline: none;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.wb-input:hover {
+  border-color: rgba(201, 64, 111, 0.35);
+}
+
+/* 焦点环走 token（`--focus-ring-inset`）：输入框不能把环画到框外，会顶开布局 */
+.wb-input:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  border-color: transparent;
+}
+
+.wb-select {
+  cursor: pointer;
+}
+
+.wb-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── 预估读数 ─────────────────────────────────────────────────────────── */
+.wb-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wb-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--pcard-radius-inner);
+  background: var(--c-bg-list);
+  border: 1px solid var(--c-border);
+}
+
+/* 标签让位给数值：这一排是"读数"，不是"表单项" */
+.wb-stat-label {
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.wb-stat-value {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 只有"待采"用主色 —— 它是这一排里唯一需要动作的读数 */
+.wb-stat-value.is-accent {
+  color: var(--c-primary-deep);
+}
+
+.wb-stat-note {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--c-text-sub);
+}
+
+/* 错误不只靠颜色：前缀给「⚠」+ 明确措辞 */
+.wb-hint.is-error {
+  color: #b3261e;
+}
+
+/* ── 采集进度 ─────────────────────────────────────────────────────────── */
+.wb-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.wb-bar {
+  flex: 1;
+  min-width: 80px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--c-bg-list);
+  overflow: hidden;
+}
+
+.wb-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--c-primary), var(--c-primary-deep));
+  transition: width 240ms ease;
+}
+
+/* ── 名单表 ───────────────────────────────────────────────────────────── */
+.wb-table-wrap {
+  overflow-x: auto;          /* 窄窗横向滚动，不压扁列 */
+}
+
+.wb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+/* 左右内边距与卡片一致（20px）⇒ 首列与卡标题左缘对齐，不需要负边距出血 */
+.wb-table thead th {
+  padding: 0 12px 8px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--c-text-sub);
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+
+.wb-table thead th:first-child {
+  padding-left: 0;
+}
+
+.wb-table thead th:last-child {
+  padding-right: 0;
+}
+
+.wb-table tbody td {
+  padding: 9px 12px;
+  color: var(--c-text-main);
+  border-bottom: 1px solid rgba(210, 216, 222, 0.35);
+  vertical-align: middle;
+}
+
+.wb-table tbody td:first-child {
+  padding-left: 0;
+}
+
+.wb-table tbody td:last-child {
+  padding-right: 0;
+}
+
+.wb-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.wb-table tbody tr:hover td {
+  background: var(--c-bg-list);
+}
+
+.wb-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-uid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.wb-rank {
+  width: 40px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 标签 chip ────────────────────────────────────────────────────────── */
+.wb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.wb-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--c-primary-deep);
+  background: rgba(255, 162, 180, 0.14);
+  border: 1px solid rgba(255, 162, 180, 0.35);
+  white-space: nowrap;
+}
+
+/* 溢出的 +N：中性色，不抢主标签的注意力 */
+.wb-tag.is-more {
+  color: var(--c-text-sub);
+  background: var(--c-bg-list);
+  border-color: var(--c-border);
+  cursor: help;
+}
+
+/* 类型不是"标签"（它参与分类）⇒ 用中性底，与展示标签区分开 */
+.wb-tag.is-type {
+  color: var(--c-text-main);
+  background: var(--c-bg-list);
+  border-color: var(--c-border);
+}
+
+/* ── 空态 ─────────────────────────────────────────────────────────────── */
+.wb-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 4px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--c-text-sub);
+}
+
+.wb-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.wb-empty p {
+  margin: 0;
+}
+
+/* ── 页脚说明 ─────────────────────────────────────────────────────────── */
+.wb-foot {
+  margin: 0;
+  padding: 2px 4px 0;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--c-text-sub);
+}
+
+.wb-foot a {
+  color: var(--c-primary-deep);
+  text-decoration: none;
+  white-space: nowrap;      /* CJK 默认任意处可断，不锁会把「回到帖子浏览」拆成两截 */
+}
+
+.wb-foot a:hover {
+  text-decoration: underline;
+}
+
+/* ── 减少动效 ─────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .wb-bar-fill,
+  .wb-input {
+    transition: none;
+  }
+}
