@@ -264,6 +264,10 @@ export default function WorkbenchPage() {
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">
+                  {/* 滑轨区间：与采集/分析同一行，**顶在左侧**（2026-10-19 用户第 2 条） */}
+                  <div className="wb-hm-actions-left">
+                    <RangeButton value={range} onConfirm={setRange} disabled={running || busy} />
+                  </div>
                   <PurgeButton name={picked} disabled={running || busy}
                                onPurged={() => {
                                  setRanked(null)
@@ -312,10 +316,6 @@ export default function WorkbenchPage() {
                 <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
                   {unknown ? '—' : toCollect}
                 </span>
-              </div>
-              <div className="wb-stat wb-stat-range">
-                <span className="wb-stat-label">滑轨区间</span>
-                <RangeButton value={range} onConfirm={setRange} />
               </div>
             </div>
           )}

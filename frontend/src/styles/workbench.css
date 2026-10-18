@@ -1185,3 +1185,22 @@
   align-items: flex-start;
   gap: 4px;
 }
+
+/* 年份翻页：三个浮片都要**不被挤压**（之前中间那个把 "2026 · 184 场" 折成三行） */
+.wb-hm-years {
+  gap: 6px;
+}
+
+.wb-hm-year-btn {
+  min-width: 26px;
+  padding: 0 4px;
+}
+
+.wb-hm-year-mid {
+  white-space: nowrap;
+}
+
+/* 区间按钮顶在右下角那一行的最左 */
+.wb-hm-actions-left {
+  margin-right: auto;
+}

@@ -166,7 +166,9 @@ describe('数据分析工作台', () => {
     expect(preview.textContent).toContain('待采')
     // 2026-10-19 起这一行是**滑轨区间选择器**（不再是窗口首尾日期）
     expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
-    expect(preview.textContent).toContain('滑轨区间')
+    // 区间按钮已移到「直播与采集」卡右下角那一行（2026-10-19 用户第 2 条），
+    // 不在统计条里 —— 统计条只剩窗口场次/已有/待采。
+    expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
     expect(fanSessions).toHaveBeenCalled()
   })
 

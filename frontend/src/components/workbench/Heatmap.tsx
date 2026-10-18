@@ -103,11 +103,13 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
         {/* 与直播日历的导航栏对齐：浮片族三连（‹ / 中间可点 / ›），
             中间点开是**年份选择**（2026-10-19 用户第 3 条） */}
         <div className="wb-hm-years">
-          <FloatPill size="sm" shape="icon" onClick={() => setYear((y) => y - 1)}
+          <FloatPill size="sm" shape="text" className="wb-hm-year-btn"
+                     onClick={() => setYear((y) => y - 1)}
                      disabled={year <= minYear} aria-label="上一年"
                      data-testid="hm-prev"><ChevronLeft size={14} strokeWidth={2} /></FloatPill>
           <div className="wb-hm-year-pick">
-            <FloatPill size="md" shape="text" onClick={() => setPick((p) => !p)}
+            <FloatPill size="md" shape="text" className="wb-hm-year-mid"
+                       onClick={() => setPick((p) => !p)}
                        data-testid="hm-year">{year} · {yearSessions} 场</FloatPill>
             {pick && (
               <div className="wb-hm-year-menu" data-testid="hm-year-menu">
@@ -120,7 +122,8 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
               </div>
             )}
           </div>
-          <FloatPill size="sm" shape="icon" onClick={() => setYear((y) => y + 1)}
+          <FloatPill size="sm" shape="text" className="wb-hm-year-btn"
+                     onClick={() => setYear((y) => y + 1)}
                      disabled={year >= maxYear} aria-label="下一年"
                      data-testid="hm-next"><ChevronRight size={14} strokeWidth={2} /></FloatPill>
         </div>

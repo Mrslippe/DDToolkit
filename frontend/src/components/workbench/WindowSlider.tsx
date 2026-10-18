@@ -153,9 +153,13 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     <div className="wb-zoom">
       <div className="wb-grades">
         <span>窗口</span>
+        {/* 2026-10-19 用户口径：区间里的场次不够这个档位时**变灰且不可选**，
+            不再"静默取满"—— 否则 10 场的区间也能点 75，看到的窗口大小是骗人的 */}
         {grades.map((g) => (
           <button key={g} type="button"
                   className={`wb-grade${g === size ? ' on' : ''}`}
+                  disabled={total < g}
+                  title={total < g ? `当前区间只有 ${total} 场` : undefined}
                   onClick={() => {
                     setSize(Math.min(g, total))
                     setStart((s) => Math.min(s, Math.max(0, total - Math.min(g, total))))
