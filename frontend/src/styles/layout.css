@@ -1373,6 +1373,9 @@ html[data-group-badge='off'] .vtuber-emblem {
   right: 0;
   height: 50%;
   background: #fff;
+  /* 两块面板显式分层：`::after` 默认画在 `::before` 之上，
+     合上时下半块会压住上半块的阴影 —— 看起来像"下层盖住上层"。 */
+  z-index: 1;
 }
 
 .view-curtain::before {
@@ -1416,6 +1419,7 @@ html[data-group-badge='off'] .vtuber-emblem {
 /* 目标界面的图标：渐显，比转圈更"像那个界面" */
 .view-curtain .curtain-icon {
   position: absolute;
+  z-index: 2;                    /* 图标必须盖在面板之上，否则闭幕时看不见 */
   left: 50%;
   top: 50%;
   display: grid;
@@ -1431,6 +1435,7 @@ html[data-group-badge='off'] .vtuber-emblem {
 
 .view-curtain .curtain-spin {
   position: absolute;
+  z-index: 2;
   left: 50%;
   top: 50%;
   width: 22px;

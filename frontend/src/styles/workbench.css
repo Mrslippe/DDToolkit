@@ -758,7 +758,8 @@
 .wb-zoom-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 4px;
+  /* 左右各留 7px：窗口拖到轨道两端时，跨在边缘的手柄仍有容身之处 */
+  padding: 0 7px 4px;
 }
 
 .wb-zoom-scroll::-webkit-scrollbar { height: 6px; }
@@ -820,8 +821,8 @@
 
 /* 手柄**贴在窗口内侧**（2026-10-18 用户：拖动时不要超出外层时间窗口）。
    原来用 `-6px` 让手柄探出窗口外 —— 窗口贴到轨道最左/最右时，手柄就跑到轨道外面去了。 */
-.wb-win .h.l { left: 0; cursor: ew-resize; }
-.wb-win .h.r { right: 0; cursor: ew-resize; }
+.wb-win .h.l { left: -6px; cursor: ew-resize; }
+.wb-win .h.r { right: -6px; cursor: ew-resize; }
 
 .wb-win .grip {
   position: absolute;

@@ -107,21 +107,25 @@ def _db_vtubers(db: object) -> list[VtuberRef]:
 
         from app.models.vtuber import Account, VTuber
 
+        # ⚠️ **按 V 去重，只留主账号**（2026-10-18 用户：恬豆发芽了有两个 B 站账号，
+        # 下拉里就出现两项）。"主账号"取粉丝数最多的那个；同粉丝数按 id 稳定。
         rows = db.execute(  # type: ignore[attr-defined]
             select(VTuber.id, VTuber.name, Account.platform_uid)
             .join(Account, Account.vtuber_id == VTuber.id)
             .where(Account.platform == "bilibili")
-            .order_by(VTuber.id)
+            .order_by(VTuber.id, Account.followers_count.desc(), Account.id)
         ).all()
     except Exception:  # noqa: BLE001 —— 没库/表不存在都按"没有"处理
         return []
 
     out: list[VtuberRef] = []
     seen: set[str] = set()
-    for _vid, name, uid in rows:
+    seen_v: set[int] = set()      # 一个 V 只出一条（主账号）
+    for vid, name, uid in rows:
         mid = str(uid or "")
-        if not mid or mid in seen:
+        if not mid or int(vid) in seen_v or mid in seen:
             continue
+        seen_v.add(int(vid))
         seen.add(mid)
         out.append(VtuberRef(str(name), subdir_for(mid), mid, str(name)))
     return out
