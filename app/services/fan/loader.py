@@ -41,7 +41,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Sequence, Callable, Iterable
 
 from app.core import config as _core_config
 from app.core.config import settings
@@ -342,6 +342,7 @@ def load_window(
     keep: "Callable[[int, int], bool] | None" = None,
     since: str | None = None,
     until: str | None = None,
+    live_ids: "Sequence[str] | None" = None,
 ) -> Window:
     """加载最近 `n` 场的窗口。
 
@@ -397,8 +398,21 @@ def load_window(
                 f"（数据里共有 {before} 场）"
             )
 
+    # ★ **显式场次清单优先**（2026-10-19）：给了 `live_ids` 就只取这几场，且**不做 [-n:] 截断**
+    # —— 清单本身就是窗口，再截一次会把用户选的场次截掉。这样"滑杆窗口 / 采集对象 /
+    # 分析样本"三者是同一批场次，不再是三套口径。
+    if live_ids is not None:
+        wanted = {str(x) for x in live_ids}
+        before = len(entries)
+        entries = [kv for kv in entries if str(kv[0]) in wanted]
+        missing = wanted - {str(kv[0]) for kv in entries}
+        if missing:
+            warnings.append(f"{len(missing)} 场在数据目录里找不到（清单 {len(wanted)} 场）")
+        if not entries and before:
+            warnings.append("清单里的场次都没有 stats 文件")
+
     entries.sort(key=lambda kv: str(kv[1].get("start_at") or ""))
-    if len(entries) > n:
+    if live_ids is None and len(entries) > n:
         entries = entries[-n:]
 
     # 2) 入选判定（规格 §2.4：只认内部判据）

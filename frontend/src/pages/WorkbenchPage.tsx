@@ -150,7 +150,11 @@ export default function WorkbenchPage() {
     setBusy(true)
     try {
       setRanked(await withNetRetry(
-        () => api.fanRanked(picked, 'strength', { since, until, limit: LIMIT })))
+        () => api.fanRanked(picked, 'strength', {
+          since, until, limit: LIMIT,
+          // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
+          ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
+        })))
       setErr(null)
     } catch (e) {
       setErr(friendly(e as Error))
@@ -158,7 +162,7 @@ export default function WorkbenchPage() {
     } finally {
       setBusy(false)
     }
-  }, [picked, since, until])
+  }, [picked, since, until, slice])
 
   const startCollect = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return
@@ -333,7 +337,33 @@ export default function WorkbenchPage() {
               </p>
             </div>
           ) : ranked ? (
-            <ResultCharts items={ranked.items} />
+            <>
+              <div className="wb-card-head">
+                <h2 className="wb-card-title">
+                  分析结果
+                  <span className="wb-card-note" style={{ marginLeft: 8 }}>
+                    {ranked.requested_sessions && ranked.requested_sessions !== ranked.sessions
+                      ? `窗口 ${ranked.requested_sessions} 场 · 实际计入 ${ranked.sessions} 场`
+                      : `${ranked.sessions} 场`}
+                    · 入池 {ranked.total_in_pool.toLocaleString()} 人
+                    · 本次名单 {ranked.items.length} 人
+                  </span>
+                </h2>
+              </div>
+              {/* 被跳过的场次：让"静默丢样本"可见（记录过少 / 无入场事件 / 缺 raw） */}
+              {(ranked.warnings?.length ?? 0) > 0 && (
+                <div className="wb-skipped" data-testid="ranked-warnings">
+                  <b>有 {ranked.warnings!.length} 场没进样本：</b>
+                  {ranked.warnings!.slice(0, 3).map((w, i) => (
+                    <span className="wb-skipped-item" key={i}>{w}</span>
+                  ))}
+                  {ranked.warnings!.length > 3 && (
+                    <span className="wb-skipped-item">…另有 {ranked.warnings!.length - 3} 条</span>
+                  )}
+                </div>
+              )}
+              <ResultCharts items={ranked.items} />
+            </>
           ) : (
             <div className="wb-empty wb-flow" data-testid="result-empty">
               <p className="wb-flow-title">还没有结果</p>

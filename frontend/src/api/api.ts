@@ -1087,12 +1087,15 @@ export const api = {
       `/fan/collect/cancel?vtuber=${encodeURIComponent(name)}`, { method: 'POST' }),
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
   fanRanked: (name: string, by: 'strength' | 'retention' | 'income',
-              opts?: { since?: string; until?: string; window?: number; limit?: number }) => {
+              opts?: { since?: string; until?: string; window?: number; limit?: number;
+                        ids?: string[] }) => {
     const q = new URLSearchParams({ by })
     if (opts?.since) q.set('since', opts.since)
     if (opts?.until) q.set('until', opts.until)
     if (opts?.window) q.set('window', String(opts.window))
     if (opts?.limit) q.set('limit', String(opts.limit))
+    // 窗口的场次清单：后端据此只算这几场（与采集、计数同一批人）
+    if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
     return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)
   },
 

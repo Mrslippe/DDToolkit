@@ -1109,3 +1109,18 @@
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
+
+/* 被跳过的场次（让"静默丢样本"变得可见） */
+.wb-skipped {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin: 2px 0 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--pcard-radius-inner);
+  background: var(--c-bg-list);
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}

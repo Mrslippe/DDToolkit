@@ -1610,4 +1610,8 @@ export interface FanRanked {
   total_in_pool: number
   count: number
   items: FanRankedRow[]
+  /** 窗口请求的场次数（滑杆选的） */
+  requested_sessions?: number
+  /** 被跳过的场次及原因（记录过少 / 无入场事件 / 缺 raw） */
+  warnings?: string[]
 }

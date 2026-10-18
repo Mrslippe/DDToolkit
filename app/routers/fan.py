@@ -157,16 +157,18 @@ def _range_or_none(since: str | None, until: str | None) -> tuple[str | None, st
 
 # ── 数据计算 ────────────────────────────────────────────────────────────────
 def _compute(vtuber_name: str, window: int, since: str | None = None,
-             until: str | None = None) -> dict[str, Any]:
+             until: str | None = None,
+             live_ids: list[str] | None = None) -> dict[str, Any]:
     """加载并算出三轴 + 强度 + 类型 + 标签。按 `(主播, 窗口, 区间)` 记忆化。"""
     v = _resolve(vtuber_name, _LAST_DB.get("db"))
-    key = (v.subdir, window, since, until)
+    #: 清单进缓存键：同一区间但不同窗口切片是不同的分析（用元组，可哈希）
+    key = (v.subdir, window, since, until, tuple(sorted(live_ids)) if live_ids else None)
     hit = _CACHE.get(key)
     if hit is not None:
         return hit
 
     try:
-        win = load_window(v, window, since=since, until=until)
+        win = load_window(v, window, since=since, until=until, live_ids=live_ids)
     except FanDataNotFound as exc:
         raise HTTPException(
             404,
@@ -411,9 +413,14 @@ def ranked(
     since: str | None = Query(None, description="YYYY-MM-DD"),
     until: str | None = Query(None, description="YYYY-MM-DD"),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    ids: str | None = Query(None, description="窗口的场次清单（逗号分隔的 live_id）；给了就只算这几场"),
     _: None = Depends(require_module),
 ) -> dict[str, Any]:
-    """名单。`by` 是**必填**的 —— 不提供默认口径。"""
+    """名单。`by` 是**必填**的 —— 不提供默认口径。
+
+    `ids` = 界面上那个窗口的场次清单：给了就**只算这几场**，不再按"区间内最后 N 场"取
+    —— 否则"滑杆窗口 / 采集对象 / 分析样本"会是三套口径（2026-10-19 用户要求全做）。
+    """
     if not by:
         raise HTTPException(
             400,
@@ -425,7 +432,8 @@ def ranked(
         raise HTTPException(400, f"未知排序口径 {by!r}；可选：{' / '.join(SORT_BY)}")
 
     since, until = _range_or_none(since, until)
-    payload = _compute(vtuber, window, since, until)
+    wanted = [x for x in (ids or "").split(",") if x]
+    payload = _compute(vtuber, window, since, until, live_ids=wanted or None)
     order = rank(payload["table"], _primary(payload, by))
 
     table, tags, labels, win = (payload["table"], payload["tags"],
@@ -447,6 +455,10 @@ def ranked(
 
     return {
         "vtuber": table.vtuber, "window": window, "sessions": win.n,
+        #: 窗口**请求**的场次数（滑杆选的）与实际**计入**的场次数（过了质量判据的）
+        "requested_sessions": len(wanted) if wanted else window,
+        #: `load_window` 跳过了哪些场、为什么 —— 之前只写进日志，界面上看不到
+        "warnings": list(win.warnings),
         "since": since, "until": until, "by": by,
         "purity_threshold": PURITY_THRESHOLD,
         "total_in_pool": len(table), "count": len(rows), "items": rows,
