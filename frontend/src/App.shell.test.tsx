@@ -93,6 +93,16 @@ describe('壳层 · 工作台不共用主播左栏', () => {
     expect(has('posts')).toBe(true)
   })
 
+  it('切界面时盖一层揭幕幕布（覆盖整个工作区，含左栏）', async () => {
+    // 用户口径：从左工具栏换页要像启动那样揭幕。
+    // 只给 `.app-main` 加动效不够 —— 左栏从 display:none 切回时要重新测量，
+    // 那块空白在内容区之外，必须由盖住整个 .app-body 的幕布遮掉。
+    await mount('/')
+    expect(document.querySelector('.view-curtain')).not.toBeNull()
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)) })
+    expect(document.querySelector('.view-curtain')).toBeNull()   // 260ms 后自动撤掉
+  })
+
   it('工作台下面再深的路径也算工作台（前缀判定）', async () => {
     await mount('/workbench/anything')
     expect(document.querySelector('.app-body')?.getAttribute('data-bare')).toBe('1')

@@ -19,6 +19,9 @@ import { useGroupBadge } from './utils/groupBadgePref'
 import './styles/layout.css'
 import './styles/status-island.css'
 
+/** 揭幕幕布的时长（ms）。与 CSS 的 `.view-curtain` 动画时长必须一致。 */
+const CURTAIN_MS = 260
+
 /**
  * 应用壳布局（参照设计稿 Frame1672）：
  * 顶栏常驻；左起依次为工具图标栏、VTuber 列表栏（均常驻）；
@@ -31,7 +34,16 @@ export default function App() {
   /* 哪些路由**不共用**主播左栏（目前只有工作台）。 */
   const { pathname } = useLocation()
   const bareShell = pathname.startsWith('/workbench')
-  /* 切界面时重播一次揭幕（与启动同一套 `rise-in-page`）：从左工具栏换页不再是硬切 */
+  /* 切界面时**盖一层幕布再揭开**（2026-10-18 用户：从左工具栏换页要像启动那样揭幕）。
+     ⚠️ 光给 `.app-main` 加动效不够：左栏从 `display:none` 切回时会重新测量，
+     测量期间渲染不出条目 —— 那块空白**在内容区之外**，必须由覆盖整块的幕布盖住。 */
+  const [reveal, setReveal] = useState(false)
+  useEffect(() => {
+    setReveal(true)
+    const t = window.setTimeout(() => setReveal(false), CURTAIN_MS)
+    return () => window.clearTimeout(t)
+  }, [pathname])
+
   const mainRef = useRef<HTMLElement>(null)
   useEffect(() => {
     const el = mainRef.current
@@ -132,7 +144,8 @@ export default function App() {
               条件渲染会把它卸载 → 再进来要重新拉列表 = 那片空白。所以改成 CSS 隐藏，
               组件与数据都留着，切回来立即有内容。 */}
           <VtuberSidebar />
-          <main className="app-main">
+          {reveal && <div className="view-curtain" key={pathname} aria-hidden />}
+          <main className="app-main" ref={mainRef}>
             <Routes>
               <Route path="/" element={<EmptyState />} />
               <Route path="/vtubers/:id" element={<PostsPage />} />
