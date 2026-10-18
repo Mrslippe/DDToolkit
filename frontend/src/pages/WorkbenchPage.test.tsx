@@ -153,10 +153,11 @@ describe('数据分析工作台', () => {
 
   it('启用后渲染主播选择器与窗口读数，并显示后端的预估', async () => {
     await mount()
-    const sel = q<HTMLSelectElement>('[data-testid="workbench-vtuber"]')
+    // 主播切换器已换成项目自己的 Radix 下拉（`ui/select`），不再是原生 <select>：
+    // 断言"触发器存在 + 显示的是选中的那个 V"就够，选项列表在点开后才挂载。
+    const sel = q<HTMLElement>('[data-testid="workbench-vtuber"]')
     expect(sel).not.toBeNull()
-    expect(sel!.options.length).toBe(2)
-    expect(sel!.value).toBe('弥月Mizuki')     // 优先选已有数据的那个
+    expect(sel!.textContent).toContain('弥月')   // 优先选已有数据的那个
     // 滑杆把窗口报上来之后，结果区才出读数（V3/V4/V5 之后不再是日期输入框）
     const preview = q('[data-testid="workbench-preview"]')!
     expect(preview.textContent).toContain('窗口场次')

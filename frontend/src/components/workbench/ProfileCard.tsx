@@ -4,6 +4,13 @@ import type { FanProfile } from '../../api/types'
 import { resolveAvatarSources } from '../../utils/avatarSource'
 import { withNetRetry } from '../../utils/netRetry'
 import ProxyImage from '../common/ProxyImage'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../ui/select'
 
 interface VOption {
   name: string
@@ -103,16 +110,24 @@ export default function ProfileCard({ name, options = [], onPick }: Props) {
           <div className="wb-profile-id">
             {/* 主播切换器就长在名字上：不给它单独一行，也不藏进别处 */}
             {options.length > 1 && onPick ? (
-              <select className="wb-name-select" value={name} title={v.name}
-                      aria-label="切换主播"
-                      onChange={(e) => onPick(e.target.value)}
-                      data-testid="workbench-vtuber">
-                {options.map((o) => (
-                  <option key={o.name} value={o.name}>
-                    {o.short}{o.has_data ? '' : '（无数据）'}
-                  </option>
-                ))}
-              </select>
+              /* 用项目自己的下拉（Radix `ui/select`，与账号选择器同一套）——
+                 原生 `<select>` 的选项列表由系统绘制，改不动样式，与整体风格不统一。 */
+              <Select value={name} onValueChange={onPick}>
+                <SelectTrigger
+                  className="wb-name-trigger"
+                  aria-label="切换主播"
+                  title={v.name}
+                  data-testid="workbench-vtuber">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="wb-name-menu">
+                  {options.map((o) => (
+                    <SelectItem key={o.name} value={o.name}>
+                      {o.short}{o.has_data ? '' : '（无数据）'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             ) : (
               <h1 className="wb-profile-name" title={v.name}>{v.name}</h1>
             )}

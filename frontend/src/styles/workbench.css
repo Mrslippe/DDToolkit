@@ -853,32 +853,40 @@
 }
 
 
-/* 主播切换器：长在档案卡的名字位置上（用户：切换按钮应该放在档案卡中） */
-.wb-name-select {
-  max-width: 100%;
-  padding: 0 22px 0 0;
+/* 主播切换器（2026-10-18）：用项目自己的 Radix 下拉，长在名字的位置上。
+   `ui/select` 默认是 Pill 尺寸的表单控件，这里把它**降级成一个文字按钮**：
+   去掉边框/底色，字号跟随名字；右侧的小三角与菜单项样式统一由 `.wb-name-menu` 定。 */
+.wb-name-trigger {
+  height: auto;
+  padding: 0 20px 0 0;
   border: 0;
   background: transparent;
+  box-shadow: none;
   font-size: clamp(18px, 1.6vw, 23px);
   font-weight: 700;
   letter-spacing: 0.5px;
   color: #2f3a46;
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  appearance: none;
-  text-overflow: ellipsis;
-  /* 右侧小三角：用背景画，省一个 DOM 节点 */
-  background-image: linear-gradient(45deg, transparent 50%, #6b7c8f 50%),
-                    linear-gradient(135deg, #6b7c8f 50%, transparent 50%);
-  background-position: calc(100% - 10px) 55%, calc(100% - 5px) 55%;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
+  gap: 2px;
 }
 
-.wb-name-select:focus-visible {
+.wb-name-trigger:hover {
+  background: transparent;
+  color: var(--c-primary-deep);
+}
+
+.wb-name-trigger:focus-visible {
   box-shadow: var(--focus-ring-inset);
   border-radius: 6px;
+}
+
+.wb-name-trigger [data-slot='select-value'] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-name-menu {
+  min-width: 200px;
 }
 
 /* 错误卡：一句话 + 一枚「重试」（用户：没有给出重试按钮） */
