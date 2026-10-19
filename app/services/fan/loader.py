@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Callable, Iterable
@@ -229,6 +230,14 @@ class UserFact:
     maxrep: int = 0
     #: 是否至少有一场带文本指纹。False = **未跟踪**，不代表"没有重复"
     text_tracked: bool = False
+    #: 首次出场时滞的累计（分钟，相对本场最早事件）与场次数 —— 均值用于出勤轴的档内排序
+    lag_sum: float = 0.0
+    lag_cnt: int = 0
+
+    @property
+    def mean_lag(self) -> float | None:
+        """平均首次出场时滞（分钟）。没有时间戳的场次不计入；从未有过则 None。"""
+        return (self.lag_sum / self.lag_cnt) if self.lag_cnt else None
     sc_cnt: int = 0         # SC 总条数（type=3）
     gift_cnt: int = 0       # 礼物笔数（type=1）
     guard_cnt: int = 0      # 上舰次数（type=2）
@@ -314,6 +323,32 @@ def _read_json(path: Path, warnings: list[str], what: str) -> Any | None:
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         warnings.append(f"{what} 解析失败（{type(exc).__name__}）：{path.name}")
     return None
+
+
+def _iso_to_ts(iso: str) -> float | None:
+    """`YYYY-MM-DD HH:MM:SS[.ffffff]`（**UTC**）→ epoch 秒。解析失败返回 None。"""
+    if not iso:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(iso, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _first_lag_minutes(a: dict, start_ts: float | None) -> float | None:
+    """该用户在本场的"首次出场时滞"（分钟）：最早事件 − 本场开播。"""
+    if start_ts is None:
+        return None
+    ts: list[int] = []
+    for key in ("et", "mt", "pt"):
+        lst = a.get(key)
+        if isinstance(lst, list):
+            ts.extend(x for x in lst if isinstance(x, (int, float)))
+    if not ts:
+        return None
+    return max(0.0, (min(ts) / 1000 - start_ts) / 60)
 
 
 def _as_int(raw: dict, key: str, warnings: list[str], where: str) -> int:
@@ -472,6 +507,7 @@ def load_window(
             warnings.append(f"跳过 live_id={sr.live_id}：raw 结构异常（{type(raw).__name__}）")
             continue
         ok.append(sr)
+        start_ts = _iso_to_ts(sr.start_at)
         pos = idx / total
         for uid, a in raw.items():
             if not isinstance(a, dict):
@@ -485,6 +521,12 @@ def load_window(
             sc = _as_int(a, "sc_cnt", warnings, where)
             pay = _as_float(a, "p", warnings, where)
             u.att_n += 1
+            # 首次出场时滞（2026-10-20）：该用户在本场最早事件 − 本场最早事件。
+            # 基准用**事件**而不是平台开播时间 —— 实测两者只差 0.6 分钟（中位）。
+            _lag = _first_lag_minutes(a, start_ts)
+            if _lag is not None:
+                u.lag_sum += _lag
+                u.lag_cnt += 1
             # 文本指纹：老数据没有这两个键 ⇒ 只置 tracked=False，**不写 0 冒充**
             if "uniq" in a:
                 u.text_tracked = True

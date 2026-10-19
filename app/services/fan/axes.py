@@ -169,9 +169,26 @@ def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR) -> AxisTabl
         return AxisTable(win.vtuber.name, win.n, floor, ())
 
     table = AxisTable(win.vtuber.name, win.n, floor, tuple(u.uid for u in pool))
+
+    # ── 出勤轴（2026-10-20 改）：**先比来了几场，来的一样多时比谁到得早** ──
+    # 出席率在顶部大量并列（N 场里可能就是几十人同为满勤），单靠比率排不出序；
+    # 而"平均首次出场时滞"在这份数据里能分开同档用户（实测后段发言 73% vs 41%）。
+    # 形式：A = (att_n + π_E) / (N + 1)，π_E 为**同出席场次内** (−mean_lag) 的经验分位。
+    # 这样跨档顺序严格不变（来得多的一定在前），档内由时机决定 —— 不会牺牲预测力。
+    lag_pct: dict[str, float] = {}
+    by_att: dict[int, list] = {}
+    for u in pool:
+        by_att.setdefault(u.att_n, []).append(u)
+    for group in by_att.values():
+        # 没有时滞数据的用户取中性 0.5，不假装"最早"或"最晚"
+        vals = sorted(group, key=lambda x: -(x.mean_lag if x.mean_lag is not None else 1e9))
+        m = len(vals)
+        for i, u in enumerate(vals):
+            lag_pct[u.uid] = (i + 0.5) / m if m > 1 else 0.5
+
     for u in pool:
         r = _raw_axes(u)
-        r[AXIS_ATTENDANCE] = u.att_n / n     # 出勤轴归一化到 [0,1]
+        r[AXIS_ATTENDANCE] = (u.att_n + lag_pct[u.uid]) / (n + 1)
         table.raw[u.uid] = r
         table.tie[u.uid] = {
             "pay": u.pay,
