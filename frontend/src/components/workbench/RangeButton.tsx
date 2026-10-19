@@ -9,6 +9,10 @@ interface Props {
   /** 触发器上显示的文案。默认模式显示「2026 整年」，手选模式显示具体区间 */
   display?: string
   onConfirm: (r: { from: string; to: string }) => void
+  /** 恢复默认（区间重新跟随热力图年份） */
+  onReset?: () => void
+  /** 当前是否处于手选模式 —— 只有手选时才显示「恢复默认」 */
+  custom?: boolean
   disabled?: boolean
 }
 
@@ -22,7 +26,9 @@ interface Props {
  * - 触发器 = `FloatPill`（浮片族）；
  * - 日历本体 = `components/common/DateRangePicker`（草稿制，确认才提交）。
  */
-export default function RangeButton({ value, display, onConfirm, disabled }: Props) {
+export default function RangeButton({
+  value, display, onConfirm, onReset, custom, disabled,
+}: Props) {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -58,6 +64,9 @@ export default function RangeButton({ value, display, onConfirm, disabled }: Pro
               setOpen(false)
               if (r.from && r.to) onConfirm({ from: r.from, to: r.to })
             }}
+            onReset={custom && onReset
+              ? () => { setOpen(false); onReset() }
+              : undefined}
           />
         </div>
       )}

@@ -25,6 +25,9 @@ interface Props {
   onConfirm: (r: DateRange) => void
   /** 草稿变化（供外层在分组标题上回显**草稿**——弹窗是草稿域，标题跟着草稿走才不打架） */
   onDraftChange?: (r: DateRange) => void
+  /** 可选：在「确认」上方多给一个动作（工作台用来「恢复默认区间」） */
+  onReset?: () => void
+  resetLabel?: string
 }
 
 /**
@@ -46,7 +49,9 @@ interface Props {
  *
  * 日期算术全部在 `utils/dateRange.ts`（可脱离组件验证）。
  */
-export default function DateRangePicker({ value, onConfirm, onDraftChange }: Props) {
+export default function DateRangePicker({
+  value, onConfirm, onDraftChange, onReset, resetLabel = '恢复默认区间',
+}: Props) {
   const [draft, setDraft] = useState<DateRange>(value)
   const [hover, setHover] = useState('')
   const [left, setLeft] = useState<Date>(() => parseDate(value.from) ?? today())
@@ -204,6 +209,18 @@ export default function DateRangePicker({ value, onConfirm, onDraftChange }: Pro
             </button>
           ))}
         </div>
+        {/* 「恢复默认」放在**确认按钮上方**（2026-10-19 用户第 2 条）。
+            只在调用方给了 `onReset` 时出现，其它调用方（帖子筛选）不受影响。 */}
+        {onReset && (
+          <button
+            type="button"
+            className="drp-reset"
+            onClick={onReset}
+            title="恢复默认区间（重新跟随热力图年份）"
+          >
+            {resetLabel}
+          </button>
+        )}
         <button
           type="button"
           className="drp-confirm"

@@ -102,7 +102,9 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (enabled !== true || !picked) return
     let alive = true
-    setActivity(null)
+    /* ⚠️ 不要在这里 setActivity(null)（2026-10-19 用户问到"确认后界面重绘一次正常吗"）：
+       清空会让整块先闪成「读取直播记录…」再出内容。保留旧数据、拿到新的再替换，
+       观感是"原地更新"而不是"重绘"。 */
     setRanked(null)
     setProgress(null)
     setWin(null)
@@ -279,6 +281,8 @@ export default function WorkbenchPage() {
                     <RangeButton
                       value={range}
                       display={pickedRange ? `${pickedRange.from} ~ ${pickedRange.to}` : `${year} 整年`}
+                      custom={pickedRange !== null}
+                      onReset={() => setPickedRange(null)}
                       onConfirm={(r) => {
                         setPickedRange(r)
                         setCoverTick((t) => t + 1)     // 让滑杆把窗口覆盖到整段
