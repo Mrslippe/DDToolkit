@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.routers.settings import PREFS_PREFIX
+from app.core.timecn import sql_day
 from app.services.fan import (
     AXES,
     PURITY_THRESHOLD,
@@ -693,7 +694,7 @@ def fan_activity(
     days: dict[str, dict[str, int]] = {}
     for d, n in db.execute(
         text(
-            "select date(s.start_at) d, count(*) n "
+            f"select {sql_day('s.start_at')} d, count(*) n "
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
             "  and s.start_at is not null "
@@ -711,10 +712,10 @@ def fan_activity(
     span = ""
     params: dict[str, Any] = {"vid": row.id, "lim": limit}
     if since:
-        span += " and date(s.start_at) >= :since"
+        span += f" and {sql_day('s.start_at')} >= :since"
         params["since"] = since
     if until:
-        span += " and date(s.start_at) <= :until"
+        span += f" and {sql_day('s.start_at')} <= :until"
         params["until"] = until
     rows = db.execute(
         text(
@@ -754,7 +755,7 @@ def fan_activity(
     detail: dict[str, list[dict[str, Any]]] = {}
     for d, title, start_at, end_at, cnt, income, peak, area, parent in db.execute(
         text(
-            "select date(s.start_at) d, s.title, s.start_at, s.end_at, s.danmakus_count, "
+            f"select {sql_day('s.start_at')} d, s.title, s.start_at, s.end_at, s.danmakus_count, "
             "       s.total_income, s.max_online_count, s.area_name, s.parent_area_name "
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
@@ -830,7 +831,7 @@ def fan_profile(
     # 场次总数与首末日期（只算 B 站账号；跨平台场次不是一回事）
     row_data = db.execute(
         text(
-            "select count(*), min(date(s.start_at)), max(date(s.start_at)) "
+            f"select count(*), min({sql_day('s.start_at')}), max({sql_day('s.start_at')}) "
             "from live_sessions s join accounts a on a.id = s.account_id "
             "where a.vtuber_id = :vid and a.platform = 'bilibili' "
             "  and s.start_at is not null "

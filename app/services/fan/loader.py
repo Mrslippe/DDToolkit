@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Callable, Iterable
 
+from app.core.timecn import cn_day
 from app.core import config as _core_config
 from app.core.config import settings
 
@@ -393,10 +394,12 @@ def load_window(
     # 时间区间过滤（用户在工作台里选的）。闭区间，比较 start_at 的日期部分。
     if since or until:
         before = len(entries)
+        # ⚠️ 分天按**东八区**（2026-10-20）：直接用 `start_at[:10]` 取的是 UTC 日，
+        # 当地 00:00–08:00 开播的场次会落到前一天，于是"选 10-20 却少一场"。
         entries = [
             kv for kv in entries
-            if (not since or str(kv[1].get("start_at") or "")[:10] >= since)
-            and (not until or str(kv[1].get("start_at") or "")[:10] <= until)
+            if (not since or cn_day(str(kv[1].get("start_at") or "")) >= since)
+            and (not until or cn_day(str(kv[1].get("start_at") or "")) <= until)
         ]
         if not entries:
             warnings.append(
