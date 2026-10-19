@@ -73,6 +73,9 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   const suppress = useRef(false)
 
   const step = Math.max(3, Math.round((BAR + GAP) * scale))
+  /** 给 `clamp` 用的最新 step —— 缩放后 step 变了，若读旧值就会夹错 */
+  const stepRef = useRef(step)
+  stepRef.current = step
   const barW = Math.max(2, step - GAP)
   const maxN = Math.max(1, ...sessions.map((s) => s.n))
 
@@ -80,18 +83,19 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   const clamp = useCallback(() => {
     const el = scrollRef.current
     if (!el || suppress.current) return
-    const firstVisible = Math.ceil((el.scrollLeft - 2) / step)
-    const lastVisible = Math.floor((el.scrollLeft + el.clientWidth - 4) / step)
-    const maxStart = lastVisible - size + 1
-    setStart((prev) => {
-      const next = maxStart >= firstVisible
-        ? Math.max(firstVisible, Math.min(prev, maxStart))
-        : firstVisible
-      return clampNum(next, 0, Math.max(0, total - size))
-    })
-  }, [size, step, total])
+    const st = stepRef.current
+    /* 两端取整要**对称**（2026-10-19 用户：左端顶不到最左、右端又超出最右）：
+       起点用 floor(x + 0.5) 四舍五入到最近一场，终点用 floor —— 早先用 ceil 会让
+       `scrollLeft = 0` 时的 first 变成 0 以外的值，左端就差那么一格。 */
+    const first = Math.round((el.scrollLeft - 2) / st)
+    const last = Math.floor((el.scrollLeft + el.clientWidth - 4) / st)
+    const lo = Math.max(0, first)
+    const hi = Math.max(lo, Math.min(total - size, last - size + 1))
+    setStart((prev) => clampNum(prev, lo, hi))
+  }, [size, total])
 
-  useLayoutEffect(() => { clamp() }, [clamp])
+  /* 滚动、换档、缩放都要重夹一次 —— 只用 scroll 事件会漏掉"缩放后视野变了"这种情况 */
+  useLayoutEffect(() => { clamp() }, [clamp, step])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -220,17 +224,23 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       const el = scrollRef.current
       if (!d || !el) return
       const dxPx = e.clientX - d.x0
-      // 平移：按像素直接移，锚在按下瞬间的 scrollLeft 上（不累积）
+      // 平移：把「光标在缩放条上走的距离」按比例映射到可滚范围（之前 1:1 ⇒ 显得慢）
+      const trackW = barRef.current?.clientWidth ?? 1
       if (d.mode === 'pan') {
         const innerW = total * d.step0 + 4
+        const range = Math.max(0, innerW - d.clientW)
         suppress.current = true
-        el.scrollLeft = clampNum(d.scroll0 + dxPx, 0, Math.max(0, innerW - d.clientW))
-        requestAnimationFrame(() => { suppress.current = false })
+        el.scrollLeft = clampNum(d.scroll0 + dxPx * (range / trackW), 0, range)
+        requestAnimationFrame(() => {
+          suppress.current = false
+          clamp()                      // 平移完也要把窗口夹进视野（2026-10-19 用户第 2 条）
+        })
         return
       }
-      // 缩放：可见场次数量随拖动量变化
-      const span0 = d.clientW / d.step0                       // 当前可见多少场（连续）
-      const spanNext = clampNum(span0 - (dxPx / d.clientW) * span0 * 0.9, 4, total)
+      // 缩放：拖动距离按**轨道宽度**映射到场次数 —— 与当前缩放级别无关，速度才恒定。
+      // 旧写法按 span0 的比例算，放大后每像素跨度变化剧烈 ⇒ 太快（2026-10-19 用户第 3 条）。
+      const span0 = d.clientW / d.step0
+      const spanNext = clampNum(span0 - (dxPx / trackW) * total, 4, total)
       const stepNext = clampNum(d.clientW / spanNext, 3, 400)
       const scaleNext = clampNum(stepNext / (BAR + GAP), SCALE_MIN, SCALE_MAX)
       // 锚点序号（按下瞬间）
@@ -248,7 +258,10 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
           ? clampNum(leftIdx * step2, 0, Math.max(0, innerW2 - el2.clientWidth))
           // 拖左端：右端不动
           : clampNum(rightIdx * step2 - el2.clientWidth, 0, Math.max(0, innerW2 - el2.clientWidth))
-        requestAnimationFrame(() => { suppress.current = false })
+        requestAnimationFrame(() => {
+          suppress.current = false
+          clamp()
+        })
       })
     }
     const up = () => { barDrag.current = null; suppress.current = false }
@@ -258,7 +271,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
     }
-  }, [total])
+  }, [total, clamp])
 
   /* 选中区的位置与宽度（在**轨内**夹一次，把手就不会探出轨道） */
   const bandStyle = (() => {
