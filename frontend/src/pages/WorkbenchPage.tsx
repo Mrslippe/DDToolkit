@@ -67,6 +67,8 @@ export default function WorkbenchPage() {
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
   const [progress, setProgress] = useState<FanCollectProgress | null>(null)
   const [ranked, setRanked] = useState<FanRanked | null>(null)
+  /** 换区间后旧结果已不一定对应当前窗口 —— **保留但标灰**，而不是清空（用户 2026-10-19 选 a） */
+  const [rankedStale, setRankedStale] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   /** 采集结束后的结果弹窗（done / failed / cancelled）；null = 不显示 */
@@ -105,9 +107,11 @@ export default function WorkbenchPage() {
     /* ⚠️ 不要在这里 setActivity(null)（2026-10-19 用户问到"确认后界面重绘一次正常吗"）：
        清空会让整块先闪成「读取直播记录…」再出内容。保留旧数据、拿到新的再替换，
        观感是"原地更新"而不是"重绘"。 */
-    setRanked(null)
+    /* ⚠️ A1（2026-10-19）：**不要 setWin(null)**。
+       一清空统计条就整行消失、等新数据回来又出现 —— 用户说的"刷新"就是这个。
+       保留旧窗口值；新 `recent` 到达后滑杆会重新 emit 一次，自然替换。 */
     setProgress(null)
-    setWin(null)
+    setRankedStale(true)          // 旧结果保留，但标注"基于旧区间"
     withNetRetry(() => api.fanActivity(picked, 400, { since: range.from, until: range.to }))
       .then((r) => { if (alive) setActivity(r) })
       .catch((e: Error) => { if (alive) setErr(friendly(e)) })
@@ -119,13 +123,17 @@ export default function WorkbenchPage() {
   const since = win?.since ?? ''
   const until = win?.until ?? ''
 
+  /* A4（2026-10-19）：**200ms 防抖** + 请求期间保留旧 preview。
+     换区间/拖滑杆会连续改 since/until，不防抖就是一串请求、每次都可能把数字刷成 —。 */
   useEffect(() => {
     if (enabled !== true || !picked || !since || !until) return
     let alive = true
-    withNetRetry(() => api.fanSessions(picked, since, until))
-      .then((r) => { if (alive) setPreview(r) })
-      .catch((e: Error) => { if (alive) setErr(friendly(e)) })
-    return () => { alive = false }
+    const timer = window.setTimeout(() => {
+      withNetRetry(() => api.fanSessions(picked, since, until))
+        .then((r) => { if (alive) setPreview(r) })
+        .catch((e: Error) => { if (alive) setErr(friendly(e)) })
+    }, 200)
+    return () => { alive = false; window.clearTimeout(timer) }
   }, [enabled, picked, since, until, retryTick])
 
   // 4) 采集进度轮询：只在 running 时开
@@ -161,6 +169,7 @@ export default function WorkbenchPage() {
     if (!picked || !since || !until) return
     setBusy(true)
     try {
+      setRankedStale(false)
       setRanked(await withNetRetry(
         () => api.fanRanked(picked, 'strength', {
           since, until, limit: LIMIT,
@@ -368,6 +377,12 @@ export default function WorkbenchPage() {
               <div className="wb-card-head">
                 <h2 className="wb-card-title">
                   分析结果
+                  {rankedStale && (
+                    /* A2：区间变了但结果还留着 —— 必须明确标注，否则会被当成当前区间的结果 */
+                    <span className="wb-stale" data-testid="ranked-stale">
+                      区间已改，以下结果基于旧区间
+                    </span>
+                  )}
                   <span className="wb-card-note" style={{ marginLeft: 8 }}>
                     {ranked.requested_sessions && ranked.requested_sessions !== ranked.sessions
                       ? `窗口 ${ranked.requested_sessions} 场 · 实际计入 ${ranked.sessions} 场`

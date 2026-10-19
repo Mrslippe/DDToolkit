@@ -1389,3 +1389,14 @@
   color: var(--c-primary-deep);
   border-color: rgba(201, 64, 111, 0.35);
 }
+
+/* 结果"基于旧区间"的标注（换区间后保留旧结果时用） */
+.wb-stale {
+  margin-left: 10px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #a16207;
+  font-size: 11px;
+  font-weight: 500;
+}

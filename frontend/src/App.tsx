@@ -43,13 +43,20 @@ export default function App() {
      ⚠️ 老实说：这是**按时间**分的段，不是"等数据真的回来"。要做成数据驱动，得让每个页面
      上报自己的首屏就绪 —— 那是另一件事，先按用户要的流程把节奏做出来。 */
   const [phase, setPhase] = useState<Phase>('idle')
+  /** 当前界面的键：`fan_workbench` / `posts`。用 ref 是因为 driver 只注册一次 */
+  const viewKeyRef = useRef<string>('posts')
+  viewKeyRef.current = pathname.startsWith('/workbench') ? 'fan_workbench' : 'posts'
   /* 协调器：工具栏请求切界面时，壳层先把幕布**合上**，合好之后再让导航发生 ——
      这样"界面变换"发生在幕布遮住的**加载中**那一段，而不是先换再遮（用户口径）。
      时序：不动 → 闭幕 180 → 图标 140 → 加载 200（此刻导航）→ 揭幕 260 → 完成 */
   useEffect(() => {
     let timers: number[] = []
-    setViewTransitionDriver((next) => {
+    setViewTransitionDriver((next, key) => {
       timers.forEach((x) => window.clearTimeout(x))
+      /* 目标界面与当前一致 ⇒ 不播幕布（2026-10-19 用户：点当前界面不应触发展开流程）。
+         调用点已各自判重，这里是兜底，防止将来别的入口忘了。
+         ⚠️ 读 `viewKeyRef` 而不是 `window.location` —— 后者在测试里（MemoryRouter）永远是 `/`。 */
+      if (key && key === viewKeyRef.current) { next(); return }
       setPhase('closing')
       timers = [
         window.setTimeout(() => setPhase('icon'), 180),

@@ -84,7 +84,18 @@ export default function IconRail() {
               data-testid="rail-posts"
               /* 单推时 `/` 没有内容（只有"选一个 V"的空态）⇒ 直接去单推那个 V，
                  免得点了被下面的重定向弹回来（看着像"按钮坏了"） */
-              onClick={() => requestViewChange(() => navigate(solo ? `/vtubers/${solo.id}` : '/'))}
+              /* 已经在帖子浏览区就**直接导航、不请求切换** —— 否则会白白播一遍揭幕
+                 （2026-10-19 用户：点当前界面的按钮不该触发切换动画）。
+                 ⚠️ 但不是"直接 return"：`/vtubers/5 → /` 仍是有效导航，只是**同一界面内**，
+                 不该有幕布。 */
+              onClick={() => {
+                const target = solo ? `/vtubers/${solo.id}` : '/'
+                if (location.pathname.startsWith('/workbench')) {
+                  requestViewChange(() => navigate(target), 'posts')
+                } else if (location.pathname !== target) {
+                  navigate(target)
+                }
+              }}
             >
               <FileText className="h-[18px] w-[14px]" />
             </button>
@@ -105,7 +116,11 @@ export default function IconRail() {
                   className={`icon-rail-btn${active ? ' active' : ''}`}
                   aria-label={m.label}
                   data-testid={`rail-module-${m.key}`}
-                  onClick={() => requestViewChange(() => navigate(m.route))}
+                  onClick={() => {
+                    // 已在目标界面 ⇒ 直接导航（同路由，等于什么都不做），不播幕布
+                    if (active) { navigate(m.route); return }
+                    requestViewChange(() => navigate(m.route), m.key)
+                  }}
                 >
                   <Icon className="h-[18px] w-[18px]" />
                 </button>

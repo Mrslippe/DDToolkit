@@ -12,7 +12,9 @@
  */
 
 type Next = () => void
-type Driver = (next: Next) => void
+/** 目标界面的键（`posts` / `workbench` …）—— driver 据此判断"是不是真的在换界面" */
+type ViewKey = string
+type Driver = (next: Next, key: ViewKey | undefined) => void
 
 let driver: Driver | null = null
 
@@ -21,8 +23,13 @@ export function setViewTransitionDriver(fn: Driver | null): void {
   driver = fn
 }
 
-/** 请求一次"带揭幕的界面切换"。`next` 里做真正的导航。 */
-export function requestViewChange(next: Next): void {
-  if (driver) driver(next)
+/**
+ * 请求一次「带揭幕的界面切换」。`next` 里做真正的导航。
+ *
+ * `key` = 目标界面的标识（`posts` / `workbench` …）。**壳层用它判重**：
+ * 目标与当前一致时不会播幕布（调用点也各自判了一次，这里是兜底）。
+ */
+export function requestViewChange(next: Next, key?: ViewKey): void {
+  if (driver) driver(next, key)
   else next()
 }

@@ -47,7 +47,8 @@ function Nav() {
   const nav = useNavigate()
   return (
     <>
-      <button data-testid="go-wb" onClick={() => requestViewChange(() => nav('/workbench'))}>wb</button>
+      <button data-testid="go-wb"
+              onClick={() => requestViewChange(() => nav('/workbench'), 'fan_workbench')}>wb</button>
       <button data-testid="go-v17" onClick={() => nav('/vtubers/17')}>v17</button>
     </>
   )
@@ -104,6 +105,18 @@ describe('壳层 · 工作台不共用主播左栏', () => {
     expect(has('sidebar')).toBe(true)
     expect(document.querySelector('.app-body')?.getAttribute('data-bare')).toBeNull()
     expect(has('posts')).toBe(true)
+  })
+
+  it('★ 已在某界面时，点该界面的入口**不播幕布**（2026-10-19）', async () => {
+    // 用户口径：在数据分析工作台界面点左侧工具栏的"工作台"按钮，不该再触发切换流程。
+    await mount('/workbench')
+    await act(async () => { await new Promise((r) => setTimeout(r, 60)) })
+    await act(async () => {
+      (document.querySelector('[data-testid="go-wb"]') as HTMLElement).click()
+    })
+    await act(async () => { await Promise.resolve() })
+    // 目标界面与当前一致 ⇒ 不播幕布
+    expect(document.querySelector('.view-curtain')).toBeNull()
   })
 
   it('★ 换界面才揭幕；同一界面里换 V 不揭幕', async () => {

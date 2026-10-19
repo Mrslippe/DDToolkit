@@ -169,6 +169,8 @@ describe('数据分析工作台', () => {
     // 区间按钮已移到「直播与采集」卡右下角那一行（2026-10-19 用户第 2 条），
     // 不在统计条里 —— 统计条只剩窗口场次/已有/待采。
     expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
+    // 预览请求有 200ms 防抖（2026-10-19 A4），等它触发
+    await act(async () => { await new Promise((r) => setTimeout(r, 260)) })
     expect(fanSessions).toHaveBeenCalled()
   })
 
