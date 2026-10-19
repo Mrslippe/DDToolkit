@@ -72,8 +72,8 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
   } | null>(null)
   const suppress = useRef(false)
   /** 视野里**能显示**多少场（随缩放 / 窗口宽度变化）。
-      ⚠️ 它只用来**收缩窗口**，不用来判断档位能不能点 ——
-      档位的可用性看 `total`（2026-10-19 用户两次澄清后定下的分工）。 */
+      它管两件事：① `size > viewCount` 时**把窗口收缩**；② 档位 `g > viewCount` 时**变灰**
+      （视野放不下，点了也会被缩回去，不如直接禁掉）。 */
   const [viewCount, setViewCount] = useState(total)
 
   /** **不取整**：取整会让缩放变成段落式 */
@@ -344,10 +344,17 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
         {grades.map((g) => (
           <button key={g} type="button"
                   className={`wb-grade${g === size ? ' on' : ''}`}
-                  /* 2026-10-19 用户口径（第二次）：档位能不能点**只看总时间范围内有多少场**
-                     （`total < g` ⇒ 变灰）。视野能显示多少与它无关。 */
-                  disabled={total < g}
-                  title={total < g ? `当前区间只有 ${total} 场` : undefined}
+                  /* 档位 = "用按钮直接把窗口调到这个大小"，所以它受**两个上限**制约
+                     （2026-10-19 用户最终口径）：
+                     - `total`   ：这段区间里总共就这么多场，不可能选出更多；
+                     - `viewCount`：视野里放不下这么多 —— 视野装不下时窗口会被自动收缩，
+                       所以按钮就该变灰，而不是点了又被缩回去。 */
+                  disabled={g > total || g > viewCount}
+                  title={
+                    g > total ? `当前区间只有 ${total} 场`
+                      : g > viewCount ? `当前视野只能显示 ${viewCount} 场（缩小可显示更多）`
+                        : undefined
+                  }
                   onClick={() => {
                     setSize(Math.min(g, total))
                     setStart((s) => Math.min(s, Math.max(0, total - Math.min(g, total))))
