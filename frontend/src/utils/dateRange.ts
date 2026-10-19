@@ -22,6 +22,8 @@ export const EMPTY_RANGE: DateRange = { from: '', to: '' }
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
 /** Date → 本地 `YYYY-MM-DD` */
+import { cnToday } from './cndate'
+
 export function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
@@ -35,8 +37,9 @@ export function parseDate(s: string): Date | null {
 
 /** 今天（本地零点；每次调用重取，跨零点自动跟随） */
 export function today(): Date {
-  const n = new Date()
-  return new Date(n.getFullYear(), n.getMonth(), n.getDate())
+  // "今天"按**东八区**（与后端分天一致），客户端时区不再影响默认区间
+  const [y, mo, dd] = cnToday().split('-').map(Number)
+  return new Date(y, mo - 1, dd)
 }
 
 /** 年月标识（判「两块面板是否同月」用） */

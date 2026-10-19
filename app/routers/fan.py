@@ -791,7 +791,7 @@ def fan_activity(
 
     return {
         "vtuber": v.name,
-        "today": date.today().isoformat(),
+        "today": datetime.now(CN_TZ).date().isoformat(),   # 业务时区的"今天"，与分天口径一致
         "years": sorted({int(k[:4]) for k in days}),
         "days": days,
         "recent": recent,

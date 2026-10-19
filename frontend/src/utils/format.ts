@@ -1,4 +1,5 @@
 import type { Post, PostBodyJson, PostStatsJson } from '../api/types'
+import { cnParts } from './cndate'
 
 /** `YYYY-MM-DD` 这种**纯日期**（没有时刻）的形态 —— 见 `formatDate` 的口径说明 */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -19,8 +20,9 @@ function localParts(iso: string | null | undefined):
   if (!iso) return null
   const t = new Date(iso)
   if (Number.isNaN(t.getTime())) return null
-  return { y: t.getFullYear(), mo: t.getMonth() + 1, d: t.getDate(),
-           h: t.getHours(), mi: t.getMinutes() }
+  /* 2026-10-20：**不再用本地 getter**。业务时区固定为东八区 —— 否则客户端换个时区，
+     同一场直播的日期就会跟后端（按东八区分天）对不上。见 utils/cndate.ts 的说明。 */
+  return cnParts(t.toISOString())
 }
 
 /** 时间戳 → 本地 `yyyy-MM-dd`（只要日期的地方用它，别 `formatDateTime(...).slice(0, 10)`） */

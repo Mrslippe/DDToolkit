@@ -11,7 +11,8 @@
  * - 一天的多个预约按时刻升序，格内只展示**最早那一条**（与场次口径一致：单场呈现 + 计数）。
  */
 import type { UpcomingReservation } from '../api/types'
-import { dayKeyIso, fmtTime } from '../components/live/liveCalendarFmt'
+import { fmtTime } from '../components/live/liveCalendarFmt'
+import { cnDay } from './cndate'
 
 /** 按天分组（键 = `dayKeyIso`，与场次分组同一口径，两边才能对上同一格） */
 export function groupReservationsByDay(
@@ -19,9 +20,8 @@ export function groupReservationsByDay(
 ): Map<string, UpcomingReservation[]> {
   const m = new Map<string, UpcomingReservation[]>()
   for (const r of list) {
-    const d = new Date(r.start_at)
-    if (Number.isNaN(d.getTime())) continue
-    const k = dayKeyIso(d)
+    const k = cnDay(r.start_at)      // 东八区日（与场次分组同一口径）
+    if (!k) continue
     const arr = m.get(k)
     if (arr) arr.push(r)
     else m.set(k, [r])
