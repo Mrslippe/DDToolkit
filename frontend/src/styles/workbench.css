@@ -1306,3 +1306,53 @@
   color: var(--c-primary-deep);
   border-color: rgba(201, 64, 111, 0.35);
 }
+
+/* ── 场次滑杆的缩放条（ECharts dataZoom 语义，2026-10-19）─────────────── */
+.wb-zoom-bar {
+  position: relative;
+  height: 14px;
+  margin-top: 6px;
+  border-radius: 99px;
+  background: rgba(214, 220, 226, 0.55);
+  cursor: pointer;
+}
+
+.wb-zoom-bar-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 99px;
+  background: rgba(201, 64, 111, 0.28);
+  border: 1px solid rgba(201, 64, 111, 0.45);
+  cursor: grab;
+}
+
+.wb-zoom-bar-band .h {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 5px;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  cursor: ew-resize;
+}
+
+.wb-zoom-bar-band .h.l { left: 1px; }
+.wb-zoom-bar-band .h.r { right: 1px; }
+
+/* 原生横滚条隐藏 —— 缩放条取代它 */
+.wb-zoom-scroll {
+  scrollbar-width: none;
+}
+
+.wb-zoom-scroll::-webkit-scrollbar {
+  height: 0;
+}
+
+.wb-zoom-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--c-text-sub);
+  opacity: 0.75;
+}

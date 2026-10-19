@@ -22,35 +22,52 @@ interface Props {
   onChange: (range: WindowRange) => void
 }
 
-/** 每根柱的宽度与间距（写死 ⇒ 轨道总宽可算，滚动条才有意义） */
+/** 每根柱的基准宽度与间距（缩放倍率乘在它上面） */
 const BAR = 6
 const GAP = 2
+/** 缩放倍率的上下限（1 = 基准密度） */
+const SCALE_MIN = 0.6
+const SCALE_MAX = 6
+
+function clampNum(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v))
+}
 
 /**
- * 场次窗口滑杆（V4，2026-10-18）。
+ * 场次窗口滑杆（V5，2026-10-19）。
  *
- * 用户口径三条，逐条落在下面：
- * ① **总量上限 150 场** —— 数据由后端 `?limit=150` 给定，这里不再超；
- * ② **下方横向滚动条** —— 轨内 `150 × 8 = 1200px`，比卡片宽，必须滚；
- * ③ **窗口只能停在可视区内** —— `clampToView()`：滚动条一动，窗口被边缘**推向反方向**。
- *    拖拽时也夹，所以永远不会有一半在视口外的窗口。
+ * ## 两件互不影响的事
+ * - **选中窗口**（25/50/75 场）：决定"分析哪几场"，拖两端手柄可改大小；
+ * - **可视范围**：决定"屏幕上能看见多少"，由**缩放倍率**控制。
  *
- * 视觉参考「数据视图 → 粉丝趋势卡」的 ECharts `dataZoom`：迷你序列 + 可拖窗口 + 两端手柄 +
- * 中央移动把手。**尺寸是它的一半**（2026-10-18 用户：「滑杆高度调整为原来的一半」）。
+ * ## 缩放（用户 2026-10-19 口径）
+ * - 滚轮 = **平移**（竖直滚动量转成横向位移）；
+ * - **Ctrl + 滚轮** = 缩放，锚点跟随光标（缩放前后光标下的那场不动）；
+ * - 下方那条**不是原生滚动条**，而是 ECharts dataZoom 式的缩放条：
+ *   拖中间 = 平移，拖两端 = 缩放。
+ *
+ * ⚠️ 为什么不直接改 `scrollLeft` 实现缩放：可视范围 = `clientWidth / 轨宽`，
+ * 而 `clientWidth` 是容器固定的 ⇒ 只能改**轨宽**（= 场次数 × 每场像素），
+ * 所以 `scale` 乘在每个场的像素上，与 dataZoom 同构。
  */
 export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange }: Props) {
   const total = sessions.length
   const maxGrade = grades[grades.length - 1]
   const [size, setSize] = useState(Math.min(maxGrade, total))
   const [start, setStart] = useState(Math.max(0, total - Math.min(maxGrade, total)))
+  /** 缩放倍率：每根柱的像素 = (BAR + GAP) × scale */
+  const [scale, setScale] = useState(1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ mode: 'move' | 'l' | 'r'; x: number; start: number } | null>(null)
+  const barDrag = useRef<{ mode: 'pan' | 'zoom-l' | 'zoom-r'; x: number; left: number; width: number } | null>(null)
 
-  const step = BAR + GAP
+  const step = Math.max(3, Math.round((BAR + GAP) * scale))
+  const barW = Math.max(2, step - GAP)
   const maxN = Math.max(1, ...sessions.map((s) => s.n))
 
-  /** 把窗口夹进可视区（滚动时被边缘推着走） */
+  /** 把窗口夹进可视区（滚动/缩放时被边缘推着走） */
   const clamp = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
@@ -61,11 +78,10 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       const next = maxStart >= firstVisible
         ? Math.max(firstVisible, Math.min(prev, maxStart))
         : firstVisible
-      return Math.max(0, Math.min(next, Math.max(0, total - size)))
+      return clampNum(next, 0, Math.max(0, total - size))
     })
   }, [size, step, total])
 
-  /* 尺寸变了（换档 / 窗口宽高变化）都要重新夹一次 */
   useLayoutEffect(() => { clamp() }, [clamp])
 
   useEffect(() => {
@@ -76,14 +92,13 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     return () => el.removeEventListener('scroll', onScroll)
   }, [clamp])
 
-  /* 把窗口居中到可视区（首次与换档时） */
+  /* 换档时把窗口居中 */
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const center = 2 + start * step + (size * step) / 2
     el.scrollLeft = Math.max(0, center - el.clientWidth / 2)
     clamp()
-    // 只在 size 变化时居中 —— 拖动时不抢滚动位置
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size])
 
@@ -96,6 +111,37 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     onChange({ start, size, since: a.at.slice(0, 10), until: b.at.slice(0, 10) })
   }, [start, size, sessions, total, onChange])
 
+  /* ── 滚轮：平移；Ctrl+滚轮：以光标为锚缩放 ─────────────────────────── */
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) {
+        // 平移：竖直滚动量转成横向位移（触控板与鼠标都顺手）
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+          el.scrollLeft += e.deltaY
+          e.preventDefault()
+        }
+        return
+      }
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const cursor = e.clientX - rect.left + el.scrollLeft      // 轨内坐标
+      const anchorIdx = cursor / step                            // 光标下的场次（连续值）
+      const next = clampNum(scale * (e.deltaY > 0 ? 0.88 : 1.12), SCALE_MIN, SCALE_MAX)
+      const nextStep = Math.max(3, Math.round((BAR + GAP) * next))
+      setScale(next)
+      // 缩放后把同一场挪回光标下
+      requestAnimationFrame(() => {
+        if (!scrollRef.current) return
+        scrollRef.current.scrollLeft = Math.max(0, anchorIdx * nextStep - (e.clientX - rect.left))
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [scale, step])
+
+  /* ── 选中窗口的拖拽 ───────────────────────────────────────────────── */
   const onPointerDown = (mode: 'move' | 'l' | 'r') => (e: React.PointerEvent) => {
     drag.current = { mode, x: e.clientX, start }
     e.preventDefault()
@@ -108,12 +154,12 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       if (!d) return
       if (d.mode === 'move') {
         const delta = Math.round((e.clientX - d.x) / step)
-        setStart(Math.max(0, Math.min(d.start + delta, Math.max(0, total - size))))
+        setStart(clampNum(d.start + delta, 0, Math.max(0, total - size)))
         return
       }
       const r = innerRef.current?.getBoundingClientRect()
       if (!r) return
-      const i = Math.max(0, Math.min(total - 1, Math.round((e.clientX - r.left - 2) / step)))
+      const i = clampNum(Math.round((e.clientX - r.left - 2) / step), 0, total - 1)
       const end = start + size - 1
       if (d.mode === 'l') {
         const ns = Math.min(i, end)
@@ -133,9 +179,61 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     }
   }, [size, start, step, total, maxGrade])
 
-  /* 选中区的位置与宽度**按轨道的实际宽度夹一次**（照抄 dataZoom 的结构：
-     选中区是轨道内的一段带，把手是带内两端的小竖条，谁也不许探出轨道）。
-     轨道宽 = total * step + 4（见下面的 inner style）。 */
+  /* ── 缩放条的拖拽：中间平移、两端缩放（ECharts dataZoom 语义）──────── */
+  const onBarDown = (mode: 'pan' | 'zoom-l' | 'zoom-r') => (e: React.PointerEvent) => {
+    const el = scrollRef.current
+    const track = barRef.current
+    if (!el || !track) return
+    const innerW = total * step + 4
+    barDrag.current = {
+      mode, x: e.clientX,
+      left: el.scrollLeft / innerW,
+      width: el.clientWidth / innerW,
+    }
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const d = barDrag.current
+      const el = scrollRef.current
+      const track = barRef.current
+      if (!d || !el || !track) return
+      const trackW = track.clientWidth || 1
+      const dx = (e.clientX - d.x) / trackW          // 以"轨道比例"为单位
+      if (d.mode === 'pan') {
+        const innerW = total * step + 4
+        el.scrollLeft = clampNum((d.left + dx) * innerW, 0, Math.max(0, innerW - el.clientWidth))
+        return
+      }
+      // 缩放：把可视宽度按拖动量改变，再换算成 scale
+      const nextSpan = clampNum(
+        d.mode === 'zoom-l' ? d.width - dx : d.width + dx,
+        Math.min(1 / total, 0.02), 1,
+      )
+      const nextInner = el.clientWidth / nextSpan
+      const nextStep = Math.max(3, nextInner / Math.max(1, total))
+      const nextScale = clampNum(nextStep / (BAR + GAP), SCALE_MIN, SCALE_MAX)
+      setScale(nextScale)
+      requestAnimationFrame(() => {
+        if (!scrollRef.current) return
+        const innerW = total * Math.round((BAR + GAP) * nextScale) + 4
+        scrollRef.current.scrollLeft = d.mode === 'zoom-l'
+          ? clampNum((d.left + dx) * innerW, 0, Math.max(0, innerW - scrollRef.current.clientWidth))
+          : clampNum(d.left * innerW, 0, Math.max(0, innerW - scrollRef.current.clientWidth))
+      })
+    }
+    const up = () => { barDrag.current = null }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+  }, [step, total])
+
+  /* 选中区的位置与宽度（在**轨内**夹一次，把手就不会探出轨道） */
   const bandStyle = (() => {
     const innerW = total * step + 4
     const rawW = size * step - 2
@@ -143,6 +241,28 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     const left = Math.max(2, Math.min(2 + start * step - 1, innerW - 2 - w))
     return { left, width: w }
   })()
+
+  /* 缩放条上的可视范围带 */
+  const [barGeom, setBarGeom] = useState({ left: 0, width: 100 })
+  useEffect(() => {
+    const sync = () => {
+      const el = scrollRef.current
+      if (!el) return
+      const innerW = total * step + 4
+      const w = Math.min(100, (el.clientWidth / innerW) * 100)
+      const l = innerW > el.clientWidth ? (el.scrollLeft / (innerW - el.clientWidth)) * (100 - w) : 0
+      setBarGeom({ left: l, width: w })
+    }
+    sync()
+    const el = scrollRef.current
+    if (!el) return
+    el.addEventListener('scroll', sync, { passive: true })
+    window.addEventListener('resize', sync)
+    return () => {
+      el.removeEventListener('scroll', sync)
+      window.removeEventListener('resize', sync)
+    }
+  }, [step, total])
 
   const picked = sessions.slice(start, start + size)
   const coll = picked.filter((s) => s.c).length
@@ -173,7 +293,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
             {sessions.map((s, i) => (
               <i key={i}
                  className={s.c ? 'c' : 'has'}
-                 style={{ width: BAR, height: s.c ? 4 + Math.round((s.n / maxN) * 13) : 3 }}
+                 style={{ width: barW, height: s.c ? 4 + Math.round((s.n / maxN) * 13) : 3 }}
                  title={`${s.at.slice(0, 10)}${s.c ? ` · 已采 ${s.n.toLocaleString()} 条` : ' · 未采'}`} />
             ))}
           </div>
@@ -188,11 +308,22 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
         </div>
       </div>
 
+      {/* ECharts dataZoom 式缩放条：拖中间平移，拖两端缩放 */}
+      <div className="wb-zoom-bar" ref={barRef} data-testid="zoom-bar">
+        <div className="wb-zoom-bar-band"
+             style={{ left: `${barGeom.left}%`, width: `${barGeom.width}%` }}
+             onPointerDown={onBarDown('pan')} data-testid="zoom-bar-band">
+          <span className="h l" onPointerDown={onBarDown('zoom-l')} data-testid="zoom-bar-l" />
+          <span className="h r" onPointerDown={onBarDown('zoom-r')} data-testid="zoom-bar-r" />
+        </div>
+      </div>
+
       <div className="wb-zoom-read" data-testid="zoom-read">
         {/* 日期不再重复显示（2026-10-19）：下面的「区间」按钮已经写着范围，
             这里两行日期会让人以为是两个不同的东西。 */}
         <span>{size} 场 · 已采 <b>{coll}</b> · 待采 <b className={size - coll ? 'acc' : ''}>{size - coll}</b></span>
         <span>（共 {total} 场）</span>
+        <span className="wb-zoom-hint">滚轮平移 · Ctrl+滚轮缩放</span>
       </div>
     </div>
   )
