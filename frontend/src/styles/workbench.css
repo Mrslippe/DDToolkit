@@ -621,6 +621,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* 放不下就**换行**，绝不允许子项互相叠压（2026-10-19 实测：叠压会让中间那块
+     上方露出一条不跟随斜切的直线，看着像"两个阴影"）*/
+  flex-wrap: wrap;
+  row-gap: 8px;
   /* 翻页组不许被压缩，也不许被卡片右缘裁掉（2026-10-19 截图：右箭头跑到卡外） */
   min-width: 0;
   flex-wrap: nowrap;
@@ -1218,98 +1222,37 @@
   margin-right: auto;
 }
 
-/* 年份翻页（2026-10-19）：`.lc-nav-icon` 定义在 posts.css（只随帖子页加载），
-   工作台拿不到尺寸 —— 图标改内联 `size`，这里只兜住对齐与点击区。 */
+/* ── 年份翻页：三块**同一套配方**（2026-10-19 统一）──────────────────────
+   与浮片同一组 token（--pill-bg / --pill-radius / --pill-skew / --pill-shadow），
+   但用普通 `<button>` 自绘 —— 浮片在窄行里会被压扁/叠压，`:has()` 在这个 WebView 也不支持。
+   三块走同一个选择器 ⇒ 阴影必然一致。 */
 .wb-hm-years {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: none;
   margin-left: auto;
 }
 
-.wb-hm-years .float-pill {
-  min-width: 26px;
-  padding: 0 6px;
-}
-
-.wb-hm-nav-icon {
-  display: block;
-}
-
-.wb-hm-year-text {
-  white-space: nowrap;
-}
-
-.wb-hm-arrow {
-  display: block;
-  font-size: 15px;
-  line-height: 1;
-  color: var(--c-text-main);
-}
-
-/* 年份翻页（2026-10-19）：**不用浮片族** —— 那两个钮在窄行里会被压成 0 宽。
-   白底 + 发丝边 + 卡片内圆角，看上去与浮片一致。 */
-.wb-hm-years {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .wb-hm-years > button {
-  /* flex 子项默认会收缩 —— 中间那块的 "2026" 就被压成 "202"，必须钉住宽度 */
-  flex: none;
-}
-
-.wb-hm-nav-btn {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--c-border);
-  border-radius: var(--pcard-radius-inner);
-  background: var(--c-bg-card);
-  box-shadow: var(--pill-shadow);
-  font-size: 15px;
-  line-height: 1;
-  color: var(--c-text-main);
-  cursor: pointer;
-}
-
-.wb-hm-nav-btn:hover:not(:disabled) {
-  color: var(--c-primary-deep);
-  border-color: rgba(201, 64, 111, 0.35);
-}
-
-.wb-hm-nav-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.wb-hm-year-btn-mid {
-  /* ⚠️ 不用 `FloatPill`（2026-10-19 实测）：三块浮片在这个窄行里会**互相叠压**，
-     中间那块被右箭头盖住右半边 —— 看起来像"文字超出按钮"，其实是被别的元素压住。
-     普通按钮 + 同一套 token 画斜切底，盒子大小可预测。 */
   position: relative;
   isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  height: 26px;
-  min-width: 76px;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--pill-radius);
+  height: var(--pill-h-sm);
+  padding: 0 10px;
+  border: 0;
   background: transparent;
+  font-family: inherit;
   font-size: 12.5px;
-  white-space: nowrap;
+  line-height: 1;
   color: var(--c-text-main);
   cursor: pointer;
 }
 
-.wb-hm-year-btn-mid::before {
+.wb-hm-years > button::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1318,11 +1261,26 @@
   border-radius: var(--pill-radius);
   transform: skewX(var(--pill-skew));
   box-shadow: var(--pill-shadow);
+  transition: background-color 0.15s ease;
 }
 
-.wb-hm-year-btn-mid:hover {
-  color: var(--c-primary-deep);
-  border-color: rgba(201, 64, 111, 0.35);
+.wb-hm-years > button:hover::before {
+  background: var(--pill-bg-hover);
+}
+
+.wb-hm-years > button:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+
+.wb-hm-nav-btn {
+  width: 25px;
+  padding: 0;
+}
+
+.wb-hm-year-btn-mid {
+  min-width: 64px;
+  white-space: nowrap;
 }
 
 /* ── 场次滑杆的缩放条（ECharts dataZoom 语义，2026-10-19）─────────────── */

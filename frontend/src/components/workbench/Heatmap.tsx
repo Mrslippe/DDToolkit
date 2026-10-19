@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronsLeft, ChevronsRight } from 'lucide-react'
-import FloatPill from '../common/FloatPill'
 import type { HmSession } from '../../api/types'
 
 interface DayStat {
@@ -101,21 +100,21 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
             `FloatPill` 用**默认尺寸**（不传 size —— 传 sm 会把图标挤掉），图标用
             `ChevronsLeft/Right` + 日历那套 `lc-nav-icon` / `lc-nav-text` 类。 */}
         <div className="wb-hm-years" ref={navRef}>
-          {/* 照直播日历：**斜切白卡浮片 + 双箭头**（2026-10-19 用户口径）。
-              之前塌成 0 宽是因为两个钮没有尺寸约束 —— 现在 `.wb-hm-years > *` 统一
-              `flex: none` + 显式尺寸，浮片能撑住。 */}
-          <FloatPill shape="icon" title="上一年"
-                     onClick={() => setYear((y) => Math.max(minYear, y - 1))}
-                     data-testid="hm-prev">
-            <ChevronsLeft size={13} strokeWidth={2.2} />
-          </FloatPill>
+          {/* 三块**同一套自绘配方**（`.wb-hm-years > button` + `::before` 斜切底），
+              与浮片同一组 token —— 阴影/斜切/圆角由构造保证一致。
+              不用 `FloatPill`：它在窄行里会被压/叠，且 `:has()` 这个 WebView 不支持。 */}
+          <button type="button" className="wb-hm-nav-btn" title="上一年"
+                  onClick={() => setYear((y) => Math.max(minYear, y - 1))}
+                  data-testid="hm-prev">
+            <ChevronsLeft size={15} strokeWidth={2.2} />
+          </button>
           <button type="button" className="wb-hm-year-btn-mid" title="选择年份"
                   onClick={() => setPick((p) => !p)} data-testid="hm-year">{year}</button>
-          <FloatPill shape="icon" title="下一年"
-                     onClick={() => setYear((y) => Math.min(maxYear, y + 1))}
-                     data-testid="hm-next">
-            <ChevronsRight size={13} strokeWidth={2.2} />
-          </FloatPill>
+          <button type="button" className="wb-hm-nav-btn" title="下一年"
+                  onClick={() => setYear((y) => Math.min(maxYear, y + 1))}
+                  data-testid="hm-next">
+            <ChevronsRight size={15} strokeWidth={2.2} />
+          </button>
           {pick && (
             <div className="wb-hm-year-menu" data-testid="hm-year-menu">
               {years.map((y) => (
