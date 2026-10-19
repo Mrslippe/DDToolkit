@@ -1278,6 +1278,15 @@
   padding: 0;
 }
 
+/* ⚠️ 显式给 svg 尺寸（2026-10-19）：`size={15}` 只是属性，被全局 `svg` 规则盖掉了，
+   实测渲染出来只有 ~4px，看着像"退化成点"。 */
+.wb-hm-years svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: none;
+}
+
 .wb-hm-year-btn-mid {
   min-width: 64px;
   white-space: nowrap;
