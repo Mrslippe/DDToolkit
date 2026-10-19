@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import logging
 import os
@@ -183,6 +184,18 @@ def plan_range(sessions: list[SessionPlan], since: str, until: str) -> list[Sess
 
 
 # ── 聚合（落盘契约在此）────────────────────────────────────────────────────
+#: 文本归一化：去首尾空白、内部空白压成一个空格、全角空格按空白处理。
+#: 只做**无损**归并（不投票拆词、不做同义归并）—— 近义改写仍会逃逸，这是已知限制。
+_WS = re.compile(r"\s+")
+
+
+def _norm_text(raw: object) -> str:
+    """把一条弹幕文本压成用于**精确去重**的键。空文本返回空串（不计入）。"""
+    if not isinstance(raw, str):
+        return ""
+    return _WS.sub(" ", raw.replace("\u3000", " ")).strip()
+
+
 def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     """把一场的原始记录压成 `(raw, stats)`。
 
@@ -192,6 +205,8 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     type_hist: dict[str, int] = {}
     sum_price = 0.0
     ts: list[int] = []
+    #: uid -> {归一化文本: 出现次数}；只在本函数内存在，**不落盘**
+    _texts: dict[str, dict[str, int]] = {}
 
     for rec in records:
         t = rec.get("type")
@@ -208,11 +223,24 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
                                  "p": 0.0, "pe": 0, "pt": [], "pl": [],
                                  "g": 0.0, "gd": 0.0, "sc": 0.0,
                                  "sc_cnt": 0, "gift_cnt": 0, "guard_cnt": 0,
-                                 "guard_top": None}
+                                 "guard_top": None,
+                                 # ── 文本指纹（2026-10-20）：只存**派生数字**，原文不落盘。
+                                 # `m` 仍是原始条数，**永不删除**（下游按需选用）。
+                                 # `uniq` = 去重后的不同文本条数；`maxrep` = 单条文本的
+                                 # 最大重复次数。判定（是否独轮车）**不在这里做**，
+                                 # 见 `spam.py` 的版本化入口。
+                                 "uniq": 0, "maxrep": 0}
         if t == T_DANMAKU:
             u["m"] += 1
             if isinstance(ms, (int, float)):
                 u["mt"].append(int(ms))
+            # 文本指纹：归一化后计入该用户的计数器，收尾时折算成 uniq / maxrep
+            txt = _norm_text(rec.get("message"))
+            if txt:
+                cnt = _texts.get(str(uid))
+                if cnt is None:
+                    cnt = _texts[str(uid)] = {}
+                cnt[txt] = cnt.get(txt, 0) + 1
         elif t == T_ENTER:
             u["e"] += 1
             if isinstance(ms, (int, float)):
@@ -238,11 +266,22 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
                 if Guard_rank.get(nm, 0) > Guard_rank.get(u["guard_top"] or "", 0):
                     u["guard_top"] = nm
 
+    # 把每人的文本计数器折算成两个派生量（原文马上丢弃）。
+    # ⚠️ **判定不在这里做**：这里只提供原料，是否需要剔除/降权由下游
+    # `app/services/fan/spam.py` 的版本化入口决定，便于以后更换算法而不动采集。
+    for uid, u in raw.items():
+        cnt = _texts.get(uid) or {}
+        if cnt:
+            u["uniq"] = len(cnt)
+            u["maxrep"] = max(cnt.values())
+
     sum_price = round(sum(u["p"] for u in raw.values()), 2)
     start_iso = end_iso = ""
     if ts:
         start_iso = datetime.fromtimestamp(min(ts) / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")
         end_iso = datetime.fromtimestamp(max(ts) / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")
+    _danmaku_total = sum(int(u["m"]) for u in raw.values())
+    _uniq_total = sum(int(u["uniq"]) for u in raw.values())
     stats = {
         "start_at": start_iso,
         "end_at": end_iso,
@@ -251,6 +290,12 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
         "named_uids": sum(1 for r in records
                           if isinstance(r.get("uId"), int) and r.get("uName")),
         "type_hist": type_hist,
+        # 全场口径的重复率（审计用）：1 - 去重条数 / 原始条数。
+        # 老数据没有这些字段 ⇒ 缺省为 None，**不伪装成 0**。
+        "danmaku_total": _danmaku_total,
+        "uniq_total": _uniq_total,
+        "dup_rate": (round(1 - _uniq_total / _danmaku_total, 6)
+                     if _danmaku_total else None),
         "sum_price": sum_price,
         "gift": round(sum(u["g"] for u in raw.values()), 2),
         "guard": round(sum(u["gd"] for u in raw.values()), 2),

@@ -209,3 +209,36 @@ def test_collect_fails_fast_when_no_sessions(tmp_path: Path) -> None:
                                sessions=[]))
     assert prog.state == "failed"
     assert "没有场次" in prog.message
+
+
+def test_aggregate_records_text_fingerprint():
+    """聚合阶段只产出「文本指纹」原料，**原始条数 m 必须保留**（2026-10-20）。
+
+    用户口径：去独轮车放在聚合阶段，但 m 字段后续还要用，不得删除；
+    判定算法要能独立更换 ⇒ 聚合只存 uniq / maxrep，判定在 spam.py 的版本化入口。
+    """
+    from app.services.fan.collector import T_DANMAKU, aggregate
+
+    def rec(uid: int, msg: str, t: int = T_DANMAKU) -> dict:
+        return {"type": t, "uId": uid, "message": msg, "sendDate": 1_700_000_000_000}
+
+    records = [
+        rec(1, "好耶"), rec(1, "好耶"), rec(1, "好耶"),      # 复读
+        rec(1, "  好耶  "),                                  # 归一化后同一条
+        rec(1, "别的"), rec(1, "再说一句"),
+        rec(2, "第一次"),
+    ]
+    raw, stats = aggregate(records)
+
+    u1 = raw["1"]
+    assert u1["m"] == 6, "原始条数不能被去重逻辑改动"
+    assert u1["uniq"] == 3, u1["uniq"]        # 好耶 / 别的 / 再说一句
+    assert u1["maxrep"] == 4, u1["maxrep"]    # 归一化后"好耶"共 4 次
+
+    u2 = raw["2"]
+    assert (u2["m"], u2["uniq"], u2["maxrep"]) == (1, 1, 1)
+
+    # 全场口径：1 - 7/7 → 0（这里 6+1 条里 3+1 条唯一）
+    assert stats["danmaku_total"] == 7
+    assert stats["uniq_total"] == 4
+    assert abs(stats["dup_rate"] - (1 - 4 / 7)) < 1e-6

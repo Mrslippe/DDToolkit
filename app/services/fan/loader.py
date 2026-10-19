@@ -221,7 +221,13 @@ class UserFact:
 
     uid: str
     att_n: int = 0          # 出席场次数
-    m: int = 0              # 弹幕总条数（type=0）
+    m: int = 0              # 弹幕总条数（type=0）—— **原始条数，永不删除**
+    #: 去重后的不同弹幕文本条数（2026-10-20 起采集；老数据无此字段 ⇒ 保持 0）
+    uniq: int = 0
+    #: 单条文本的最大重复次数（同上）
+    maxrep: int = 0
+    #: 是否至少有一场带文本指纹。False = **未跟踪**，不代表"没有重复"
+    text_tracked: bool = False
     sc_cnt: int = 0         # SC 总条数（type=3）
     gift_cnt: int = 0       # 礼物笔数（type=1）
     guard_cnt: int = 0      # 上舰次数（type=2）
@@ -476,6 +482,11 @@ def load_window(
             sc = _as_int(a, "sc_cnt", warnings, where)
             pay = _as_float(a, "p", warnings, where)
             u.att_n += 1
+            # 文本指纹：老数据没有这两个键 ⇒ 只置 tracked=False，**不写 0 冒充**
+            if "uniq" in a:
+                u.text_tracked = True
+                u.uniq += _as_int(a, "uniq", warnings, where)
+                u.maxrep = max(u.maxrep, _as_int(a, "maxrep", warnings, where))
             u.m += m
             u.sc_cnt += sc
             sr.sum_m += m
