@@ -68,6 +68,8 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     clientW: number
   } | null>(null)
   const suppress = useRef(false)
+  /** 视野里**能显示**多少场（随缩放/窗口宽度变）。档位是否可用看它，不是看总场次。 */
+  const [viewCount, setViewCount] = useState(total)
 
   /** **不取整**：取整会让缩放变成段落式 */
   const step = Math.max(3, (BAR + GAP) * scale)
@@ -75,6 +77,15 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   stepRef.current = step
   const innerW = total * step + 2 * PAD
   const maxN = Math.max(1, ...sessions.map((s) => s.n))
+
+  /** 量一次视野容量（滚动 / 缩放 / 改窗口大小都调到） */
+  const syncView = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !el.clientWidth) return
+    const st = stepRef.current
+    const n2 = Math.max(1, Math.floor((el.clientWidth - 2 * PAD) / st + 0.001))
+    setViewCount((prev) => (prev === n2 ? prev : n2))
+  }, [])
 
   /** 把窗口夹进可视区（滚动 / 换档 / 缩放都要跑） */
   const clamp = useCallback(() => {
@@ -86,9 +97,20 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     const lo = Math.max(0, first)
     const hi = Math.max(lo, Math.min(total - size, last - size + 1))
     setStart((prev) => clampNum(prev, lo, hi))
-  }, [size, total])
+    syncView()
+  }, [size, total, syncView])
 
   useLayoutEffect(() => { clamp() }, [clamp, step])
+
+  /* 视野比窗口窄 ⇒ 窗口跟着缩到视野大小（用户口径：选「窗口自动缩到视野大小」）；
+     同时把起点夹回去。缩放变宽后，用户仍可重新点更大的档位。 */
+  useEffect(() => {
+    if (viewCount < 1) return
+    if (size > viewCount) {
+      setSize(viewCount)
+      setStart((s) => Math.min(s, Math.max(0, total - viewCount)))
+    }
+  }, [viewCount, size, total])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -283,11 +305,12 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     if (!el) return
     el.addEventListener('scroll', sync, { passive: true })
     window.addEventListener('resize', sync)
+    syncView()
     return () => {
       el.removeEventListener('scroll', sync)
       window.removeEventListener('resize', sync)
     }
-  }, [innerW])
+  }, [innerW, syncView])
 
   const picked = sessions.slice(start, start + size)
   const coll = picked.filter((s) => s.c).length
@@ -300,11 +323,18 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
         {grades.map((g) => (
           <button key={g} type="button"
                   className={`wb-grade${g === size ? ' on' : ''}`}
-                  disabled={total < g}
-                  title={total < g ? `当前区间只有 ${total} 场` : undefined}
+                  /* 2026-10-19 用户口径：**视野里能显示的场次**不够这个档位就变灰不可选
+                     （之前只看总场次 `total`，缩放放大后 75 档仍然可点，但根本放不下） */
+                  disabled={g > viewCount || g > total}
+                  title={
+                    g > total ? `当前区间只有 ${total} 场`
+                      : g > viewCount ? `当前视野只能显示 ${viewCount} 场，缩小可显示更多`
+                        : undefined
+                  }
                   onClick={() => {
-                    setSize(Math.min(g, total))
-                    setStart((s) => Math.min(s, Math.max(0, total - Math.min(g, total))))
+                    const target = Math.min(g, total, Math.max(viewCount, 1))
+                    setSize(target)
+                    setStart((s) => Math.min(s, Math.max(0, total - target)))
                   }}
                   data-testid={`grade-${g}`}>{g} 场</button>
         ))}
