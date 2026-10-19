@@ -28,7 +28,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -184,6 +184,55 @@ def plan_range(sessions: list[SessionPlan], since: str, until: str) -> list[Sess
 
 
 # ── 聚合（落盘契约在此）────────────────────────────────────────────────────
+#: 相邻事件间隔超过它，就怀疑"混入了别场/离群记录"（3 小时）
+GAP_CUT_MS = 3 * 3600 * 1000
+
+
+def _utc_iso(ms: int) -> str:
+    """毫秒时间戳 → **UTC** 的 `YYYY-MM-DD HH:MM:SS.ffffff`（不带时区后缀，与库内一致）。"""
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+#: 被切掉的一侧最多占全部事件的这个比例 —— 超过就认为"真的播了那么久"，不切
+TRIM_MAX_SHARE = 0.05
+
+
+def _trim_span(ts: list[int]) -> tuple[int, int, int]:
+    """把"离群时间戳"从场次跨度里裁掉，返回 `(start_ms, end_ms, dropped)`。
+
+    背景（2026-10-20）：`start_at` / `end_at` 原本取所有事件时间戳的 min / max。
+    个别散落记录（例如开播 4 天后的 2 条弹幕）会把跨度拉到几昼夜，
+    于是"场次时长"彻底失真 —— 实测 77 场里有 6 场被拉长超过 20%。
+
+    规则（保守，宁可少切）：
+    1. 找**最大**的相邻间隔；不超过 `GAP_CUT_MS` 就停；
+    2. 只切掉**少数一侧**，且该侧占比必须 < `TRIM_MAX_SHARE`；
+    3. 重复，直到没有可切的间隔。
+
+    这样"真的有中场休息、两侧都很多"的场次不会被切。
+    """
+    if not ts:
+        return 0, 0, 0
+    arr = sorted(ts)
+    dropped = 0
+    while len(arr) > 2:
+        gi, gg = 1, arr[1] - arr[0]
+        for i in range(2, len(arr)):
+            gap = arr[i] - arr[i - 1]
+            if gap > gg:
+                gi, gg = i, gap
+        if gg <= GAP_CUT_MS:
+            break
+        left, right = gi, len(arr) - gi
+        if min(left, right) > len(arr) * TRIM_MAX_SHARE:
+            break
+        if left <= right:
+            dropped += left
+            arr = arr[gi:]
+        else:
+            dropped += right
+            arr = arr[:gi]
+    return arr[0], arr[-1], dropped
+
+
 #: 文本归一化：去首尾空白、内部空白压成一个空格、全角空格按空白处理。
 #: 只做**无损**归并（不投票拆词、不做同义归并）—— 近义改写仍会逃逸，这是已知限制。
 _WS = re.compile(r"\s+")
@@ -277,9 +326,14 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
 
     sum_price = round(sum(u["p"] for u in raw.values()), 2)
     start_iso = end_iso = ""
+    trimmed = 0
     if ts:
-        start_iso = datetime.fromtimestamp(min(ts) / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")
-        end_iso = datetime.fromtimestamp(max(ts) / 1000).strftime("%Y-%m-%d %H:%M:%S.%f")
+        lo, hi, trimmed = _trim_span(ts)
+        # ⚠️ 必须写 **UTC**（2026-10-20 发现的口径 bug）：原先用 `datetime.fromtimestamp`
+        # 取的是**本地时间**，而 DB 与展示层都以 UTC 存，于是东八区的机器上新采的数据
+        # 会整体偏 +8 小时 —— dev 库里 227 场中有 76 场就是这么偏的。
+        start_iso = _utc_iso(lo)
+        end_iso = _utc_iso(hi)
     _danmaku_total = sum(int(u["m"]) for u in raw.values())
     _uniq_total = sum(int(u["uniq"]) for u in raw.values())
     stats = {
@@ -292,6 +346,8 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
         "type_hist": type_hist,
         # 全场口径的重复率（审计用）：1 - 去重条数 / 原始条数。
         # 老数据没有这些字段 ⇒ 缺省为 None，**不伪装成 0**。
+        # 场次跨度被裁掉的事件数（>0 说明有离群时间戳；跨度为**裁剪后**的）
+        "duration_trimmed": trimmed,
         "danmaku_total": _danmaku_total,
         "uniq_total": _uniq_total,
         "dup_rate": (round(1 - _uniq_total / _danmaku_total, 6)

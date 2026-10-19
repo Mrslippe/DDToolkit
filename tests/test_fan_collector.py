@@ -242,3 +242,30 @@ def test_aggregate_records_text_fingerprint():
     assert stats["danmaku_total"] == 7
     assert stats["uniq_total"] == 4
     assert abs(stats["dup_rate"] - (1 - 4 / 7)) < 1e-6
+
+
+def test_aggregate_session_span_ignores_stray_records():
+    """场次跨度不能被"离群时间戳"拉长（2026-10-20）。
+
+    实测有场次因为开播 4 天后的 2 条记录，把「时长」从 6 小时拉成 5 天，
+    连带让所有"按场次时长归一"的指标失真。
+    """
+    from app.services.fan.collector import T_DANMAKU, aggregate
+
+    t0 = 1_700_000_000_000
+    H = 3600 * 1000
+
+    def rec(uid: int, ms: int) -> dict:
+        return {"type": T_DANMAKU, "uId": uid, "message": "x", "sendDate": ms}
+
+    records = [rec(1 + i % 3, t0 + i * 60_000) for i in range(120)]      # 2 小时
+    records.append(rec(9, t0 + 96 * H))                                   # 4 天后
+    records.append(rec(9, t0 + 100 * H))
+
+    _raw, stats = aggregate(records)
+    assert stats["duration_trimmed"] == 2
+    # 裁剪后的跨度应仍是 ~2 小时，而不是 ~100 小时
+    from datetime import datetime
+    a = datetime.strptime(stats["start_at"], "%Y-%m-%d %H:%M:%S.%f")
+    b = datetime.strptime(stats["end_at"], "%Y-%m-%d %H:%M:%S.%f")
+    assert (b - a).total_seconds() / 3600 < 3, (b - a)
