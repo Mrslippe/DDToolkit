@@ -638,25 +638,10 @@
   color: var(--c-text-sub);
 }
 
-.wb-hm-years button {
-  /* 与项目里的药丸同一套：白底 + 发丝边 + 轻阴影，圆角取档案卡的内圆角 */
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--c-border);
-  background: var(--c-bg-card);
-  border-radius: var(--pcard-radius-inner);
-  box-shadow: var(--pill-shadow);
-  cursor: pointer;
-  color: var(--c-text-sub);
-  font-size: 13px;
-  line-height: 1;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.wb-hm-years button:hover:not(:disabled) {
-  color: var(--c-primary-deep);
-  border-color: rgba(201, 64, 111, 0.35);
-}
+/* ⚠️ 删掉的遗留规则（2026-10-19）：`.wb-hm-years button` 是**后代选择器**，
+   会把年份菜单里的每一行也当成翻页按钮，给它们套上 24px 高 + 白底 + 边框 + 阴影
+   ⇒ 菜单看起来像一叠卡片、文字被挤到框外。翻页三块现由 `.wb-hm-years > button`
+   那套统一配方负责。 */
 
 .wb-hm-years button:disabled {
   opacity: 0.35;
@@ -1173,14 +1158,23 @@
 }
 
 .wb-hm-year-menu button {
-  padding: 5px 10px;
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
-  font-size: 12px;
-  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: center;
   color: var(--c-text-main);
   cursor: pointer;
+}
+
+/* ⚠️ 掐掉**任何**继承来的 `::before` 装饰（2026-10-19 截图：每行都套着一个斜切白块，
+   偏左上、把文字挤到框外）。菜单行只要干净的整行背景。 */
+.wb-hm-year-menu button::before {
+  content: none;
 }
 
 .wb-hm-year-menu button:hover,
