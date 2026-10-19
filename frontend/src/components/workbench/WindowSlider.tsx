@@ -71,6 +71,10 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
     clientW: number
   } | null>(null)
   const suppress = useRef(false)
+  /** 视野里**能显示**多少场（随缩放 / 窗口宽度变化）。
+      ⚠️ 它只用来**收缩窗口**，不用来判断档位能不能点 ——
+      档位的可用性看 `total`（2026-10-19 用户两次澄清后定下的分工）。 */
+  const [viewCount, setViewCount] = useState(total)
 
   /** **不取整**：取整会让缩放变成段落式 */
   const step = Math.max(3, (BAR + GAP) * scale)
@@ -78,6 +82,15 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
   stepRef.current = step
   const innerW = total * step + 2 * PAD
   const maxN = Math.max(1, ...sessions.map((s) => s.n))
+
+  /** 量一次视野容量（滚动 / 缩放 / 改窗口大小都调到） */
+  const syncView = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !el.clientWidth) return
+    const st = stepRef.current
+    const cap = Math.max(1, Math.floor((el.clientWidth - 2 * PAD) / st + 0.001))
+    setViewCount((prev) => (prev === cap ? prev : cap))
+  }, [])
 
   /** 把窗口夹进可视区（滚动 / 换档 / 缩放都要跑） */
   const clamp = useCallback(() => {
@@ -89,9 +102,21 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
     const lo = Math.max(0, first)
     const hi = Math.max(lo, Math.min(total - size, last - size + 1))
     setStart((prev) => clampNum(prev, lo, hi))
-  }, [size, total])
+    syncView()
+  }, [size, total, syncView])
 
   useLayoutEffect(() => { clamp() }, [clamp, step])
+
+  /* **视野装不下就缩窗口**（用户 2026-10-19 确认这条是对的）：
+     缩放放大后视野只能显示 30 场，而窗口还是 75 ⇒ 自动缩到 30。
+     注意它与"档位变灰"是两回事：档位看 `total`，这里看 `viewCount`。 */
+  useEffect(() => {
+    if (viewCount < 1) return
+    if (size > viewCount) {
+      setSize(viewCount)
+      setStart((s2) => Math.min(s2, Math.max(0, total - viewCount)))
+    }
+  }, [viewCount, size, total])
 
 
   useEffect(() => {
@@ -301,11 +326,12 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
     if (!el) return
     el.addEventListener('scroll', sync, { passive: true })
     window.addEventListener('resize', sync)
+    syncView()
     return () => {
       el.removeEventListener('scroll', sync)
       window.removeEventListener('resize', sync)
     }
-  }, [innerW])
+  }, [innerW, syncView])
 
   const picked = sessions.slice(start, start + size)
   const coll = picked.filter((s) => s.c).length
