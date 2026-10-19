@@ -61,7 +61,16 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   const innerRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ mode: 'move' | 'l' | 'r'; x: number; start: number } | null>(null)
-  const barDrag = useRef<{ mode: 'pan' | 'zoom-l' | 'zoom-r'; x: number; left: number; width: number } | null>(null)
+  /** 缩放条拖拽：**记下按下瞬间的全部状态**，每次移动都从它算，避免累积抖动 */
+  const barDrag = useRef<{
+    mode: 'pan' | 'zoom-l' | 'zoom-r'
+    x0: number
+    step0: number
+    scroll0: number
+    clientW: number
+  } | null>(null)
+  /** 程序化改 scrollLeft 时抑制 clamp，避免自己把自己推回去造成闪动 */
+  const suppress = useRef(false)
 
   const step = Math.max(3, Math.round((BAR + GAP) * scale))
   const barW = Math.max(2, step - GAP)
@@ -70,7 +79,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   /** 把窗口夹进可视区（滚动/缩放时被边缘推着走） */
   const clamp = useCallback(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || suppress.current) return
     const firstVisible = Math.ceil((el.scrollLeft - 2) / step)
     const lastVisible = Math.floor((el.scrollLeft + el.clientWidth - 4) / step)
     const maxStart = lastVisible - size + 1
@@ -154,7 +163,14 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
       if (!d) return
       if (d.mode === 'move') {
         const delta = Math.round((e.clientX - d.x) / step)
-        setStart(clampNum(d.start + delta, 0, Math.max(0, total - size)))
+        /* 必须夹到**可视区**（2026-10-19 用户：拖中央把手会让窗口一半跑到视野外）。
+           之前只夹整条轨道 [0, total-size]，所以能推到看不见的地方。 */
+        const el = scrollRef.current
+        const first = el ? Math.ceil((el.scrollLeft - 2) / step) : 0
+        const last = el ? Math.floor((el.scrollLeft + el.clientWidth - 4) / step) : total - 1
+        const lo = Math.max(0, first)
+        const hi = Math.max(lo, Math.min(total - size, last - size + 1))
+        setStart(clampNum(d.start + delta, lo, hi))
         return
       }
       const r = innerRef.current?.getBoundingClientRect()
@@ -182,56 +198,67 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
   /* ── 缩放条的拖拽：中间平移、两端缩放（ECharts dataZoom 语义）──────── */
   const onBarDown = (mode: 'pan' | 'zoom-l' | 'zoom-r') => (e: React.PointerEvent) => {
     const el = scrollRef.current
-    const track = barRef.current
-    if (!el || !track) return
-    const innerW = total * step + 4
+    if (!el) return
     barDrag.current = {
-      mode, x: e.clientX,
-      left: el.scrollLeft / innerW,
-      width: el.clientWidth / innerW,
+      mode,
+      x0: e.clientX,
+      step0: step,
+      scroll0: el.scrollLeft,
+      clientW: el.clientWidth,
     }
     e.preventDefault()
     e.stopPropagation()
   }
 
+  /* ── 缩放条：**锚点用「场次序号」，不用比例**（2026-10-19 修）───────────
+     之前把左/右边界记成"轨宽的百分比"，可缩放恰恰在改轨宽 ⇒ 同一个百分比对应不同像素，
+     于是拖动一端时**另一端也会跟着动、还会闪**。现在锚定的是序号：
+     拖右端固定左端序号，拖左端固定右端序号，两端各归各位。 */
   useEffect(() => {
     const move = (e: PointerEvent) => {
       const d = barDrag.current
       const el = scrollRef.current
-      const track = barRef.current
-      if (!d || !el || !track) return
-      const trackW = track.clientWidth || 1
-      const dx = (e.clientX - d.x) / trackW          // 以"轨道比例"为单位
+      if (!d || !el) return
+      const dxPx = e.clientX - d.x0
+      // 平移：按像素直接移，锚在按下瞬间的 scrollLeft 上（不累积）
       if (d.mode === 'pan') {
-        const innerW = total * step + 4
-        el.scrollLeft = clampNum((d.left + dx) * innerW, 0, Math.max(0, innerW - el.clientWidth))
+        const innerW = total * d.step0 + 4
+        suppress.current = true
+        el.scrollLeft = clampNum(d.scroll0 + dxPx, 0, Math.max(0, innerW - d.clientW))
+        requestAnimationFrame(() => { suppress.current = false })
         return
       }
-      // 缩放：把可视宽度按拖动量改变，再换算成 scale
-      const nextSpan = clampNum(
-        d.mode === 'zoom-l' ? d.width - dx : d.width + dx,
-        Math.min(1 / total, 0.02), 1,
-      )
-      const nextInner = el.clientWidth / nextSpan
-      const nextStep = Math.max(3, nextInner / Math.max(1, total))
-      const nextScale = clampNum(nextStep / (BAR + GAP), SCALE_MIN, SCALE_MAX)
-      setScale(nextScale)
+      // 缩放：可见场次数量随拖动量变化
+      const span0 = d.clientW / d.step0                       // 当前可见多少场（连续）
+      const spanNext = clampNum(span0 - (dxPx / d.clientW) * span0 * 0.9, 4, total)
+      const stepNext = clampNum(d.clientW / spanNext, 3, 400)
+      const scaleNext = clampNum(stepNext / (BAR + GAP), SCALE_MIN, SCALE_MAX)
+      // 锚点序号（按下瞬间）
+      const leftIdx = (d.scroll0 - 2) / d.step0
+      const rightIdx = (d.scroll0 + d.clientW - 4) / d.step0
+      setScale(scaleNext)
+      suppress.current = true
       requestAnimationFrame(() => {
-        if (!scrollRef.current) return
-        const innerW = total * Math.round((BAR + GAP) * nextScale) + 4
-        scrollRef.current.scrollLeft = d.mode === 'zoom-l'
-          ? clampNum((d.left + dx) * innerW, 0, Math.max(0, innerW - scrollRef.current.clientWidth))
-          : clampNum(d.left * innerW, 0, Math.max(0, innerW - scrollRef.current.clientWidth))
+        const el2 = scrollRef.current
+        if (!el2) { suppress.current = false; return }
+        const step2 = Math.max(3, Math.round((BAR + GAP) * scaleNext))
+        const innerW2 = total * step2 + 4
+        el2.scrollLeft = d.mode === 'zoom-r'
+          // 拖右端：左端不动
+          ? clampNum(leftIdx * step2, 0, Math.max(0, innerW2 - el2.clientWidth))
+          // 拖左端：右端不动
+          : clampNum(rightIdx * step2 - el2.clientWidth, 0, Math.max(0, innerW2 - el2.clientWidth))
+        requestAnimationFrame(() => { suppress.current = false })
       })
     }
-    const up = () => { barDrag.current = null }
+    const up = () => { barDrag.current = null; suppress.current = false }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     return () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
     }
-  }, [step, total])
+  }, [total])
 
   /* 选中区的位置与宽度（在**轨内**夹一次，把手就不会探出轨道） */
   const bandStyle = (() => {
