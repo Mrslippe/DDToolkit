@@ -17,7 +17,10 @@ interface Props {
   years: number[]
   /** 服务器当天（`YYYY-MM-DD`）—— 灰格判定必须与后端同一天 */
   today: string
-  defaultYear: number
+  /** 当前显示的年份（**受控**：外层要拿它去决定滑轨的默认区间） */
+  year: number
+  /** 翻页回调 —— 外层据此把滑轨区间重置回"默认整年" */
+  onYearChange: (y: number) => void
 }
 
 /** 格子边长与间距都是常量 ⇒ **一格必然是正方形**（不用 `1fr` 自适应） */
@@ -51,13 +54,14 @@ function iso(d: Date): string {
  * 几何：`left = 列序号 × (CELL + GAP)`，**精确像素**，与格子严格同轴；
  * 年份写在 1 月那一列上方 —— 那正是 12 月与 1 月的交界处。
  */
-export default function Heatmap({ days, detail, years, today, defaultYear }: Props) {
-  const [year, setYear] = useState(defaultYear)
+export default function Heatmap({ days, detail, years, today, year, onYearChange }: Props) {
+  /* 年份由外层持有（受控）—— 翻页要联动滑轨区间 */
+  const setYear = onYearChange
   /** 年份选择浮层（点中间那块展开） */
   const [pick, setPick] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
-  const minYear = years[0] ?? defaultYear
-  const maxYear = years[years.length - 1] ?? defaultYear
+  const minYear = years[0] ?? year
+  const maxYear = years[years.length - 1] ?? year
 
   /** 格子的 hover 浮窗（2026-10-19 用户第 5 条）：**不用原生 title**，
       原生小黄条既不受样式控制，也在暗色/缩放下发虚。位置用 fixed 跟随光标。 */
@@ -104,14 +108,14 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
               与浮片同一组 token —— 阴影/斜切/圆角由构造保证一致。
               不用 `FloatPill`：它在窄行里会被压/叠，且 `:has()` 这个 WebView 不支持。 */}
           <button type="button" className="wb-hm-nav-btn" title="上一年"
-                  onClick={() => setYear((y) => Math.max(minYear, y - 1))}
+                  onClick={() => setYear(Math.max(minYear, year - 1))}
                   data-testid="hm-prev">
             <ChevronsLeft size={15} strokeWidth={2.2} />
           </button>
           <button type="button" className="wb-hm-year-btn-mid" title="选择年份"
                   onClick={() => setPick((p) => !p)} data-testid="hm-year">{year}</button>
           <button type="button" className="wb-hm-nav-btn" title="下一年"
-                  onClick={() => setYear((y) => Math.min(maxYear, y + 1))}
+                  onClick={() => setYear(Math.min(maxYear, year + 1))}
                   data-testid="hm-next">
             <ChevronsRight size={15} strokeWidth={2.2} />
           </button>
@@ -135,6 +139,7 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
         <span className="yr" style={{ left: grid.janCol * (CELL + GAP), top: 0 }}>{year}</span>
       </div>
 
+      <div className="wb-hm-body">
       <div className="wb-hm" style={{
         gridAutoColumns: `${CELL}px`,
         gridTemplateRows: `repeat(7, ${CELL}px)`,
@@ -158,6 +163,16 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
                  onMouseLeave={c.in && !future ? () => setHover(null) : undefined} />
           )
         })}
+      </div>
+
+      {/* 右侧行标记（2026-10-19 用户）：网格 7 行、周一在第 0 行，
+          没有这两个标签就分不清最上面还是最下面是周一。 */}
+      <div className="wb-hm-wd"
+           style={{ height: 7 * CELL + 6 * GAP }}
+           aria-hidden>
+        <span>Mon</span>
+        <span>Sun</span>
+      </div>
       </div>
 
       <div className="wb-hm-foot">

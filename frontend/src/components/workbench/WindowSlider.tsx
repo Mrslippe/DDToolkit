@@ -19,6 +19,8 @@ interface Props {
   sessions: RecentSession[]
   /** 窗口档位，默认 25 / 50 / 75 */
   grades?: number[]
+  /** 值变化时把窗口**覆盖整段**（手选日期后自动收敛到该范围，2026-10-19 用户口径） */
+  coverTick?: number
   onChange: (range: WindowRange) => void
 }
 
@@ -50,7 +52,8 @@ function clampNum(v: number, lo: number, hi: number): number {
  * - **跟手系数**：带子行程 `trackW - bandW` 对应可滚范围 `innerW - clientW`
  *   ⇒ 恰好等于 `innerW / trackW`。早先用 `range / trackW` 小了一个数量级，所以「鼠标比带子快」。
  */
-export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange }: Props) {
+export default function WindowSlider({ sessions, grades = [25, 50, 75],
+                                        coverTick, onChange }: Props) {
   const total = sessions.length
   const maxGrade = grades[grades.length - 1]
   const [size, setSize] = useState(Math.min(maxGrade, total))
@@ -129,6 +132,16 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     clamp()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size])
+
+  /* 手选日期后：窗口覆盖整段（size = 全部场次，起点归零） */
+  useEffect(() => {
+    if (!coverTick || total < 1) return
+    setSize(total)
+    setStart(0)
+    const el = scrollRef.current
+    if (el) el.scrollLeft = 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverTick, total])
 
   /* 通知外层 */
   useEffect(() => {

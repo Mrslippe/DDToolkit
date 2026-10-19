@@ -73,11 +73,15 @@ export default function WorkbenchPage() {
   const [summary, setSummary] = useState<FanCollectProgress | null>(null)
   /** 重试计数：失败时点「重试」把它 +1，预估的 effect 就会再跑一次 */
   const [retryTick, setRetryTick] = useState(0)
-  /** 滑轨的**时间跨度**（不是选中窗口）：默认 = 热力图当前年份的整年 */
-  const [range, setRange] = useState<{ from: string; to: string }>(() => {
-    const y = new Date().getFullYear()
-    return { from: `${y}-01-01`, to: `${y}-12-31` }
-  })
+  /* 滑轨的**时间跨度**（= 采集时间窗口的边界）。两种模式（2026-10-19 用户口径）：
+     - **默认**：跟着热力图当前年份走（翻页也跟）—— 用滑杆挑窗口；
+     - **手选**：左下角日期按钮选了一段 ⇒ 滑轨与窗口自动收敛到这段范围；
+       一旦热力图翻页，自动退回默认模式。 */
+  const [year, setYear] = useState<number>(() => new Date().getFullYear())
+  const [pickedRange, setPickedRange] = useState<{ from: string; to: string } | null>(null)
+  /** 手选后让滑杆「覆盖全部」的触发键（值变化才生效） */
+  const [coverTick, setCoverTick] = useState(0)
+  const range = pickedRange ?? { from: `${year}-01-01`, to: `${year}-12-31` }
 
   // 1) 主播表 + 模块开关
   useEffect(() => {
@@ -259,14 +263,27 @@ export default function WorkbenchPage() {
                 <Heatmap days={activity.days} detail={activity.detail}
                          years={activity.years}
                          today={activity.today}
-                         defaultYear={Number(activity.today.slice(0, 4))} />
-                <WindowSlider sessions={activity.recent} onChange={onWindow} />
+                         year={year}
+                         onYearChange={(y) => {
+                           setYear(y)
+                           // 翻页 ⇒ 退回默认模式（区间重新跟随年份）
+                           setPickedRange(null)
+                         }} />
+                <WindowSlider sessions={activity.recent} onChange={onWindow}
+                              coverTick={coverTick} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">
                   {/* 滑轨区间：与采集/分析同一行，**顶在左侧**（2026-10-19 用户第 2 条） */}
                   <div className="wb-hm-actions-left">
-                    <RangeButton value={range} onConfirm={setRange} disabled={running || busy} />
+                    <RangeButton
+                      value={range}
+                      display={pickedRange ? `${pickedRange.from} ~ ${pickedRange.to}` : `${year} 整年`}
+                      onConfirm={(r) => {
+                        setPickedRange(r)
+                        setCoverTick((t) => t + 1)     // 让滑杆把窗口覆盖到整段
+                      }}
+                      disabled={running || busy} />
                   </div>
                   <PurgeButton name={picked} disabled={running || busy}
                                onPurged={() => {

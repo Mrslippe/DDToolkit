@@ -6,6 +6,8 @@ import FloatPill from '../common/FloatPill'
 interface Props {
   /** 当前区间（`YYYY-MM-DD`，含两端） */
   value: { from: string; to: string }
+  /** 触发器上显示的文案。默认模式显示「2026 整年」，手选模式显示具体区间 */
+  display?: string
   onConfirm: (r: { from: string; to: string }) => void
   disabled?: boolean
 }
@@ -20,7 +22,7 @@ interface Props {
  * - 触发器 = `FloatPill`（浮片族）；
  * - 日历本体 = `components/common/DateRangePicker`（草稿制，确认才提交）。
  */
-export default function RangeButton({ value, onConfirm, disabled }: Props) {
+export default function RangeButton({ value, display, onConfirm, disabled }: Props) {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -44,7 +46,7 @@ export default function RangeButton({ value, onConfirm, disabled }: Props) {
       <FloatPill size="md" shape="text" disabled={disabled}
                  onClick={() => setOpen((o) => !o)} data-testid="range-trigger">
         <CalendarRange size={13} strokeWidth={1.9} style={{ marginRight: 5 }} />
-        {value.from} ~ {value.to}
+        {display ?? `${value.from} ~ ${value.to}`}
       </FloatPill>
 
       {open && (

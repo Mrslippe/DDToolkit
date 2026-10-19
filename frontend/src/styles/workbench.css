@@ -1340,3 +1340,22 @@
   color: var(--c-text-sub);
   opacity: 0.75;
 }
+
+/* 热力图右侧的星期标记（2026-10-19 用户）：网格 7 行、周一在第 0 行，
+   没有标签就分不清最上面还是最下面是周一 */
+.wb-hm-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.wb-hm-wd {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0;
+  font-size: 9.5px;
+  line-height: 1;
+  color: var(--c-text-sub);
+  letter-spacing: 0.02em;
+}
