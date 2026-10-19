@@ -283,10 +283,14 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75], onChange
     }
   }, [total, clamp])
 
-  /* 选中区：左起 `PAD`，宽 `size * step` ⇒ 两端与轨道内距严格对齐 */
+  /* 选中区：左起 `PAD`，宽度要**减掉一个间距**（2026-10-19 用户：左右把手与直方图
+     的相对位置不一致）。
+     根因：柱子是 `[PAD + i*step, PAD + i*step + (step - GAP)]`，而带子原来宽 `size*step`，
+     右缘落在 `PAD + (start+size)*step` —— 那是**下一根柱子的左缘**，比最后一根柱的右缘
+     多出一个 GAP。于是左手柄贴着柱子，右手柄却落在缝隙里。减掉 GAP 后两端对称。 */
   const bandStyle = {
     left: PAD + start * step,
-    width: Math.max(6, size * step),
+    width: Math.max(4, size * step - GAP),
   }
 
   /* 缩放条上的可视范围带 */
