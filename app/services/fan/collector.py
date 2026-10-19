@@ -36,6 +36,7 @@ import httpx
 
 from app.core.useragent import UA_CHROME
 
+from app.core.timecn import cn_day
 from app.services.fan.loader import MIN_RECORDS, VtuberRef, ensure_data_dir
 
 logger = logging.getLogger(__name__)
@@ -172,8 +173,8 @@ async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[Session
         ms = x.get("startDate") or x.get("start_date")
         if not isinstance(ms, (int, float)):
             continue
-        out.append(SessionPlan(str(lid),
-                               datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M:%S")))
+        # ⚠️ 必须是 UTC（同 569 的坑）：这里用本地时间会让"按日期筛场次"在东八区差一天
+        out.append(SessionPlan(str(lid), _utc_iso(ms)[:19]))
     out.sort(key=lambda s: s.start_at)
     return out
 

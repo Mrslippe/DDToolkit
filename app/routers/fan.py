@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.routers.settings import PREFS_PREFIX
-from app.core.timecn import sql_day
+from app.core.timecn import CN_TZ, cn_day, sql_day
 from app.services.fan import (
     AXES,
     PURITY_THRESHOLD,
@@ -581,7 +581,8 @@ def fan_purge(
                     d = json.loads(p.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     continue
-                day = str(d.get("start_at") or "")[:10]
+                # 东八区日（与 /activity 的 days 键一致），否则跨零点的场次会落错一天
+                day = cn_day(str(d.get("start_at") or ""))
                 if not day or not (str(body.since) <= day <= str(body.until)):
                     continue
             live_ids.append(lid)
@@ -742,8 +743,11 @@ def fan_activity(
             continue
         n = collected.get(str(lid), 0) if lid else 0
         has = bool(lid) and str(lid) in collected
-        recent.append({"at": iso, "c": has, "n": n, "live_id": str(lid or "")})
-        day = iso[:10]
+        # `d` = **东八区日**，由后端给出。前端原来用 `at.slice(0,10)`（UTC 日），
+        # 跨零点的场次会差一天 —— 口径只在这里算一次。
+        recent.append({"at": iso, "d": cn_day(iso), "c": has, "n": n,
+                       "live_id": str(lid or "")})
+        day = cn_day(iso)          # 角标也必须落在**同一天**的格子上（见上）
         if has and day in days:
             days[day]["c"] += 1
 
@@ -772,8 +776,11 @@ def fan_activity(
         dur = int((en - st).total_seconds() // 60) if (st and en and en >= st) else None
         detail.setdefault(str(d), []).append({
             "title": str(title or ""),
-            "at": st.astimezone().strftime("%Y-%m-%d %H:%M") if st else str(start_at)[:16],
-            "end": en.astimezone().strftime("%H:%M") if en else "",
+            # 展示一律按**业务时区**（东八区），不用 `astimezone()` 的机器时区 ——
+            # 服务端换个时区跑，浮现的时间就不该变。
+            "at": st.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M") if st
+                   else cn_day(str(start_at)) + " " + str(start_at)[11:16],
+            "end": en.astimezone(CN_TZ).strftime("%H:%M") if en else "",
             # 时长（分钟）；拿不到就是 None —— **不猜**
             "dur": dur,
             "m": int(cnt or 0),

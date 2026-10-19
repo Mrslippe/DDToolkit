@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 export interface RecentSession {
   at: string
+  /** 该场的**东八区日期**（后端算好；跨零点的场次以它为准） */
+  d?: string
   /** 弹幕已落盘 */
   c: boolean
   /** 已采时的弹幕总量（未采为 0） */
@@ -153,7 +155,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
     const a = sessions[start]
     const b = sessions[Math.min(total - 1, start + size - 1)]
     if (!a || !b) return
-    onChange({ start, size, since: a.at.slice(0, 10), until: b.at.slice(0, 10) })
+    onChange({ start, size, since: a.d ?? a.at.slice(0, 10), until: b.d ?? b.at.slice(0, 10) })
   }, [start, size, sessions, total, onChange])
 
   /* ── 滚轮：平移；Ctrl+滚轮：以光标为锚缩放 ─────────────────────────── */
@@ -374,7 +376,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75],
                    width: Math.max(1, step - GAP),
                    height: s.c ? 4 + Math.round((s.n / maxN) * 13) : 3,
                  }}
-                 title={`${s.at.slice(0, 10)}${s.c ? ` · 已采 ${s.n.toLocaleString()} 条` : ' · 未采'}`} />
+                 title={`${s.d ?? s.at.slice(0, 10)}${s.c ? ` · 已采 ${s.n.toLocaleString()} 条` : ' · 未采'}`} />
             ))}
           </div>
           <div className="wb-win"

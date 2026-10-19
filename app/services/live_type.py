@@ -28,8 +28,10 @@ learned/area/date/fallback。
 """
 from __future__ import annotations
 
+from app.core.timecn import CN_TZ
+
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 分类 key（与前端 utils/liveType.ts 的 LIVE_TYPE_KEY 对齐）
 GAME, CHAT, WATCH, UPLOAD, SONG = "game", "chat", "watch", "upload", "song"
@@ -483,6 +485,10 @@ def _is_special_date(start_at: datetime | None, birthday: str | None,
     """纪念日锚点：生日 MM-DD / 出道日 YYYY-MM-DD（仅年份则无锚）/ 手动事件当日。"""
     if start_at is None:
         return False
+    # start_at 是 naive UTC ⇒ 必须先转东八区，否则 0–8 点开播的场次会算成前一天
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=timezone.utc)
+    start_at = start_at.astimezone(CN_TZ)
     md = start_at.strftime("%m-%d")
     if birthday and birthday.strip()[:5] == md:
         return True

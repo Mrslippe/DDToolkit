@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.domain.live_manual import (VodUrlError, is_manual_source, normalize_vod,
                                     to_utc_naive)
+from app.core.timecn import CN_TZ
 from app.models.vtuber import EVENT_KINDS, VTuber, Post, Account, LiveSession
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
@@ -1207,9 +1208,13 @@ def _conflict_message(hit: dict) -> str:
     为什么不是一句"时间冲突"：这个入口的失败九成是用户想给**已有的**那一场补信息，
     而"改哪一条"是他自己才知道的事 —— 把那一场的标题/时间段/来源摆出来他才判得了。
     """
-    start = hit["start_at"].strftime("%m-%d %H:%M")
+    # 库里是 naive UTC ⇒ 先标明时区再转业务时区，否则东八区用户看到的时间早 8 小时
+    def _cn(x):
+        return x.replace(tzinfo=timezone.utc).astimezone(CN_TZ) if x.tzinfo is None else x.astimezone(CN_TZ)
+
+    start = _cn(hit["start_at"]).strftime("%m-%d %H:%M")
     end = hit.get("end_at")
-    span = f"{start}–{end.strftime('%H:%M')}" if end else f"{start} 起"
+    span = f"{start}–{_cn(end).strftime('%H:%M')}" if end else f"{start} 起"
     who = hit.get("live_title") or "（无标题）"
     return (f"这段时间已有场次：{who} {span}"
             f"（来源 {hit.get('source')}，live_id={hit.get('live_id')}）。"
