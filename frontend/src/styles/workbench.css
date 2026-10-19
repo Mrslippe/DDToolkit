@@ -1288,18 +1288,36 @@
 }
 
 .wb-hm-year-btn-mid {
+  /* ⚠️ 不用 `FloatPill`（2026-10-19 实测）：三块浮片在这个窄行里会**互相叠压**，
+     中间那块被右箭头盖住右半边 —— 看起来像"文字超出按钮"，其实是被别的元素压住。
+     普通按钮 + 同一套 token 画斜切底，盒子大小可预测。 */
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
   height: 26px;
-  /* 显式给足宽度：只靠 padding 时它被压到 ~40px，"2026" 露不全 */
-  min-width: 74px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--pcard-radius-inner);
-  background: var(--c-bg-card);
-  box-shadow: var(--pill-shadow);
-  font-size: 12px;
+  min-width: 76px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--pill-radius);
+  background: transparent;
+  font-size: 12.5px;
   white-space: nowrap;
   color: var(--c-text-main);
   cursor: pointer;
+}
+
+.wb-hm-year-btn-mid::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--pill-bg);
+  border-radius: var(--pill-radius);
+  transform: skewX(var(--pill-skew));
+  box-shadow: var(--pill-shadow);
 }
 
 .wb-hm-year-btn-mid:hover {

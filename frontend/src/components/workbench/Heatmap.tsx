@@ -109,10 +109,8 @@ export default function Heatmap({ days, detail, years, today, defaultYear }: Pro
                      data-testid="hm-prev">
             <ChevronsLeft size={13} strokeWidth={2.2} />
           </FloatPill>
-          <FloatPill shape="text" title="选择年份"
-                     onClick={() => setPick((p) => !p)} data-testid="hm-year">
-            <span className="wb-hm-year-text">{year}</span>
-          </FloatPill>
+          <button type="button" className="wb-hm-year-btn-mid" title="选择年份"
+                  onClick={() => setPick((p) => !p)} data-testid="hm-year">{year}</button>
           <FloatPill shape="icon" title="下一年"
                      onClick={() => setYear((y) => Math.min(maxYear, y + 1))}
                      data-testid="hm-next">
