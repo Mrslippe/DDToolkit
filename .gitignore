@@ -113,3 +113,6 @@ _dsh_uninstall_backup/
 /datasets/fan-structure/*/stats/
 /datasets/fan-structure/curves/
 /datasets/fan-structure/ranked/
+
+# Obsidian 本地配置（用户本地编辑器状态，不入库）
+docs/.obsidian/
