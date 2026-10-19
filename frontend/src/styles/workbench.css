@@ -788,8 +788,10 @@
 .wb-zoom-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  /* 左右各留 7px：窗口拖到轨道两端时，跨在边缘的手柄仍有容身之处 */
-  padding: 0 7px 4px;
+  /* ⚠️ **左右不能有 padding**（2026-10-19）：滚动容器的横向 padding 会让
+     `scrollLeft` 与内容的对应关系整体偏移，几何全错 —— 左端顶不准、右端超出一截
+     都是那 7px 造成的。把手现在在带子内部，不需要额外让位。 */
+  padding: 0 0 4px;
 }
 
 .wb-zoom-scroll::-webkit-scrollbar { height: 6px; }
@@ -804,6 +806,7 @@
 
 .wb-zoom-inner {
   position: relative;
+  box-sizing: border-box;
   height: 23px;
   background: rgba(148, 163, 184, 0.1);
   border: 1px solid var(--c-border);
