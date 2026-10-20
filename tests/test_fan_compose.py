@@ -284,3 +284,25 @@ def test_no_numpy_dependency() -> None:
     for name in ("axes.py", "compose.py", "loader.py"):
         src = (root / name).read_text(encoding="utf-8")
         assert "import numpy" not in src, f"{name} 引入了 numpy"
+
+
+def test_income_outcome_compresses_whales():
+    """收入效标必须取 log1p：原始金额被鲸鱼主导（devlog 589）。"""
+    from app.services.fan.compose import income_outcome
+
+    assert income_outcome(0) == 0.0
+    assert income_outcome(1) < income_outcome(100) < income_outcome(10000)
+    # 线性 vs 对数：10000 元与 100 元的差距应从 99 倍压到约 2 倍
+    assert income_outcome(10000) / income_outcome(100) < 2.1
+
+
+def test_retention_outcome_uses_relative_drop():
+    """留存效标用"跌幅 ≥50%"，而不是"后半有没有来"（devlog 589）。"""
+    from app.services.fan.compose import retention_outcome
+
+    assert retention_outcome(10, 10) == 0.0     # 没掉
+    assert retention_outcome(10, 6) == 0.0      # 掉 40%，还没到一半
+    assert retention_outcome(10, 5) == 0.0      # 正好剩一半，不算流失
+    assert retention_outcome(10, 4) == 1.0      # 剩不到一半 ⇒ 流失
+    assert retention_outcome(10, 0) == 1.0      # 完全不来了
+    assert retention_outcome(1, 0) == 1.0       # 只来过 1 次的人

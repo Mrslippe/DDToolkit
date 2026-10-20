@@ -203,6 +203,39 @@ def fit_criterion_weights(
     return CriterionFit(criterion, slopes, weights, r2, n)  # type: ignore[arg-type]
 
 
+def income_outcome(pay: float) -> float:
+    """效标用的**收入目标变量**：`log1p`，不是原始金额。
+
+    为什么必须取对数（2026-10-21 实测，明前奶绿后半窗 37,225 人）：
+
+    - **90.6% 的人一分钱没花**（星瞳 87.4%）；
+    - **前 1% 的付费者贡献 89.5% 的收入**（星瞳 93.5%）。
+
+    原始金额做线性回归时，这几个"鲸鱼"会主导残差平方和 —— R² 只有 0.022，
+    而同一批预测变量在 log 尺度上是 **0.200**。也就是说：模型能排"谁更可能付费"，
+    排不了"谁会打大钱"。用原始金额当效标，等于拿不可预测的极值惩罚一个本来有效的模型。
+    """
+    return math.log1p(max(0.0, float(pay)))
+
+
+def retention_outcome(att_before: int, att_after: int, *, drop: float = 0.5) -> float:
+    """效标用的**留存目标变量**：出席率跌幅**超过** `drop` 记 1（流失），否则 0。
+
+    边界取严格小于：正好剩一半（10 → 5）不算流失 —— 与 10-17 记录的 0.073 对齐。
+
+    不能直接用"后半有没有来"（2026-10-21 实测）：
+
+    - 入选池要求前半出席率 ≥10%，这批人**本来就是常客**；
+    - 于是后半留存率高达 **98.4%**（星瞳 98.2%），二值方差只有 0.0157；
+    - 在 98% 的基准率下，任何排序的 R² 都注定很低（实测 0.024–0.036），
+      这不是模型弱，是**目标变量没有方差**。
+
+    换成"相对跌幅"后，目标重新有了区分度。
+    """
+    before = max(1, int(att_before))
+    return 1.0 if int(att_after) < drop * before else 0.0
+
+
 def value_under_criterion(
     table: AxisTable,
     fit: CriterionFit,

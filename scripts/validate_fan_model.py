@@ -20,6 +20,7 @@ from app.services.fan.axes import (
     AXIS_PAYMENT,
     build_axis_table,
 )
+from app.services.fan.compose import income_outcome, retention_outcome
 from app.services.fan.cross_v import overlap, profile
 
 VS = ("弥月", "明前奶绿", "星瞳")
@@ -127,13 +128,15 @@ def main() -> None:
         w1 = load_window(short, N, live_ids=ids[::2])
         w2 = load_window(short, N, live_ids=ids[1::2])
         t1 = build_axis_table(w1)
-        us = list(t1.uids)                       # 后半没出现 = 留存 0（不能只取交集）
+        us = list(t1.uids)                       # 后半没出现 = 无出席
         pred = [[t1.pct[u][a] for a in (AXIS_ATTENDANCE, AXIS_INTERACTION, AXIS_PAYMENT)]
                 for u in us]
-        income = [float(w2.users[u].pay or 0) if u in w2.users else 0.0 for u in us]
-        retain = [1.0 if (u in w2.users and w2.users[u].att_n > 0) else 0.0 for u in us]
+        # 收入取 log1p、留存取"跌幅 ≥50%"，理由见 compose.income_outcome / retention_outcome
+        income = [income_outcome(w2.users[u].pay or 0.0 if u in w2.users else 0.0) for u in us]
+        retain = [retention_outcome(w1.users[u].att_n,
+                                    w2.users[u].att_n if u in w2.users else 0) for u in us]
         print(f"{short:<8}{len(us):>9,}{r2(pred, income):>10.3f}{r2(pred, retain):>10.3f}"
-              f"  留存率 {sum(retain)/len(retain):.1%}")
+              f"  流失率 {sum(retain)/len(retain):.1%}")
 
     print("\n=== 4. 跨 V 受众重叠 ===")
     profs = {s: profile(load_window(s, N)) for s in VS}
