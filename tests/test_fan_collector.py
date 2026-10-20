@@ -300,36 +300,66 @@ def test_aggregate_records_text_hash_alignment():
 
 
 def test_fetch_records_follows_pagination(monkeypatch):
-    """取一场记录必须**翻页**（2026-10-20）。
+    """取一场要覆盖上游的三类坑（2026-10-20）。
 
-    背景：服务端单页最多约 5–10 万条，超过就截断并且**谎报 hasMore=false**；
-    实测 4/227 场因此少了 12–37% 的弹幕（records 恰好卡在 100,000）。
-    这里用假上游验证：只要 hasMore=True 就继续翻，直到 False 为止。
+    ① 超大 pageSize 会截断且谎报 has_more；
+    ② 部分场次带 pageNum 就返回 0；
+    ③ 并发时偶发空页。
+    策略：先不带 pageNum 取一页，不够再翻页；翻页首页为空则退回那一页。
     """
     import asyncio
     from app.services.fan import collector as C
 
     pages = {
-        1: {"data": {"data": {"danmakus": [{"i": 1}, {"i": 2}]}, "hasMore": True}},
-        2: {"data": {"data": {"danmakus": [{"i": 3}]}, "hasMore": True}},
-        3: {"data": {"data": {"danmakus": [{"i": 4}]}, "hasMore": False}},
+        1: {"data": {"data": {"danmakus": [{"i": 1}, {"i": 2}]}, "hasMore": True, "total": 4}},
+        2: {"data": {"data": {"danmakus": [{"i": 3}, {"i": 4}]}, "hasMore": False, "total": 4}},
     }
     seen = []
 
     async def fake_get(client, path, params, **kw):
-        num = dict(params)["pageNum"]
-        seen.append(num)
-        return pages.get(num)
+        d = dict(params)
+        if "pageNum" not in d:
+            seen.append("first")
+            # 首屏只给 0 条，但 total=4 ⇒ 必须翻页
+            return {"data": {"data": {"danmakus": []}, "hasMore": True, "total": 4}}
+        seen.append(d["pageNum"])
+        return pages.get(d["pageNum"])
 
     monkeypatch.setattr(C, "_get_json", fake_get)
     recs = asyncio.run(C.fetch_records(None, "live-x"))
-
     assert [r["i"] for r in recs] == [1, 2, 3, 4], recs
-    assert seen == [1, 2, 3], seen
+    assert seen == ["first", 1, 2], seen
 
-    # 上游完全没数据 → None（与"成功但为空"区分开）
+    # pageNum 坏掉的场次：首屏有数据但 total 更大，翻页返回 0 ⇒ 退回首屏
+    async def broken_paging(client, path, params, **kw):
+        d = dict(params)
+        if "pageNum" not in d:
+            return {"data": {"data": {"danmakus": [{"i": 9}]}, "hasMore": True, "total": 831}}
+        return {"data": {"data": {"danmakus": []}, "hasMore": False, "total": 0}}
+
+    monkeypatch.setattr(C, "_get_json", broken_paging)
+    assert [r["i"] for r in asyncio.run(C.fetch_records(None, "live-y"))] == [9]
+
+    # 上游完全无响应 → None
     async def none_get(client, path, params, **kw):
         return None
 
     monkeypatch.setattr(C, "_get_json", none_get)
-    assert asyncio.run(C.fetch_records(None, "live-y")) is None
+    assert asyncio.run(C.fetch_records(None, "live-z")) is None
+
+
+
+def test_aggregate_platform_span_sets_start_end():
+    """给了平台跨度时，`start_at` / `end_at` 必须真的写进去（2026-10-21 回归）。
+
+    曾经的 bug：赋值语句被误缩进在 `elif ts_span` 分支里，导致"平台跨度"这条路的
+    起止全是空串 —— 新采的 96 场因此被误判为"数据不全"。
+    """
+    from app.services.fan.collector import aggregate
+
+    recs = [{"uId": 1, "type": 0, "sendDate": 1_787_832_556_801, "message": "a"}]
+    _raw, stats = aggregate(recs, span_ms=(1_787_832_556_801, 1_787_840_000_000))
+    assert stats["duration_source"] == "platform"
+    assert stats["start_at"].startswith("2026-08-27"), stats["start_at"]
+    assert stats["end_at"].startswith("2026-08-27"), stats["end_at"]
+    assert stats["start_at"] < stats["end_at"]
