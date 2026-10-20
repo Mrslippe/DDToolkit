@@ -21,35 +21,32 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-#: 系统消息与最后一条弹幕的最大间隔（小时）
-SYS_END_WINDOW_H = 2.0
+#: **下播类**系统消息（2026-10-21 实测语义）
+#: type 11 = 开播/提醒（总在开头）；type 7 / 8 / 12 = 结束相关（总在结尾 5 分钟内）
+STOP_TYPES = frozenset({7, 8, 12})
 #: 收尾留白（分钟）
 SYS_END_GRACE_MIN = 1
 
 
 def apply_sys_end(raw: dict, stats: dict) -> bool:
-    """若存在"下播系统消息"，据此提前 `end_at`。返回是否改动。"""
+    """若有「下播类」系统消息，就以它为准。返回是否改动。
+
+    2026-10-21 实测：type 11 永远出现在**开头**（开播），type 7/8/12 出现在**结尾**
+    （距最后一条记录约 5 分钟）。所以只看 `STOP_TYPES`，取**最晚**的那条。
+
+    不再要求"消息在最后一条弹幕之后" —— 下播后观众还会继续聊，这是常态。
+    """
     events = stats.get("sys_events") or []
-    if not events:
+    stops = [int(e.get("ts") or 0) for e in events
+             if e.get("type") in STOP_TYPES and int(e.get("ts") or 0) > 0]
+    if not stops:
         return False
-    last_mt = 0
-    for a in raw.values():
-        if isinstance(a, dict) and a.get("mt"):
-            last_mt = max(last_mt, int(a["mt"][-1]))
-    if not last_mt:
-        return False
-    ts = [int(e.get("ts") or 0) for e in events if int(e.get("ts") or 0) > last_mt]
-    if not ts:
-        return False
-    stop_ms = min(ts)                      # 结束后最早的一条系统消息 = 下播时刻
-    if (stop_ms - last_mt) / 3_600_000 > SYS_END_WINDOW_H:
-        return False
-    candidate = stop_ms + SYS_END_GRACE_MIN * 60_000
+    candidate = max(stops) + SYS_END_GRACE_MIN * 60_000
     old = str(stats.get("end_at") or "")
     new = datetime.fromtimestamp(candidate / 1000, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S.%f")
     if old and new >= old:
         return False                       # 只允许变短
     stats["end_at"] = new
-    stats["duration_note"] = "下播时刻取自系统消息（直播中止/录制结束）"
+    stats["duration_note"] = "下播时刻取自系统消息（type 7/8/12）"
     return True

@@ -113,25 +113,32 @@ def test_rate_based_end_ignores_short_sessions():
     assert rate_based_end(raw) is None
 
 
-def test_sys_end_prefers_system_message():
-    """有系统消息（直播中止）时用它当下播时刻；没有时不动（回退率降/平台）。"""
-    import json
+def test_sys_end_uses_stop_type_and_ignores_start_signal():
+    """type 11 = 开播（在开头），7/8/12 = 下播（在结尾）。只认后者，且取最晚一条。
+
+    不再要求"消息在最后一条弹幕后"——下播后观众还会继续聊。
+    """
     from app.services.fan.sysmsg import apply_sys_end
 
     t0 = 1_787_832_549_000
-    mt = [t0 + i * 60_000 for i in range(60)]            # 一小时弹幕
+    mt = [t0 + i * 60_000 for i in range(60)]
     raw = {"u1": {"m": 60, "mt": mt, "mh": [1] * 60}}
-    stop = mt[-1] + 90_000                                # 最后一条弹幕后 1.5 分钟
-    stats = {"end_at": "2026-08-27 20:00:00.000000",
-             "sys_events": [{"type": 11, "ts": stop}]}
+    stats = {
+        "end_at": "2026-08-27 20:00:00.000000",
+        "sys_events": [
+            {"type": 11, "ts": mt[0]},                 # 开播，必须忽略
+            {"type": 12, "ts": mt[-1] + 90_000},       # 下播
+        ],
+    }
     assert apply_sys_end(raw, stats) is True
     assert stats["end_at"].startswith("2026-08-27 13:1"), stats["end_at"]
 
-    # 没有系统消息 ⇒ 不改变
-    stats2 = {"end_at": "2026-08-27 20:00:00.000000", "sys_events": []}
+    # 只有开播消息 ⇒ 不动
+    stats2 = {"end_at": "2026-08-27 20:00:00.000000", "sys_events": [{"type": 11, "ts": mt[0]}]}
     assert apply_sys_end(raw, stats2) is False
 
-    # 消息离最后一条弹幕太远（>2h）⇒ 不采纳
-    stats3 = {"end_at": "2026-08-27 20:00:00.000000",
-              "sys_events": [{"type": 11, "ts": mt[-1] + 5 * 3600_000}]}
-    assert apply_sys_end(raw, stats3) is False
+    # 下播消息早于最后一条弹幕（下播后观众还在聊）⇒ 照样以它为准
+    early = {"end_at": "2026-08-27 20:00:00.000000",
+             "sys_events": [{"type": 7, "ts": mt[-1] - 600_000}]}
+    assert apply_sys_end(raw, early) is True
+    assert early["end_at"].startswith("2026-08-27 12:5"), early["end_at"]
