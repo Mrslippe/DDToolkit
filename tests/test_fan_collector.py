@@ -269,3 +269,31 @@ def test_aggregate_session_span_ignores_stray_records():
     a = datetime.strptime(stats["start_at"], "%Y-%m-%d %H:%M:%S.%f")
     b = datetime.strptime(stats["end_at"], "%Y-%m-%d %H:%M:%S.%f")
     assert (b - a).total_seconds() / 3600 < 3, (b - a)
+
+
+def test_aggregate_records_text_hash_alignment():
+    """`mh` 必须与 `mt` 一一对齐，且哈希稳定、可区分归一化前后的文本（2026-10-20）。
+
+    目的：将来换了去重规则能在哈希序列上离线重算，不必重新采集。
+    """
+    from app.services.fan.collector import T_DANMAKU, aggregate, _hash_text
+
+    def rec(uid: int, msg: str, ms: int = 1_700_000_000_000) -> dict:
+        return {"type": T_DANMAKU, "uId": uid, "message": msg, "sendDate": ms}
+
+    raw, _stats = aggregate([
+        rec(1, "好耶"), rec(1, "  好耶 "), rec(1, "好耶"), rec(1, "别的"), rec(2, ""),
+    ])
+    u1, u2 = raw["1"], raw["2"]
+
+    assert u1["m"] == len(u1["mt"]) == len(u1["mh"]) == 4, "mh 与 mt 必须等长"
+    assert len({u1["mh"][0], u1["mh"][1], u1["mh"][2]}) == 1, "空白变体应归一化成同一个哈希"
+    assert u1["mh"][0] != u1["mh"][3], "不同文本必须不同哈希"
+    assert all(0 < h < 2**64 for h in u1["mh"]), "必须是 64 位非零整数"
+
+    # 空文本占位 0，保证对齐；且不参与 uniq
+    assert u2["mh"] == [0]
+    assert u2["uniq"] == 0
+
+    # 确定性：同一文本任何时候都得到同一个值（blake2b，不受 PYTHONHASHSEED 影响）
+    assert _hash_text("好耶") == _hash_text("好耶") == 614971719154571682

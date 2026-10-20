@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import json
 import logging
@@ -246,6 +247,21 @@ def _norm_text(raw: object) -> str:
     return _WS.sub(" ", raw.replace("\u3000", " ")).strip()
 
 
+def _hash_text(txt: str) -> int:
+    """归一化文本 → **稳定的 64 位哈希**（blake2b，8 字节）。
+
+    为什么必须用 blake2b 而不是内置 `hash()`：后者受 `PYTHONHASHSEED` 影响，
+    **每个进程都不一样**，跨次采集无法比对。blake2b 是确定性的、无依赖。
+
+    哈希的是**归一化后**的文本（空白已压平），因此既支持精确重复统计，也保住了
+    大小写、标点与 emoji 的区分 —— 将来换更复杂的去重规则时，仍可在哈希序列上重算。
+    空文本返回 0（作为占位，保证 `mh` 与 `mt` 一一对齐；真实哈希不可能为 0）。
+    """
+    if not txt:
+        return 0
+    return int.from_bytes(hashlib.blake2b(txt.encode("utf-8"), digest_size=8).digest(), "big")
+
+
 def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     """把一场的原始记录压成 `(raw, stats)`。
 
@@ -284,8 +300,11 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
             u["m"] += 1
             if isinstance(ms, (int, float)):
                 u["mt"].append(int(ms))
-            # 文本指纹：归一化后计入该用户的计数器，收尾时折算成 uniq / maxrep
+            # 文本指纹：归一化后计入该用户的计数器，收尾时折算成 uniq / maxrep；
+            # 同时把 64 位哈希写进 `mh`，与 `mt` 一一对齐 —— 将来换了去重规则，
+            # 可以在哈希序列上离线重算，**不必重新采集**。
             txt = _norm_text(rec.get("message"))
+            u["mh"].append(_hash_text(txt))
             if txt:
                 cnt = _texts.get(str(uid))
                 if cnt is None:
