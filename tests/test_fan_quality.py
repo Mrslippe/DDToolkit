@@ -111,3 +111,27 @@ def test_rate_based_end_ignores_short_sessions():
     mt = [int((base + timedelta(minutes=i)).timestamp() * 1000) for i in range(20)]
     raw = {"u1": {"m": len(mt), "mt": mt, "mh": [1] * len(mt)}}
     assert rate_based_end(raw) is None
+
+
+def test_sys_end_prefers_system_message():
+    """有系统消息（直播中止）时用它当下播时刻；没有时不动（回退率降/平台）。"""
+    import json
+    from app.services.fan.sysmsg import apply_sys_end
+
+    t0 = 1_787_832_549_000
+    mt = [t0 + i * 60_000 for i in range(60)]            # 一小时弹幕
+    raw = {"u1": {"m": 60, "mt": mt, "mh": [1] * 60}}
+    stop = mt[-1] + 90_000                                # 最后一条弹幕后 1.5 分钟
+    stats = {"end_at": "2026-08-27 20:00:00.000000",
+             "sys_events": [{"type": 11, "ts": stop}]}
+    assert apply_sys_end(raw, stats) is True
+    assert stats["end_at"].startswith("2026-08-27 13:1"), stats["end_at"]
+
+    # 没有系统消息 ⇒ 不改变
+    stats2 = {"end_at": "2026-08-27 20:00:00.000000", "sys_events": []}
+    assert apply_sys_end(raw, stats2) is False
+
+    # 消息离最后一条弹幕太远（>2h）⇒ 不采纳
+    stats3 = {"end_at": "2026-08-27 20:00:00.000000",
+              "sys_events": [{"type": 11, "ts": mt[-1] + 5 * 3600_000}]}
+    assert apply_sys_end(raw, stats3) is False

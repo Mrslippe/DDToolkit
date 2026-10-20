@@ -41,6 +41,7 @@ from app.core.timecn import cn_day
 from app.services.externals.vtbcat import fetch_lives, match_session
 from app.services.fan.duration import apply_rate_end
 from app.services.fan.quality import apply_replay_cut
+from app.services.fan.sysmsg import apply_sys_end
 from app.services.fan.quality_gate import evaluate as quality_evaluate
 from app.services.fan.loader import MIN_RECORDS, VtuberRef, ensure_data_dir
 
@@ -363,9 +364,17 @@ def aggregate(records: list[dict], *,
     #: uid -> {归一化文本: 出现次数}；只在本函数内存在，**不落盘**
     _texts: dict[str, dict[str, int]] = {}
 
+    #: 系统消息（uId <= 0）：只留 type + 时间戳，用于判定下播时刻（最多 200 条）
+    sys_events: list[dict] = []
     for rec in records:
         t = rec.get("type")
         type_hist[str(t)] = type_hist.get(str(t), 0) + 1
+        uid = rec.get("uId")
+        if not isinstance(uid, int) or uid <= 0:
+            if len(sys_events) < 200:
+                ms0 = rec.get("sendDate")
+                if isinstance(ms0, (int, float)):
+                    sys_events.append({"type": t, "ts": int(ms0)})
         ms = rec.get("sendDate")
         if isinstance(ms, (int, float)):
             ts.append(int(ms))
@@ -465,6 +474,7 @@ def aggregate(records: list[dict], *,
         "named_uids": sum(1 for r in records
                           if isinstance(r.get("uId"), int) and r.get("uName")),
         "type_hist": type_hist,
+        "sys_events": sys_events,
         # 全场口径的重复率（审计用）：1 - 去重条数 / 原始条数。
         # 老数据没有这些字段 ⇒ 缺省为 None，**不伪装成 0**。
         # 场次跨度被裁掉的事件数（>0 说明有离群时间戳；跨度为**裁剪后**的）
@@ -636,6 +646,8 @@ async def collect(
                 # 回放裁完再看"弹幕率是否在 5 小时后骤降" —— 平台 stopDate 可能偏长
                 # （实测有一场 12.9h 实际只有 6h）。只允许把结束时间提前。
                 apply_rate_end(raw, stats)
+                # 系统消息（直播中止/录制结束）是更硬的下播依据；没有就保持上面的结果
+                apply_sys_end(raw, stats)
                 # 质量闸：L1 自洽 / L2 平台计数 / L3 vtb.cat（只标记，不丢弃）
                 try:
                     start_ms = int(datetime.strptime(s.start_at, "%Y-%m-%d %H:%M:%S")
