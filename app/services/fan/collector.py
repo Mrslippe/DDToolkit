@@ -77,10 +77,15 @@ STATE_CANCELLED = "cancelled"
 
 @dataclass
 class SessionPlan:
-    """待采的一场。"""
+    """待采的一场。
+
+    `stop_at` 来自上游的 `stopDate`（平台记录的下播时间）。有它就用它算时长 ——
+    比"从事件时间戳推"可靠（实测中位差 6 分钟，但尾部能差 8 小时）。
+    """
 
     live_id: str
     start_at: str
+    stop_at: str | None = None
 
 
 @dataclass
@@ -175,7 +180,12 @@ async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[Session
         if not isinstance(ms, (int, float)):
             continue
         # ⚠️ 必须是 UTC（同 569 的坑）：这里用本地时间会让"按日期筛场次"在东八区差一天
-        out.append(SessionPlan(str(lid), _utc_iso(ms)[:19]))
+        # `stopDate` 是下播时间（毫秒），0 表示未结束；缺失时保持 None，由调用方回退
+        stop = x.get("stopDate") or x.get("stop_date")
+        stop_iso = None
+        if isinstance(stop, (int, float)) and stop > 0:
+            stop_iso = _utc_iso(int(stop))[:19]
+        out.append(SessionPlan(str(lid), _utc_iso(ms)[:19], stop_iso))
     out.sort(key=lambda s: s.start_at)
     return out
 
@@ -262,7 +272,8 @@ def _hash_text(txt: str) -> int:
     return int.from_bytes(hashlib.blake2b(txt.encode("utf-8"), digest_size=8).digest(), "big")
 
 
-def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
+def aggregate(records: list[dict], *,
+              span_ms: tuple[int, int] | None = None) -> tuple[dict[str, dict], dict[str, Any]]:
     """把一场的原始记录压成 `(raw, stats)`。
 
     **raw 的每个字段都由这里现算** —— 尤其 `sum_price`，它是 C1 恒等式的左端。
@@ -353,8 +364,14 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     # 跨度优先用**弹幕**时间戳（2026-10-20）：入场事件可能散落在几天之后（镜像返回的
     # 迟到/重放事件），实测会把 11 小时的场次拉成 102 小时。弹幕才是"有内容的时间段"，
     # 且入场事件本来就不能单独说明直播在进行。没有弹幕时才回退到全部事件。
+    # 首选**平台记录**的起止（`stopDate` 覆盖率 99.9%，是权威值）；没有才从事件推。
+    # 从事件推时分两种：有弹幕用弹幕时间戳，否则回退到全部事件（见上）。
+    duration_source = "danmaku"
     ts_span = ts_chat or ts
-    if ts_span:
+    if span_ms:
+        lo, hi, trimmed = span_ms[0], span_ms[1], 0
+        duration_source = "platform"
+    elif ts_span:
         lo, hi, trimmed = _trim_span(ts_span)
         # ⚠️ 必须写 **UTC**（2026-10-20 发现的口径 bug）：原先用 `datetime.fromtimestamp`
         # 取的是**本地时间**，而 DB 与展示层都以 UTC 存，于是东八区的机器上新采的数据
@@ -375,6 +392,8 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
         # 老数据没有这些字段 ⇒ 缺省为 None，**不伪装成 0**。
         # 场次跨度被裁掉的事件数（>0 说明有离群时间戳；跨度为**裁剪后**的）
         "duration_trimmed": trimmed,
+        # 跨度来源：platform = 上游 stopDate/startDate；danmaku = 由事件时间戳推
+        "duration_source": duration_source,
         "danmaku_total": _danmaku_total,
         "uniq_total": _uniq_total,
         "dup_rate": (round(1 - _uniq_total / _danmaku_total, 6)
@@ -521,7 +540,17 @@ async def collect(
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）"})
                     return
-                raw, stats = aggregate(recs)
+                # 平台给了 stopDate 就用它算时长（权威）；否则 aggregate 内部回退到弹幕跨度
+                span_ms = None
+                if s.stop_at:
+                    try:
+                        span_ms = (int(datetime.strptime(s.start_at, "%Y-%m-%d %H:%M:%S")
+                                       .replace(tzinfo=timezone.utc).timestamp() * 1000),
+                                   int(datetime.strptime(s.stop_at, "%Y-%m-%d %H:%M:%S")
+                                       .replace(tzinfo=timezone.utc).timestamp() * 1000))
+                    except ValueError:
+                        span_ms = None
+                raw, stats = aggregate(recs, span_ms=span_ms)
                 stats["live_id"] = s.live_id
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1
