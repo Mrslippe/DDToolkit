@@ -34,6 +34,7 @@ def test_gate_flags_low_coverage_from_platform():
 
 
 def test_gate_flags_low_income_from_vtb():
+    """只有 vtb 说收入少 ⇒ low_income（收入维度仍按单侧判，弹幕维度才要求双源一致）。"""
     q = evaluate(stats=_stats(pay=10.0), vtb={"Message": 1000, "Money": 100.0})
     assert q["status"] == "low_income"
 
@@ -59,3 +60,27 @@ def test_vtb_match_uses_eight_hour_offset():
     # 偏差超过容差就不认（避免错配到别的场次）
     far = [{"StartAt": int(target + 10 * 3600), "Message": 1}]
     assert match_session(far, our_start_ms) is None
+
+
+def test_two_sources_disagree_marks_suspect_not_low_coverage():
+    """抽查 2026-10-21：17 场 low_coverage 里 13 场是单侧误报。
+
+    规则：平台与 vtb 都说"我们少"才判 low_coverage；只有一边说就标 *_suspect。
+    """
+    # 平台说我们只有 50%，但 vtb 说我们够 ⇒ 平台的数偏大
+    q = evaluate(stats=_stats(type0=500),
+                 platform={"danmakus_count": 1000, "income": 0},
+                 vtb={"Message": 500, "Money": 0})
+    assert q["status"] == "platform_suspect", q
+
+    # 平台说够，vtb 说我们只有一半 ⇒ vtb 侧（合并/错配）
+    q = evaluate(stats=_stats(type0=1000),
+                 platform={"danmakus_count": 1000, "income": 0},
+                 vtb={"Message": 2000, "Money": 0})
+    assert q["status"] == "vtb_suspect", q
+
+    # 两边都说少 ⇒ 真截断
+    q = evaluate(stats=_stats(type0=500),
+                 platform={"danmakus_count": 1000, "income": 0},
+                 vtb={"Message": 1000, "Money": 0})
+    assert q["status"] == "low_coverage", q

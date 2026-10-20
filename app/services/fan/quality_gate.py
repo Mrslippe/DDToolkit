@@ -52,42 +52,55 @@ def evaluate(*, stats: dict, platform: dict | None = None, vtb: dict | None = No
     ours_m = int(stats.get("type0") or 0)
     ours_pay = float(stats.get("sum_price") or 0.0)
 
-    # ── L2 平台计数 ──
+    # ── L2/L3 联合判定 ──
+    # 单独一层的"少"不足以定罪（2026-10-21 抽查：17 场里 13 场是单侧误报）。
+    # 规则：平台与 vtb 都指出"我们少"才算 low_coverage；只有一边说，就标 *_suspect（不降级）。
+    plat_ratio = None
+    vtb_ratio = None
+    plat_inc_ratio = None
+    vtb_inc_ratio = None
+
     if platform:
         plat_m = int(platform.get("danmakus_count") or 0)
         if plat_m > 0:
-            r = _ratio(ours_m, plat_m)
-            checks["platform_message_ratio"] = round(r, 3) if r is not None else None
-            # 平台给的是"平台自己数的弹幕"，我们比它少说明抓取截断
-            if r is not None and r < COVER_FLOOR and status == "ok":
-                status = "low_coverage"
+            plat_ratio = _ratio(ours_m, plat_m)
+            checks["platform_message_ratio"] = round(plat_ratio, 3) if plat_ratio else None
         plat_inc = float(platform.get("income") or 0.0)
         if plat_inc > 0:
-            r = _ratio(ours_pay, plat_inc)
-            checks["platform_income_ratio"] = round(r, 3) if r is not None else None
-            if r is not None and r < COVER_FLOOR and status == "ok":
-                status = "low_income"
+            plat_inc_ratio = _ratio(ours_pay, plat_inc)
+            checks["platform_income_ratio"] = round(plat_inc_ratio, 3) if plat_inc_ratio else None
 
-    # ── L3 vtb.cat ──
     if vtb:
         vtb_m = int(vtb.get("Message") or 0)
         if vtb_m >= MIN_VTB_MESSAGES:
-            r = _ratio(ours_m, vtb_m)
-            checks["vtb_message_ratio"] = round(r, 3) if r is not None else None
-            # 只有"我们更少"才可疑；我们更多是正常的（danmakus 是超集）
-            if r is not None and r < COVER_FLOOR and status == "ok":
-                status = "low_coverage"
+            vtb_ratio = _ratio(ours_m, vtb_m)
+            checks["vtb_message_ratio"] = round(vtb_ratio, 3) if vtb_ratio else None
         vtb_inc = float(vtb.get("Money") or 0.0)
         if vtb_inc >= 1.0:
-            r = _ratio(ours_pay, vtb_inc)
-            checks["vtb_income_ratio"] = round(r, 3) if r is not None else None
-            if r is not None and r < COVER_FLOOR and status == "ok":
-                status = "low_income"
+            vtb_inc_ratio = _ratio(ours_pay, vtb_inc)
+            checks["vtb_income_ratio"] = round(vtb_inc_ratio, 3) if vtb_inc_ratio else None
         checks["vtb_matched"] = True
     else:
         checks["vtb_matched"] = False
-        if status == "ok":
-            status = "no_external"
+
+    def _short(r):
+        return r is not None and r < COVER_FLOOR
+
+    if status != "ok":
+        pass                                   # L1 已判不一致，最高优先级，不再被覆盖
+    elif _short(plat_ratio):
+        if _short(vtb_ratio):
+            status = "low_coverage"        # 两边都说我们少 ⇒ 真截断
+        elif vtb_ratio is None:
+            status = "low_coverage"        # 只有平台可用，只能信它
+        else:
+            status = "platform_suspect"    # vtb 说我们够 ⇒ 平台的数偏大
+    elif _short(vtb_ratio):
+        status = "vtb_suspect"             # 平台说够、vtb 说少 ⇒ vtb 侧（合并/错配）
+    elif _short(plat_inc_ratio) or _short(vtb_inc_ratio):
+        status = "low_income"
+    elif not vtb:
+        status = "no_external"
 
     checks["ours_messages"] = ours_m
     checks["ours_income"] = round(ours_pay, 2)
