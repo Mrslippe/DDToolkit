@@ -174,6 +174,7 @@ def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR) -> AxisTabl
     # 出席率在顶部大量并列（N 场里可能就是几十人同为满勤），单靠比率排不出序；
     # 而"平均首次出场时滞"在这份数据里能分开同档用户（实测后段发言 73% vs 41%）。
     # 形式：A = (att_n + π_E) / (N + 1)，π_E 为**同出席场次内** (−mean_lag) 的经验分位。
+    # 结果统一保留三位小数（见下方 round）。
     # 这样跨档顺序严格不变（来得多的一定在前），档内由时机决定 —— 不会牺牲预测力。
     lag_pct: dict[str, float] = {}
     by_att: dict[int, list] = {}
@@ -189,7 +190,8 @@ def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR) -> AxisTabl
     for u in pool:
         r = _raw_axes(u)
         r[AXIS_ATTENDANCE] = (u.att_n + lag_pct[u.uid]) / (n + 1)
-        table.raw[u.uid] = r
+        # 三轴统一保留三位小数：对外展示与复算都以此为准，避免"同一份数据两串数字"
+        table.raw[u.uid] = {k: round(v, 3) for k, v in r.items()}
         table.tie[u.uid] = {
             "pay": u.pay,
             "msg": float(u.m),
