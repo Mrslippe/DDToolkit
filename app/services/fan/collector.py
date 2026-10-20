@@ -38,6 +38,7 @@ import httpx
 from app.core.useragent import UA_CHROME
 
 from app.core.timecn import cn_day
+from app.services.fan.duration import apply_rate_end
 from app.services.fan.quality import apply_replay_cut
 from app.services.fan.loader import MIN_RECORDS, VtuberRef, ensure_data_dir
 
@@ -578,6 +579,9 @@ async def collect(
                 # 上游偶尔把前段弹幕重录到末尾（实测 9/227 场）；按内容比对裁掉，
                 # 否则场次会显得长得多，重复内容还会污染按场次/按小时的统计。
                 apply_replay_cut(raw, stats)
+                # 回放裁完再看"弹幕率是否在 5 小时后骤降" —— 平台 stopDate 可能偏长
+                # （实测有一场 12.9h 实际只有 6h）。只允许把结束时间提前。
+                apply_rate_end(raw, stats)
                 stats["live_id"] = s.live_id
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1

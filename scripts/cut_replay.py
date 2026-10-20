@@ -14,6 +14,7 @@ import json
 import shutil
 from pathlib import Path
 
+from app.services.fan.duration import apply_rate_end
 from app.services.fan.quality import apply_replay_cut
 
 
@@ -34,14 +35,19 @@ def main() -> None:
             stats = json.loads(sf.read_text(encoding="utf-8"))
             raw = json.loads(rf.read_text(encoding="utf-8"))
             before_end = stats.get("end_at", "")[:16]
-            changed = apply_replay_cut(raw, stats)
-            if not changed:
+            cut = apply_replay_cut(raw, stats)
+            tightened = apply_rate_end(raw, stats)
+            if not (cut or tightened):
                 continue
+            changed = True
             hit += 1
             dropped = int(stats.get("dropped_replay") or 0)
             total_dropped += dropped
-            print(f"  {vdir.name[10:]}/{sf.stem[:8]}  丢弃 {dropped:>6,} 条 · "
-                  f"回放起于 {stats['replay_from']} · 结束 {before_end} → {stats['end_at'][:16]}")
+            tag = "回放" if cut else "率降"
+            extra = (f"丢弃 {dropped:>6,} 条 · 回放起于 {stats['replay_from']} · "
+                     if cut else "")
+            print(f"  {vdir.name[10:]}/{sf.stem[:8]}  [{tag}] {extra}"
+                  f"结束 {before_end} → {stats['end_at'][:16]}")
             if args.apply:
                 for f in (sf, rf):
                     bak = f.with_suffix(f.suffix + ".bak-replay")

@@ -76,3 +76,38 @@ def test_no_replay_when_content_is_all_new():
     raw = {"u1": {"m": 120, "mt": mt, "mh": mh, "uniq": 120, "maxrep": 1}}
     start, dropped, _ = find_replay_from(raw)
     assert start is None and dropped == 0
+
+
+def test_rate_based_end_cuts_sparse_tail():
+    """5 小时后弹幕率骤降 ⇒ 提前结束；且只允许变短（2026-10-20）。
+
+    构造：前 6 小时每分钟 20 条（密集），之后 3 小时每小时仅 2 条（尾部稀疏）。
+    """
+    from app.services.fan.duration import rate_based_end, GRACE_MIN
+
+    base = datetime(2026, 10, 3, 19, 0, tzinfo=CN)
+    mt: list[int] = []
+    for minute in range(6 * 60):                       # 6 小时密集
+        for _ in range(20):
+            mt.append(int((base + timedelta(minutes=minute)).timestamp() * 1000))
+    dense_end = base + timedelta(hours=6)
+    for hour in range(3):                              # 3 小时稀疏
+        for k in range(2):
+            mt.append(int((dense_end + timedelta(hours=hour, minutes=k * 10)).timestamp() * 1000))
+    raw = {"u1": {"m": len(mt), "mt": mt, "mh": [1] * len(mt)}}
+
+    cand = rate_based_end(raw)
+    assert cand is not None
+    cut = cand.astimezone(CN)
+    # 应该落在密集段结束 + 宽限附近，而不是尾部最后一条
+    assert dense_end <= cut <= dense_end + timedelta(minutes=GRACE_MIN + 10), cut
+
+
+def test_rate_based_end_ignores_short_sessions():
+    """不到 5 小时的场次不判断（避免误伤）。"""
+    from app.services.fan.duration import rate_based_end
+
+    base = datetime(2026, 10, 3, 19, 0, tzinfo=CN)
+    mt = [int((base + timedelta(minutes=i)).timestamp() * 1000) for i in range(20)]
+    raw = {"u1": {"m": len(mt), "mt": mt, "mh": [1] * len(mt)}}
+    assert rate_based_end(raw) is None
