@@ -297,3 +297,39 @@ def test_aggregate_records_text_hash_alignment():
 
     # 确定性：同一文本任何时候都得到同一个值（blake2b，不受 PYTHONHASHSEED 影响）
     assert _hash_text("好耶") == _hash_text("好耶") == 614971719154571682
+
+
+def test_fetch_records_follows_pagination(monkeypatch):
+    """取一场记录必须**翻页**（2026-10-20）。
+
+    背景：服务端单页最多约 5–10 万条，超过就截断并且**谎报 hasMore=false**；
+    实测 4/227 场因此少了 12–37% 的弹幕（records 恰好卡在 100,000）。
+    这里用假上游验证：只要 hasMore=True 就继续翻，直到 False 为止。
+    """
+    import asyncio
+    from app.services.fan import collector as C
+
+    pages = {
+        1: {"data": {"data": {"danmakus": [{"i": 1}, {"i": 2}]}, "hasMore": True}},
+        2: {"data": {"data": {"danmakus": [{"i": 3}]}, "hasMore": True}},
+        3: {"data": {"data": {"danmakus": [{"i": 4}]}, "hasMore": False}},
+    }
+    seen = []
+
+    async def fake_get(client, path, params, **kw):
+        num = dict(params)["pageNum"]
+        seen.append(num)
+        return pages.get(num)
+
+    monkeypatch.setattr(C, "_get_json", fake_get)
+    recs = asyncio.run(C.fetch_records(None, "live-x"))
+
+    assert [r["i"] for r in recs] == [1, 2, 3, 4], recs
+    assert seen == [1, 2, 3], seen
+
+    # 上游完全没数据 → None（与"成功但为空"区分开）
+    async def none_get(client, path, params, **kw):
+        return None
+
+    monkeypatch.setattr(C, "_get_json", none_get)
+    assert asyncio.run(C.fetch_records(None, "live-y")) is None

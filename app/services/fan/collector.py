@@ -45,7 +45,11 @@ logger = logging.getLogger(__name__)
 # ── 具名常量 ────────────────────────────────────────────────────────────────
 DANMAKUS_BASE = "https://ukamnads.icu"
 #: 一次拿全一场；这是实测出来的值（见模块 docstring）
-COLLECT_PAGE_SIZE = 100_000
+#: 单页大小。**不能开到 100000**：实测服务端在超大 pageSize 下会静默截断并谎报
+#: `hasMore=false`（同一场 100000 → 55,264 条、hasMore=false；50000 → 三页共 105,264 条）。
+COLLECT_PAGE_SIZE = 50_000
+#: 单场最多翻多少页（防上游异常时死循环；50k × 20 = 100 万条，远超任何真实场次）
+COLLECT_MAX_PAGES = 20
 #: 并发上限。**不要调大** —— 上游对突发请求敏感，实测 3 路稳定
 COLLECT_CONCURRENCY = 3
 #: 单场超时。实测最慢 18 秒，给 120 秒余量
@@ -159,6 +163,29 @@ async def _get_json(client: httpx.AsyncClient, path: str,
         await asyncio.sleep(COLLECT_GAP_S)
     logger.warning("danmakus %s 取数失败（%s）", path, last)
     return None
+
+
+async def fetch_records(client: httpx.AsyncClient, live_id: str) -> list[dict] | None:
+    """取一场的**全部**记录（自动翻页）。
+
+    返回 `None` 表示上游没给数据；返回列表表示成功（可能为空，由调用方判下限）。
+
+    为什么要翻页：服务端单页最多返回约 5–10 万条，超过就**截断且谎报 `hasMore=false`**。
+    2026-10-20 实测 4/227 场因此少了 12–37% 的弹幕（`records` 正好卡在 100,000）。
+    """
+    out: list[dict] = []
+    for page in range(1, COLLECT_MAX_PAGES + 1):
+        j = await _get_json(client, "/api/v2/live",
+                            [("liveId", live_id), ("pageSize", COLLECT_PAGE_SIZE),
+                             ("pageNum", page)])
+        if not j:
+            return None if page == 1 else out
+        env = j.get("data") or {}
+        recs = ((env.get("data") or {}).get("danmakus")) or []
+        out.extend(recs)
+        if not recs or not env.get("hasMore"):
+            break
+    return out
 
 
 async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[SessionPlan]:
@@ -525,16 +552,12 @@ async def collect(
                     p.skipped += 1
                     return
                 p.current = s.start_at
-                j = await _get_json(client, "/api/v2/live",
-                                    [("liveId", s.live_id), ("pageSize", COLLECT_PAGE_SIZE)])
-                if not j:
+                recs = await fetch_records(client, s.live_id)
+                if recs is None:
                     p.failed += 1
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": "上游没有返回该场的弹幕（可能已下架或接口无数据）"})
                     return
-                env = (j.get("data") or {})
-                inner = env.get("data") or {}
-                recs = inner.get("danmakus") or []
                 if len(recs) < MIN_RECORDS:
                     p.failed += 1
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
@@ -587,7 +610,7 @@ def _write(base: Path, live_id: str, raw: dict, stats: dict) -> None:
 
 
 __all__ = [
-    "COLLECT_PAGE_SIZE", "COLLECT_CONCURRENCY", "COLLECT_TIMEOUT_S",
+    "COLLECT_PAGE_SIZE", "COLLECT_MAX_PAGES", "COLLECT_CONCURRENCY", "COLLECT_TIMEOUT_S",
     "ENUM_TIMEOUT_S", "ENUM_ATTEMPTS",
     "STATE_RUNNING", "STATE_DONE", "STATE_FAILED", "STATE_CANCELLED",
     "SessionPlan", "CollectProgress", "CollectError",
