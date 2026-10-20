@@ -1,6 +1,6 @@
 """粉丝结构分析 · 展示标签（P3）。
 
-对应规格 `plans/fan-model-spec.md` §4.5。
+对应规格 `plans/fan-model-plan.md` §4.5。
 
 ## 为什么标签单独一层
 

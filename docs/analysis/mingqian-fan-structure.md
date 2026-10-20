@@ -2,7 +2,7 @@
 doc:         analysis/mingqian-fan-structure
 class:       spec
 scope:       「明前奶绿」单个主播的**完整模型输出快照**（2026-10-19 实跑）：数据层对账、完整性判据、三轴分布、参与强度、类型标注、效标加权、分半信度、展示标签、跨 V 对照、L6 时间动态、核心成员明细。每个数字都来自 `app/services/fan` 的实跑，不是引用历史结论
-not-scope:   模型的数学推导与验证结论 → `plans/fan-model-spec.md`；工程口径与数据层处置 → `plans/fan-structure-analysis.md`；界面实现 → `frontend/UI-MAP.md`
+not-scope:   模型的数学推导与验证结论 → `plans/fan-model-plan.md`；工程口径与数据层处置 → `plans/fan-model-plan.md`；界面实现 → `frontend/UI-MAP.md`
 sot:         `app/services/fan/`（loader → axes → compose → checks → tags → cross_v → timeline）
 verify:      `python _probe/_report_mingqian.py`（产出本页全部数字）；复核 `pytest tests/test_fan_*.py`
 retire-when: 换窗口口径（N≠75）或数据重新采集后本快照失效，届时按同脚本重出并替换本页

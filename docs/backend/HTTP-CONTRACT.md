@@ -322,7 +322,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 ### 3.7 `app/routers/fan.py` — 粉丝结构分析（5 条，2026-10-17 新增）
 
 > 只读，全部从 `datasets/fan-structure/` 的 JSON 事实表现算，**不写库、不联网**。
-> 模型定义见 `docs/plans/fan-model-spec.md`；施工阶段见 `docs/plans/fan-model-execution.md`。
+> 模型定义见 `docs/plans/fan-model-plan.md`；施工阶段见 `docs/plans/fan-model-plan.md`。
 
 | 方法 + 路径 | 说明 |
 |---|---|

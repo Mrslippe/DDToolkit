@@ -1,6 +1,6 @@
 r"""粉丝结构分析 · 三轴与经验分位变换（P1）。
 
-对应规格 `plans/fan-model-spec.md` §3。**不依赖 numpy** —— 应用运行时没有它。
+对应规格 `plans/fan-model-plan.md` §3。**不依赖 numpy** —— 应用运行时没有它。
 
 ## 三条轴
 

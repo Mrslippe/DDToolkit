@@ -1,7 +1,7 @@
 """数据分析工作台端点（P3/P4 + 采集，2026-10-18）。
 
 只读分析部分全部从数据根的 JSON 事实表现算，**不写库**；采集部分只写数据根。
-模型定义见 `docs/plans/fan-model-spec.md`；施工阶段见 `docs/plans/fan-model-execution.md`。
+模型定义见 `docs/plans/fan-model-plan.md`；施工阶段见 `docs/plans/fan-model-plan.md`。
 
 ## 端点
 

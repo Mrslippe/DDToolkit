@@ -2,7 +2,7 @@
 doc: frontend/workbench-map
 class: index
 scope: 「数据分析工作台」这一屏的**功能 → 落点**查询表：界面元素 ↦ 数据来源 ↦ 具体文件:函数；含后端端点表、三条不变量、常见改动的落点清单与定位手法
-not-scope: 组件与 CSS 类名索引与页面视觉规范 → frontend/UI-MAP.md B6；模型的数学推导与验证结论 → plans/fan-model-spec.md
+not-scope: 组件与 CSS 类名索引与页面视觉规范 → frontend/UI-MAP.md B6；模型的数学推导与验证结论 → plans/fan-model-plan.md
 sot: frontend/src/pages/WorkbenchPage.tsx, frontend/src/components/workbench/, app/routers/fan.py, app/services/fan/
 verify: grep 本表任意一行给出路径，落点必须存在；`python scripts/doc_check.py`
 retire-when: 工作台拆成多页，或本表能被脚本按 import 图自动生成

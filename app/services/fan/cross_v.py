@@ -1,6 +1,6 @@
 """粉丝结构分析 · 跨 V 对照（P4）。
 
-对应规格 `plans/fan-model-spec.md` §5.5 与 §7。
+对应规格 `plans/fan-model-plan.md` §5.5 与 §7。
 
 ## ★ 只比层级，不比分数
 

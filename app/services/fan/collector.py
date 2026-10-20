@@ -38,8 +38,10 @@ import httpx
 from app.core.useragent import UA_CHROME
 
 from app.core.timecn import cn_day
+from app.services.externals.vtbcat import fetch_lives, match_session
 from app.services.fan.duration import apply_rate_end
 from app.services.fan.quality import apply_replay_cut
+from app.services.fan.quality_gate import evaluate as quality_evaluate
 from app.services.fan.loader import MIN_RECORDS, VtuberRef, ensure_data_dir
 
 logger = logging.getLogger(__name__)
@@ -101,6 +103,9 @@ class SessionPlan:
     live_id: str
     start_at: str
     stop_at: str | None = None
+    #: 平台自己报的弹幕总量与收入（质量闸 L2 用；缺省 0 = 平台没给）
+    danmakus_count: int = 0
+    income: float = 0.0
 
 
 @dataclass
@@ -252,7 +257,11 @@ async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[Session
         stop_iso = None
         if isinstance(stop, (int, float)) and stop > 0:
             stop_iso = _utc_iso(int(stop))[:19]
-        out.append(SessionPlan(str(lid), _utc_iso(ms)[:19], stop_iso))
+        out.append(SessionPlan(
+            str(lid), _utc_iso(ms)[:19], stop_iso,
+            danmakus_count=int(x.get("danmakusCount") or 0),
+            income=float(x.get("totalIncome") or 0.0),
+        ))
     out.sort(key=lambda s: s.start_at)
     return out
 
@@ -582,6 +591,12 @@ async def collect(
         p.total = len(sessions)
         sem = asyncio.Semaphore(concurrency)
 
+        # 质量闸 L3：每个 V 只取一次 vtb.cat 的场次表（失败就返回空，不影响采集）
+        try:
+            vtb_lives = await fetch_lives(v.mid)
+        except Exception:  # noqa: BLE001
+            vtb_lives = []
+
         async def one(s: SessionPlan) -> None:
             nonlocal p
             async with sem:
@@ -621,6 +636,18 @@ async def collect(
                 # 回放裁完再看"弹幕率是否在 5 小时后骤降" —— 平台 stopDate 可能偏长
                 # （实测有一场 12.9h 实际只有 6h）。只允许把结束时间提前。
                 apply_rate_end(raw, stats)
+                # 质量闸：L1 自洽 / L2 平台计数 / L3 vtb.cat（只标记，不丢弃）
+                try:
+                    start_ms = int(datetime.strptime(s.start_at, "%Y-%m-%d %H:%M:%S")
+                                   .replace(tzinfo=timezone.utc).timestamp() * 1000)
+                except ValueError:
+                    start_ms = None
+                vit = match_session(vtb_lives, start_ms) if start_ms else None
+                stats["quality"] = quality_evaluate(
+                    stats=stats,
+                    platform={"danmakus_count": s.danmakus_count, "income": s.income},
+                    vtb=vit,
+                )
                 stats["live_id"] = s.live_id
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1

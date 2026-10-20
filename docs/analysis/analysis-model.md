@@ -2,7 +2,7 @@
 doc:         analysis/analysis-model
 class:       module
 scope:       「直播观众行为结构」分析模型的**独立学术论述**：不依赖具体工具也能读懂。从可观测事件出发，给出每条轴的形式化定义与计算口径，再给出合成、类型、标签、效标、跨 V、时间动态与测量学检验，最后汇总局限。所有小数保留三位
-not-scope:   前端交互与视觉 → `frontend/UI-MAP.md`；单个主播的数字快照 → `analysis/mingqian-fan-structure.md`；工程口径与数据层处置 → `plans/fan-structure-analysis.md`；实现落点见附录 C
+not-scope:   前端交互与视觉 → `frontend/UI-MAP.md`；单个主播的数字快照 → `analysis/mingqian-fan-structure.md`；工程口径与数据层处置 → `plans/fan-model-plan.md`；实现落点见附录 C
 sot:         `app/services/fan/`（loader → axes → compose → criterion → tags → cross_v → timeline）、`app/services/live_type.py`、`app/services/danmaku_words.py`、`app/services/live_identity.py`、`app/services/live_settle.py`
 verify:      `python scripts/docs_gate.py`；各章的复算命令见 §1.8 与附录 C.1 —— 文中每个数字都能在本机重跑得到
 retire-when: 分析框架整体重做（指标定义换了范式）

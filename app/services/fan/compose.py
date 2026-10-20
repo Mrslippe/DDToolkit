@@ -1,6 +1,6 @@
 """粉丝结构分析 · 合成与输出（P1）。
 
-对应规格 `plans/fan-model-spec.md` §4。**不依赖 numpy** —— OLS 用纯 Python 的高斯消元解。
+对应规格 `plans/fan-model-plan.md` §4。**不依赖 numpy** —— OLS 用纯 Python 的高斯消元解。
 
 ## 三个输出，**必须分开调用**
 
