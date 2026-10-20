@@ -41,6 +41,8 @@ def main() -> None:
     ap.add_argument("--root", required=True, type=Path)
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 个 V（调试用）")
+    ap.add_argument("--source", choices=("chat", "all"), default="chat",
+                    help="跨度来源：chat=只用弹幕（默认，与采集一致）；all=全部事件")
     args = ap.parse_args()
 
     total = changed = 0
@@ -55,8 +57,9 @@ def main() -> None:
             ts: list[int] = []
             for a in raw.values():
                 ts.extend(a.get("mt") or [])
-                ts.extend(a.get("et") or [])
-                ts.extend(a.get("pt") or [])
+                if args.source == "all":
+                    ts.extend(a.get("et") or [])
+                    ts.extend(a.get("pt") or [])
             if not ts:
                 continue
             lo, hi, dropped = _trim_span(ts)

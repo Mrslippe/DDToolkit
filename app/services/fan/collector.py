@@ -271,6 +271,8 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     type_hist: dict[str, int] = {}
     sum_price = 0.0
     ts: list[int] = []
+    #: 只收**弹幕**时间戳，用于算场次跨度。理由见下方 start_iso 处的注释。
+    ts_chat: list[int] = []
     #: uid -> {归一化文本: 出现次数}；只在本函数内存在，**不落盘**
     _texts: dict[str, dict[str, int]] = {}
 
@@ -300,6 +302,7 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
             u["m"] += 1
             if isinstance(ms, (int, float)):
                 u["mt"].append(int(ms))
+                ts_chat.append(int(ms))
             # 文本指纹：归一化后计入该用户的计数器，收尾时折算成 uniq / maxrep；
             # 同时把 64 位哈希写进 `mh`，与 `mt` 一一对齐 —— 将来换了去重规则，
             # 可以在哈希序列上离线重算，**不必重新采集**。
@@ -347,8 +350,12 @@ def aggregate(records: list[dict]) -> tuple[dict[str, dict], dict[str, Any]]:
     sum_price = round(sum(u["p"] for u in raw.values()), 2)
     start_iso = end_iso = ""
     trimmed = 0
-    if ts:
-        lo, hi, trimmed = _trim_span(ts)
+    # 跨度优先用**弹幕**时间戳（2026-10-20）：入场事件可能散落在几天之后（镜像返回的
+    # 迟到/重放事件），实测会把 11 小时的场次拉成 102 小时。弹幕才是"有内容的时间段"，
+    # 且入场事件本来就不能单独说明直播在进行。没有弹幕时才回退到全部事件。
+    ts_span = ts_chat or ts
+    if ts_span:
+        lo, hi, trimmed = _trim_span(ts_span)
         # ⚠️ 必须写 **UTC**（2026-10-20 发现的口径 bug）：原先用 `datetime.fromtimestamp`
         # 取的是**本地时间**，而 DB 与展示层都以 UTC 存，于是东八区的机器上新采的数据
         # 会整体偏 +8 小时 —— dev 库里 227 场中有 76 场就是这么偏的。
