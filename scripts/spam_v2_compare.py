@@ -54,8 +54,9 @@ def main() -> None:
         new = sorted(v2 - v1, key=lambda u: -traces[u].messages)[:3]
         for u in new:
             t = traces[u]
-            print(f"    新增 {u}: 消息 {t.messages:,} · maxrep {t.maxrep} · 跨度 {t.rep_span_h:.1f}h"
-                  f" · 窗口重复率 {t.worst_window_dup:.2f} · 跨场 {t.cross_sessions}")
+            print(f"    新增 {u}: 消息 {t.messages:,} · 不同文本 {t.uniq:,}"
+                  f"（{t.variety:.1%}）· 低多样性场次 {t.low_variety_sessions}"
+                  f" · 单场最高重复 {t.maxrep} · 跨场 {t.cross_sessions}")
 
 
 if __name__ == "__main__":

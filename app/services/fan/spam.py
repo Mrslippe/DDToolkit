@@ -24,8 +24,10 @@ from __future__ import annotations
 SPAM_ALGO_VERSION = 1
 
 #: v1 的参数（只作为默认值；调用方可以覆盖）
-MIN_MSG_FOR_JUDGEMENT = 20   # 少于这么多条，谈不上"刷屏"
-DUP_RATE_THRESHOLD = 0.60    # 重复率（1 - uniq/m）超过它才算刷屏
+MIN_MSG_FOR_JUDGEMENT = 200  # 少于这么多条不判（2026-10-21：与 v2 对齐）
+# 重复率（1 - uniq/m）。0.80 等价于「不同文本率 ≤20%」——
+# 2026-10-21 逐个审原文后定的线：真独轮车 1%–11%，口头禅型话痨 24%–78%。
+DUP_RATE_THRESHOLD = 0.80
 MAXREP_RATIO_THRESHOLD = 0.30  # 单条文本最大重复次数占全部条数的比例
 
 

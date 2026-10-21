@@ -1,53 +1,54 @@
-"""独轮车 v2（时间分布判定）的用例。"""
+"""独轮车 v2（文本多样性判定）的用例。"""
 
 from __future__ import annotations
 
 from app.services.fan.spam2 import Trace, feed, verdict
 
-H = 3_600_000
 
-
-def _t(n: int, step_ms: int = 60_000, start: int = 0) -> list[int]:
-    return [start + i * step_ms for i in range(n)]
-
-
-def test_sustained_repeat_is_caught():
-    """一条文本刷 60 次、横跨 2 小时 ⇒ sustained。"""
+def test_low_variety_overall_is_caught():
+    """累计 600 条里只有 20 种文本（3.3%）⇒ 独轮车。"""
     tr = Trace()
-    feed(tr, session_idx=0, mt=_t(60, 120_000), mh=[7] * 60)
+    for s in range(2):
+        feed(tr, session_idx=s, mt=list(range(300)), mh=[i % 10 for i in range(300)])
     ok, rule = verdict(tr)
-    assert ok is True and rule in ("sustained", "window"), rule
+    assert ok is True and rule == "low_variety", (round(tr.variety, 3), rule)
 
 
-def test_window_flood_is_caught():
-    """10 分钟内 40 条、其中 36 条同一句 ⇒ window。"""
+def test_high_volume_chatter_is_not_spam():
+    """用户实测反例：6.9 万条、72% 文本互不相同 —— 话痨，不是独轮车。"""
     tr = Trace()
-    mt = _t(40, 10_000)
-    mh = [9] * 36 + [1, 2, 3, 4]
-    feed(tr, session_idx=0, mt=mt, mh=mh)
+    for s in range(20):
+        feed(tr, session_idx=s, mt=list(range(300)),
+             mh=list(range(s * 250, s * 250 + 300)))   # 每场几乎全是新文本
     ok, rule = verdict(tr)
-    assert ok is True and rule in ("window", "sustained"), rule
+    assert ok is False and rule == "ok", rule
 
 
-def test_cross_session_habit_is_caught():
-    """同一条文本在 25 场里各出现 5 次，且占该用户消息的 5% 以上。"""
+def test_occasional_catchphrase_is_not_spam():
+    """说几千次“哈哈哈”、但只占 5.7%、整体 72% 不重复 ⇒ 不是独轮车。
+
+    关键是“零星”而不是“某一小时里全在刷”：每场 200 次口头禅 + 3,000 条别的。
+    """
+    tr = Trace()
+    for s in range(20):
+        mh = [7] * 200 + list(range(s * 3300, s * 3300 + 3000))
+        feed(tr, session_idx=s, mt=list(range(len(mh))), mh=mh)
+    ok, rule = verdict(tr)
+    assert ok is False and rule == "ok", (round(tr.variety, 3), rule)
+
+
+def test_cross_session_needs_low_variety():
+    """横跨很多场，但文本多样 ⇒ 不判。"""
     tr = Trace()
     for s in range(25):
-        feed(tr, session_idx=s, mt=_t(5, 60_000), mh=[42] * 5)
+        feed(tr, session_idx=s, mt=list(range(250)),
+             mh=[42] * 120 + list(range(s * 130, s * 130 + 130)))
     ok, rule = verdict(tr)
-    assert ok is True and rule == "cross_session", rule
-
-
-def test_normal_chatter_is_not_spam():
-    tr = Trace()
-    for s in range(10):
-        feed(tr, session_idx=s, mt=_t(10, 60_000), mh=list(range(s * 10, s * 10 + 10)))
-    ok, rule = verdict(tr)
-    assert ok is False and rule == "ok"
+    assert ok is False, (tr.variety, rule)      # 多样性约 52%
 
 
 def test_too_few_messages_is_unknown():
     tr = Trace()
-    feed(tr, session_idx=0, mt=_t(5), mh=[1] * 5)
+    feed(tr, session_idx=0, mt=list(range(50)), mh=[1] * 50)
     ok, rule = verdict(tr)
     assert ok is None and rule == "unknown"
