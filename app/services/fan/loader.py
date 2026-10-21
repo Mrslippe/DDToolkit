@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Callable, Iterable
 
+from app.services.fan.spam import is_spam
+from app.services.fan.spam2 import Trace, feed, verdict
 from app.core.timecn import cn_day
 from app.core import config as _core_config
 from app.core.config import settings
@@ -300,6 +302,8 @@ class Window:
     sessions: list[SessionRef]
     users: dict[str, UserFact]
     warnings: list[str] = field(default_factory=list)
+    #: uid → 独轮车规则（`sustained` / `window` / `cross_session`）；空 = 不是
+    spam: dict[str, str] = field(default_factory=dict)
 
     @property
     def n(self) -> int:
@@ -496,6 +500,7 @@ def load_window(
     #    因此中途失败会带来很小的位置偏移 —— 这两个字段只喂展示标签（`新面孔`），
     #    不影响任何分量；实测该分支从未触发（0/225）。
     users: dict[str, UserFact] = {}
+    traces: dict[str, Trace] = {}
     total = max(1, len(sessions) - 1)
     ok: list[SessionRef] = []
     for idx, sr in enumerate(sessions):
@@ -550,12 +555,36 @@ def load_window(
                 u.guard_top = gt
             u.last_pos = max(u.last_pos, pos)
             u.first_pos = min(u.first_pos, pos)
+            # 独轮车 v2 需要**逐条序列**（时间分布），这里顺手喂进去；
+            # 只喂本场 ≥20 条的用户，避免给几万条噪声用户白算滑动窗口。
+            _mt = a.get("mt")
+            _mh = a.get("mh")
+            if isinstance(_mt, list) and isinstance(_mh, list) and len(_mt) >= 20:
+                _tr = traces.get(uid)
+                if _tr is None:
+                    _tr = traces[uid] = Trace()
+                feed(_tr, session_idx=idx, mt=_mt, mh=_mh)
 
     sessions = ok
 
     if not sessions:
         warnings.append(f"{v.name}：没有可用场次（requested n={n}）")
-    return Window(v, n, sessions, users, warnings)
+    # 独轮车判定：v1（重复率，用累计 uniq/maxrep）+ v2（时间分布），**并集**
+    spam: dict[str, str] = {}
+    for uid, u in users.items():
+        rule = None
+        if u.text_tracked and u.m >= 20:
+            flag1 = is_spam(uniq=u.uniq, maxrep=u.maxrep, m=u.m)
+            if flag1:
+                rule = "repeat"
+        tr = traces.get(uid)
+        if tr is not None:
+            flag2, rule2 = verdict(tr)
+            if flag2:
+                rule = rule or rule2
+        if rule:
+            spam[uid] = rule
+    return Window(v, n, sessions, users, warnings, spam)
 
 
 def load_all(before_n: int = 75) -> dict[str, Window]:

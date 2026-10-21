@@ -451,6 +451,8 @@ def ranked(
             "att_rate": round(u.att_n / max(1, win.n), 6) if u else 0.0,
             "pay_total": round(table.tie[uid]["pay"], 2),
             "msg_total": int(table.tie[uid]["msg"]),
+            # 独轮车标记（v1 重复率 ∪ v2 时间分布）；None = 不是
+            "spam": win.spam.get(uid),
             "tags": tags.get(uid, []),
         })
 
@@ -462,7 +464,10 @@ def ranked(
         "warnings": list(win.warnings),
         "since": since, "until": until, "by": by,
         "purity_threshold": PURITY_THRESHOLD,
-        "total_in_pool": len(table), "count": len(rows), "items": rows,
+        "total_in_pool": len(table), "count": len(rows),
+        #: 池里被判为独轮车的人数（前端可据此提示"Top N 里有 X 人"）
+        "spam_in_pool": sum(1 for u in table.uids if u in win.spam),
+        "items": rows,
     }
 
 
