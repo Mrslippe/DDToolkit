@@ -56,7 +56,11 @@ def is_spam(
 
     ⚠️ 当前**没有调用方**。接入时要同时决定"剔除出池"还是"降权"，并把剔除人数写进报告。
     """
-    score = spam_score(uniq=uniq, maxrep=maxrep, m=m)
-    if score is None:
+    if m <= 0 or uniq < 0 or m < MIN_MSG_FOR_JUDGEMENT:
         return None
-    return score >= max(dup_rate_threshold, maxrep_ratio_threshold)
+    # ⚠️ 2026-10-21 修正：原先是 `score >= max(两个阈值)`，等于把 maxrep 阈值
+    # 抬到 0.60，`MAXREP_RATIO_THRESHOLD = 0.30` 从未生效。
+    # 两个条件是**或**关系：整体重复率高，**或者**单条文本反复刷，都算独轮车。
+    dup_rate = 1 - min(uniq, m) / m
+    maxrep_ratio = maxrep / m if m else 0.0
+    return dup_rate >= dup_rate_threshold or maxrep_ratio >= maxrep_ratio_threshold
