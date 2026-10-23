@@ -17,6 +17,7 @@ import math
 import pytest
 
 from app.services.fan import load_window, resolve_data_dir
+from app.services.fan.pool import pool_size_for
 from app.services.fan.axes import (
     AXES,
     AxisError,
@@ -43,15 +44,15 @@ from app.services.fan.compose import (
 #      —— 见 `axes.build_axis_table` 与 docs/analysis/analysis-model.md §2.1′。
 GOLDEN = {
     #            入选池   类型分布                                        强度前 3（uid, S）
-    "弥月": (14_767,
-             {"出勤": 3_155, "互动": 1_361, "付费": 480, "综合": 9_771},
-             [("19871", 0.9999), ("1464721816", 0.9996), ("6094722", 0.9992)]),
-    "明前奶绿": (34_443,
-             {"出勤": 6_698, "互动": 4_255, "付费": 1_092, "综合": 22_398},
-             [("431410658", 0.9999), ("13892390", 0.9999), ("259217653", 0.9992)]),
-    "星瞳": (33_434,
-             {"出勤": 6_499, "互动": 6_210, "付费": 6_957, "综合": 13_768},
-             [("44947708", 0.9998), ("47844811", 0.9991), ("38025900", 0.9989)]),
+    "弥月": (1_173,
+             {"出勤": 265, "互动": 119, "付费": 124, "综合": 665},
+             [("19871", 0.9982), ("1464721816", 0.9945), ("6094722", 0.9898)]),
+    "明前奶绿": (3_430,
+             {"出勤": 621, "互动": 483, "付费": 551, "综合": 1_775},
+             [("431410658", 0.999), ("13892390", 0.999), ("368136514", 0.9931)]),
+    "星瞳": (3_769,
+             {"出勤": 672, "互动": 573, "付费": 602, "综合": 1_922},
+             [("44947708", 0.9985), ("47844811", 0.9922), ("35227516", 0.9904)]),
 }
 
 
@@ -72,7 +73,7 @@ def test_outputs_match_golden(short: str) -> None:
         pytest.skip(f"{short} 数据不可用：{exc}")
     if not w.users:
         pytest.skip(f"{short} 无数据")
-    t = build_axis_table(w)
+    t = build_axis_table(w, pool_size=pool_size_for(w))
     assert len(t) == GOLDEN[short][0]
 
     labels = type_label(t)

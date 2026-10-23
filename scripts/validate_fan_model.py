@@ -22,6 +22,7 @@ from app.services.fan.axes import (
 )
 from app.services.fan.compose import income_outcome, retention_outcome
 from app.services.fan.cross_v import overlap, profile
+from app.services.fan.pool import pool_size_for
 
 VS = ("弥月", "明前奶绿", "星瞳")
 N = 75
@@ -93,8 +94,8 @@ def main() -> None:
     for short in VS:
         w = load_window(short, N)
         ids = [s.live_id for s in w.sessions]
-        t1 = build_axis_table(load_window(short, N, live_ids=ids[::2]))
-        t2 = build_axis_table(load_window(short, N, live_ids=ids[1::2]))
+        t1 = build_axis_table(load_window(short, N, live_ids=ids[::2]), pool_size=pool_size_for(load_window(short, N, live_ids=ids[::2])))
+        t2 = build_axis_table(load_window(short, N, live_ids=ids[1::2]), pool_size=pool_size_for(load_window(short, N, live_ids=ids[1::2])))
         common = sorted(set(t1.uids) & set(t2.uids))
         vals = []
         for axis in (AXIS_ATTENDANCE, AXIS_INTERACTION, AXIS_PAYMENT):
@@ -112,7 +113,7 @@ def main() -> None:
         ids = [s.live_id for s in w.sessions]
         w1 = load_window(short, N, live_ids=ids[::2])
         w2 = load_window(short, N, live_ids=ids[1::2])
-        t1 = build_axis_table(w1)
+        t1 = build_axis_table(w1, pool_size=pool_size_for(w1))
         n2 = len(w2.sessions) or 1
         us = [u for u in t1.uids if u in w2.users]
         axis_v = [t1.pct[u][AXIS_ATTENDANCE] for u in us]
@@ -127,7 +128,7 @@ def main() -> None:
         ids = [s.live_id for s in w.sessions]
         w1 = load_window(short, N, live_ids=ids[::2])
         w2 = load_window(short, N, live_ids=ids[1::2])
-        t1 = build_axis_table(w1)
+        t1 = build_axis_table(w1, pool_size=pool_size_for(w1))
         us = list(t1.uids)                       # 后半没出现 = 无出席
         pred = [[t1.pct[u][a] for a in (AXIS_ATTENDANCE, AXIS_INTERACTION, AXIS_PAYMENT)]
                 for u in us]
@@ -139,7 +140,7 @@ def main() -> None:
               f"  流失率 {sum(retain)/len(retain):.1%}")
 
     print("\n=== 4. 跨 V 受众重叠 ===")
-    profs = {s: profile(load_window(s, N)) for s in VS}
+    profs = {s: profile(load_window(s, N)) for s in VS}   # profile 内部已按 ACV 切池
     for i, a in enumerate(VS):
         for b in VS[i + 1:]:
             ov = overlap(profs[a], profs[b])

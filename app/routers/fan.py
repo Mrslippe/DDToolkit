@@ -73,6 +73,7 @@ from app.services.fan.collector import (
 )
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
+from app.services.fan.pool import core_size_for, pool_size_for, window_acv
 from app.services.fan.tags import explain as explain_tags
 from app.services.fan.timeline import (
     MAX_LAG,
@@ -193,11 +194,9 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     # 池子规模由**平均同接（ACV）**决定（2026-10-23 用户定案 B 方案）：
     #   核心 = 0.75×ACV，次核心 = 1.25×ACV ⇒ 池 = 2×ACV，其余"分流走"。
     # ACV 取窗口内各场 `stats["acv"]` 的中位数；缺失时回退到 INCLUSION_FLOOR 老口径。
-    _acvs = [float(sr.stats["acv"]) for sr in win.sessions
-             if (sr.stats or {}).get("acv")]
-    acv = float(__import__('statistics').median(_acvs)) if _acvs else None
-    pool_size = round(acv * 2) if acv else None
-    core_n = round(acv * 0.75) if acv else None
+    acv = window_acv(win)
+    pool_size = pool_size_for(win)
+    core_n = core_size_for(win)
 
     table = build_axis_table(win, pool_size=pool_size)
     if len(table) == 0:

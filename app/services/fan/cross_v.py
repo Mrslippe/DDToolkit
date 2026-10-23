@@ -173,8 +173,12 @@ def assign_tiers(table: AxisTable, strength: Mapping[str, float] | None = None) 
 
 
 def profile(win: Window) -> VProfile:
-    """从一个窗口算出 V 画像。"""
-    table = build_axis_table(win)
+    """从一个窗口算出 V 画像。
+
+    `pool_size` 给了就按 ACV 的 2× 切池（与 `/ranked` 同一口径）；`None` 用出席率门槛。
+    """
+    from app.services.fan.pool import pool_size_for
+    table = build_axis_table(win, pool_size=pool_size_for(win))
     strength = participation_strength(table)
     return VProfile(win.vtuber.name, win.vtuber.short, win.n,
                     assign_tiers(table, strength), strength)
