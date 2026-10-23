@@ -159,21 +159,34 @@ def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR,
 
     Args:
         win: `loader.load_window()` 的结果。
-        floor: 入选门槛（出席率）。`pool_size` 给出时**以人数为准**：
-            先按出席场次降序取前 `pool_size` 人，`floor` 只作为最低噪声门槛。
-        pool_size: 池子人数（ACV 方案：2×平均同接）。`None` = 按 `floor` 切。
+        floor: 最低噪声门槛（出席率）—— 先按它筛出"大盘"。
+        pool_size: 名单人数（ACV 方案：2×平均同接）。给了就在大盘内
+            **按核心度 S 取前 N 人**（两遍：先建大盘表算 S，再在名单内重建，
+            分位在名单内重算）；`None` = 直接用 `floor` 大盘。
 
     Returns:
         `AxisTable`。若没有入选者，返回空表（`len()==0`），不抛异常。
+
+    ⚠️ 2026-10-24 改：选名单的依据从**出席场次**换成**核心度**。按出席选会丢掉
+    "来得少但打钱多"的鲸鱼 —— 实测明前奶绿损失 36% 收入、星瞳损失 28%；
+    按核心度选后收入保留 91%–96.5%（见 `scripts/pool_select_compare.py`）。
     """
     n = max(1, win.n)
     eligible = [u for u in win.users.values() if u.att_n / n >= floor]
-    if pool_size is not None and pool_size > 0:
-        # 按出席场次降序（同场次按 uid，保证确定性）取前 pool_size 人
-        eligible.sort(key=lambda u: (-u.att_n, u.uid))
-        pool = eligible[:pool_size]
-    else:
-        pool = eligible
+    if pool_size is not None and pool_size > 0 and len(eligible) > pool_size:
+        base = _table_from(win, eligible, floor)
+        score = {
+            uid: (base.pct[uid][AXIS_ATTENDANCE] + base.pct[uid][AXIS_INTERACTION]
+                  + base.pct[uid][AXIS_PAYMENT]) / 3
+            for uid in base.uids
+        }
+        eligible = sorted(eligible, key=lambda u: (-score.get(u.uid, 0.0), u.uid))[:pool_size]
+    return _table_from(win, eligible, floor)
+
+
+def _table_from(win: Window, pool: list, floor: float) -> AxisTable:
+    """给定 pool 建表（内部的第二遍）。"""
+    n = max(1, win.n)
     if not pool:
         return AxisTable(win.vtuber.name, win.n, floor, ())
 
