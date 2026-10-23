@@ -456,6 +456,26 @@ def ranked(
             "tags": tags.get(uid, []),
         })
 
+    # 全池聚合（2026-10-21）：两张图要覆盖"通过 10% 门槛的全部人"，而不是 limit 条名单。
+    # 分层沿用前端原来那套分位切法（前 20% 核心、20–50% 次核心、其余外层）
+    # 与 `cross_v.assign_tiers` 同一组阈值，避免前后端算出两种口径。
+    _vals = [payload["strength"][u] for u in table.uids]
+    _n = len(_vals)
+    _core_n = round(_n * 0.2)
+    _mid_end = round(_n * 0.5)
+    _pool_tiers = {
+        "核心": _core_n,
+        "次核心": max(0, _mid_end - _core_n),
+        "外层": max(0, _n - _mid_end),
+    }
+    _lo = min(_vals) if _vals else 0.0
+    _hi = max(_vals) if _vals else 1.0
+    _span = (_hi - _lo) or 1.0
+    _bins = [0] * 20
+    for _v in _vals:
+        _i = min(19, max(0, int((_v - _lo) / _span * 20)))
+        _bins[_i] += 1
+
     return {
         "vtuber": table.vtuber, "window": window, "sessions": win.n,
         #: 窗口**请求**的场次数（滑杆选的）与实际**计入**的场次数（过了质量判据的）
@@ -467,6 +487,12 @@ def ranked(
         "total_in_pool": len(table), "count": len(rows),
         #: 池里被判为独轮车的人数（前端可据此提示"Top N 里有 X 人"）
         "spam_in_pool": sum(1 for u in table.uids if u in win.spam),
+        #: 全池（过门槛后的所有人）的分层与强度分布 —— 两张图用它，不用 items
+        "pool": {
+            "size": _n,
+            "tiers": _pool_tiers,
+            "bins": {"lo": round(_lo, 6), "hi": round(_hi, 6), "counts": _bins},
+        },
         "items": rows,
     }
 

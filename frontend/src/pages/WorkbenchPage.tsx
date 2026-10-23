@@ -331,7 +331,8 @@ export default function WorkbenchPage() {
 
         {/* ── 结果区：结果的主展示区（用户 2026-10-19 第 2 条）── */}
         <section className="wb-card wb-result" data-testid="workbench-result">
-          {win && (
+          {/* 出结果时胶囊移进卡片标题行（右侧）；其余状态留在原位 */}
+          {!ranked && win && (
             <div className="wb-stats" data-testid="workbench-preview">
               <div className="wb-stat">
                 <span className="wb-stat-label">窗口场次</span>
@@ -391,6 +392,24 @@ export default function WorkbenchPage() {
                     · 本次名单 {ranked.items.length} 人
                   </span>
                 </h2>
+                {win && (
+                  <div className="wb-stats" data-testid="workbench-preview">
+                    <div className="wb-stat">
+                      <span className="wb-stat-label">窗口场次</span>
+                      <span className="wb-stat-value">{win.size}</span>
+                    </div>
+                    <div className="wb-stat">
+                      <span className="wb-stat-label">已有</span>
+                      <span className="wb-stat-value">{alreadyInWin}</span>
+                    </div>
+                    <div className="wb-stat">
+                      <span className="wb-stat-label">待采</span>
+                      <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
+                        {unknown ? '—' : toCollect}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
               {/* 被跳过的场次：让"静默丢样本"可见（记录过少 / 无入场事件 / 缺 raw） */}
               {(ranked.warnings?.length ?? 0) > 0 && (
@@ -404,7 +423,7 @@ export default function WorkbenchPage() {
                   )}
                 </div>
               )}
-              <ResultCharts items={ranked.items} />
+              <ResultCharts items={ranked.items} pool={ranked.pool} />
             </>
           ) : (
             <div className="wb-empty wb-flow" data-testid="result-empty">

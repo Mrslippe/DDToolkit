@@ -26,16 +26,25 @@ interface Item {
   strength: number
 }
 
+/** 后端 `/ranked` 返回的全池聚合（过 10% 门槛后的所有人） */
+export interface PoolStats {
+  size: number
+  tiers: Record<string, number>
+  bins: { lo: number; hi: number; counts: number[] }
+}
+
 interface Props {
-  /** 名单（后端已按参与强度降序）—— 分布只基于这一批人，卡片上会写明 N */
+  /** 名单（后端已按参与强度降序）—— 仅在**没有** pool 时兜底使用 */
   items: Item[]
+  /** 全池聚合：有它就以它为准，两张图覆盖全池而不是名单 */
+  pool?: PoolStats
 }
 
 /**
  * 结果区的两张小卡片（2026-10-19 用户 2.2）：核心度分层饼图 + 核心度分布曲线。
  *
- * ⚠️ **口径**：只反映**当前名单里的这些人**（后端 `limit` 条），不是全池子 ——
- * 所以标题里必须写明 N，否则"核心 20%"会被读成"全池 20%"。
+ * ⚠️ **口径**：优先用后端给的全池聚合（`pool`，即过 10% 门槛后的**所有人**）；
+ * 没有 `pool` 时才退回名单（`limit` 条），此时标题里的 N 会明显小于池子。
  *
  * ⚠️ 分层是**前端按强度分位现算**（0.80 / 0.50，与 `cross_v.assign_tiers` 同一组阈值），
  * 与后端的「类型」不是一回事（类型 = 主导轴 + 纯度门槛）。
@@ -43,13 +52,25 @@ interface Props {
  * ⚠️ `echarts.init` 在 jsdom 里可能没有 canvas。用例只验"卡片在"，所以 init 失败时
  * 静默降级成空占位 —— 不让图表把整页带崩。
  */
-export default function ResultCharts({ items }: Props) {
+export default function ResultCharts({ items, pool }: Props) {
   const pieRef = useRef<HTMLDivElement>(null)
   const lineRef = useRef<HTMLDivElement>(null)
   const pieApi = useRef<ReturnType<typeof echarts.init> | null>(null)
   const lineApi = useRef<ReturnType<typeof echarts.init> | null>(null)
 
   const model = useMemo(() => {
+    // 有全池聚合就用它 —— 否则两张图只反映 limit 条名单，会被误读成"全池'。
+    if (pool) {
+      const lo = pool.bins.lo
+      const hi = pool.bins.hi
+      const span = hi - lo || 1
+      return {
+        pie: TIERS.map((name) => ({ name, value: pool.tiers[name] ?? 0 })),
+        x: Array.from({ length: BINS }, (_, i) => (lo + (span * (i + 0.5)) / BINS).toFixed(3)),
+        y: pool.bins.counts,
+        total: pool.size,
+      }
+    }
     const n = items.length
     const coreEnd = Math.round(n * 0.2)
     const midEnd = Math.round(n * 0.5)
@@ -69,7 +90,7 @@ export default function ResultCharts({ items }: Props) {
       y: bins,
       total: n,
     }
-  }, [items])
+  }, [items, pool])
 
   useEffect(() => {
     if (!pieRef.current || !canRender()) return

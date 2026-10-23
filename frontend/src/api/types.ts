@@ -1614,4 +1614,12 @@ export interface FanRanked {
   requested_sessions?: number
   /** 被跳过的场次及原因（记录过少 / 无入场事件 / 缺 raw） */
   warnings?: string[]
+  /** 全池（过 10% 门槛后的**所有人**）的分层与强度分布；结果区两张图用它 */
+  pool?: {
+    size: number
+    tiers: Record<string, number>
+    bins: { lo: number; hi: number; counts: number[] }
+  }
+  /** 池内被判为独轮车的人数 */
+  spam_in_pool?: number
 }

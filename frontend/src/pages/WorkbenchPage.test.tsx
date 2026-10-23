@@ -81,6 +81,9 @@ const RANKED = {
   vtuber: '弥月Mizuki', window: 75, sessions: 12,
   since: '2026-09-01', until: '2026-09-30', by: 'strength',
   purity_threshold: 0.15, total_in_pool: 3, count: 2,
+  // 全池聚合（过 10% 门槛后的所有人）—— 两张图必须用它，而不是 items
+  pool: { size: 1200, tiers: { 核心: 240, 次核心: 360, 外层: 600 },
+          bins: { lo: 0.2, hi: 1, counts: Array.from({ length: 20 }, () => 60) } },
   items: [
     { rank: 1, uid: '19871', type: '综合', strength: 0.9994,
       axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
@@ -275,5 +278,32 @@ describe('数据分析工作台', () => {
     })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(q('[data-testid="workbench-error"]')!.textContent).toContain('未启用')
+  })
+})
+
+describe('结果区：全池口径与标题行胶囊', () => {
+  async function analyse(): Promise<void> {
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  }
+
+  it('★ 胶囊在卡片标题行内（同一行的右侧），不再单独占一行', async () => {
+    await analyse()
+    const head = q('[data-testid="workbench-result"] .wb-card-head')
+    expect(head).toBeTruthy()
+    const pills = head!.querySelector('[data-testid="workbench-preview"]')
+    expect(pills).toBeTruthy()
+    // 标题行里同时有 h2 与胶囊
+    expect(head!.querySelector('.wb-card-title')).toBeTruthy()
+  })
+
+  it('★ 两张图覆盖全池人数（不是 limit 条名单）', async () => {
+    await analyse()
+    const pie = q('[data-testid="chart-pie-card"]')
+    expect(pie).toBeTruthy()
+    expect(pie!.textContent).toContain('1200')
   })
 })
