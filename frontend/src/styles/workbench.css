@@ -1498,3 +1498,9 @@
 .wb-split-row dt { color: var(--c-text-sub); }
 .wb-split-row dd { margin: 0; color: var(--c-text-main); }
 .wb-split-pct { color: var(--c-text-sub); font-size: 12px; min-width: 48px; text-align: right; }
+
+.wb-chart-note {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}

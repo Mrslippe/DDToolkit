@@ -39,6 +39,7 @@ from app.core.useragent import UA_CHROME
 
 from app.core.timecn import cn_day
 from app.services.externals.vtbcat import fetch_lives, match_session
+from app.services.fan.acv import acv_from_online_rank
 from app.services.fan.duration import apply_rate_end
 from app.services.fan.quality import apply_replay_cut
 from app.services.fan.sysmsg import apply_sys_end
@@ -182,7 +183,8 @@ async def _get_json(client: httpx.AsyncClient, path: str,
     return None
 
 
-async def fetch_records(client: httpx.AsyncClient, live_id: str) -> list[dict] | None:
+async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
+                         with_extra: bool = False) -> list[dict] | tuple[list[dict], dict] | None:
     """取一场的**全部**记录。
 
     返回 `None` 表示上游没给数据；否则返回列表。
@@ -197,17 +199,22 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str) -> list[dict] |
     否则再按 5000 一页翻页补齐；翻页若在首页就返回空，则退回第一步那份（尽力而为）。
     """
     # ① 不带 pageNum 的一次性请求
-    j = await _get_json(client, "/api/v2/live",
-                        [("liveId", live_id), ("pageSize", COLLECT_PAGE_SIZE_BIG)])
+    _params = [("liveId", live_id), ("pageSize", COLLECT_PAGE_SIZE_BIG)]
+    if with_extra:
+        # `includeExtra=true` 会带上 `live.extra.onlineRank`（逐秒同接时间线）
+        _params.append(("includeExtra", "true"))
+    j = await _get_json(client, "/api/v2/live", _params)
     if not j:
         return None
-    env = j.get("data") or {}
+    inner = j.get("data") or {}
+    env = inner
     first = ((env.get("data") or {}).get("danmakus")) or []
     total = int(env.get("total") or 0)
+    extra = (((env.get("data") or {}).get("live") or {}).get("extra")) or {}
     # ⚠️ 不能只看 total：服务端把 total 也谎报成 100000 时（正好等于大页上限），
     # 会让我们误判「已取全」。命中页上限就强制翻页。
     if len(first) >= total and len(first) < COLLECT_PAGE_SIZE_BIG:
-        return first          # 一次就够（小场次走这里）
+        return (first, extra) if with_extra else first   # 一次就够（小场次走这里）
 
     # ② 需要翻页（大场次）
     out: list[dict] = []
@@ -227,11 +234,12 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str) -> list[dict] |
                 break
             await asyncio.sleep(1.2 * (attempt + 1))
         if page == 1 and not recs:
-            return first      # 这个场次不认 pageNum，退回一次性结果
+            return (first, extra) if with_extra else first   # 不认 pageNum，退回一次性结果
         out.extend(recs)
         if not recs or not has_more:
             break
-    return out if len(out) >= len(first) else first
+    result = out if len(out) >= len(first) else first
+    return (result, extra) if with_extra else result
 
 
 async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[SessionPlan]:
@@ -618,7 +626,7 @@ async def collect(
                     p.skipped += 1
                     return
                 p.current = s.start_at
-                recs = await fetch_records(client, s.live_id)
+                recs, _extra = await fetch_records(client, s.live_id, with_extra=True)
                 if recs is None:
                     p.failed += 1
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
@@ -660,6 +668,11 @@ async def collect(
                     platform={"danmakus_count": s.danmakus_count, "income": s.income},
                     vtb=vit,
                 )
+                # 平均同接（去头尾 10%）：danmakus 的 onlineRank 时间线
+                _acv, _pts, _peak = acv_from_online_rank(_extra)
+                stats["acv"] = round(_acv, 2) if _acv else None
+                stats["acv_points"] = _pts
+                stats["peak_online"] = _peak
                 stats["live_id"] = s.live_id
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1

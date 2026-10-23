@@ -190,7 +190,16 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
             + (f" · 区间 {since or '-'}~{until or '-'}" if since or until else "")
             + "）" + extra,
         )
-    table = build_axis_table(win)
+    # 池子规模由**平均同接（ACV）**决定（2026-10-23 用户定案 B 方案）：
+    #   核心 = 0.75×ACV，次核心 = 1.25×ACV ⇒ 池 = 2×ACV，其余"分流走"。
+    # ACV 取窗口内各场 `stats["acv"]` 的中位数；缺失时回退到 INCLUSION_FLOOR 老口径。
+    _acvs = [float(sr.stats["acv"]) for sr in win.sessions
+             if (sr.stats or {}).get("acv")]
+    acv = float(__import__('statistics').median(_acvs)) if _acvs else None
+    pool_size = round(acv * 2) if acv else None
+    core_n = round(acv * 0.75) if acv else None
+
+    table = build_axis_table(win, pool_size=pool_size)
     if len(table) == 0:
         raise HTTPException(404, f"{v.name} 在所选条件下没有达到入选门槛的观众")
 
@@ -200,6 +209,7 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         "labels": type_label(table),
         "tags": tag_all(win, table),
         "since": since, "until": until,
+        "acv": acv, "pool_size": pool_size, "core_n": core_n,
     }
     _CACHE[key] = payload
     logger.info("fan: 已计算 %s（%s 场 · 区间 %s~%s）→ %s 人入池",
@@ -474,13 +484,11 @@ def ranked(
     # 与 `cross_v.assign_tiers` 同一组阈值，避免前后端算出两种口径。
     _vals = [payload["strength"][u] for u in table.uids]
     _n = len(_vals)
-    _core_n = round(_n * 0.2)
-    _mid_end = round(_n * 0.5)
-    _pool_tiers = {
-        "核心": _core_n,
-        "次核心": max(0, _mid_end - _core_n),
-        "外层": max(0, _n - _mid_end),
-    }
+    # 分层按 ACV（2026-10-23 用户定案）：核心 = 0.75×ACV，次核心 = 1.25×ACV；
+    # 池子本身已经是 2×ACV，所以"外层"取消，多出来的人记在 `excluded`（分流走）。
+    _core_want = payload.get("core_n") or 0
+    _core_n = min(_n, int(_core_want)) if _core_want else round(_n * 0.375)
+    _pool_tiers = {"核心": _core_n, "次核心": max(0, _n - _core_n)}
     # 三轴分位分布（每个 Tab 的图用它）
     _axes: dict[str, dict[str, Any]] = {}
     for _name, _axis in (("attendance", AXIS_ATTENDANCE), ("interaction", AXIS_INTERACTION),
@@ -532,6 +540,10 @@ def ranked(
             "tiers": _pool_tiers,
             "bins": {"lo": round(_lo, 6), "hi": round(_hi, 6), "counts": _bins},
             "axes": _axes,
+            #: 平均同接（去头尾 10%）与"被分流走"的人数 —— 让池子为什么变小可见
+            "acv": payload.get("acv"),
+            "excluded": max(0, len(win.users) - _n),
+            "pool_rule": "2×ACV" if payload.get("acv") else "attendance_floor",
             "pay_split": {"gift": round(_gift, 2), "guard": round(_guard, 2),
                           "sc": round(_sc, 2)},
             "type_counts": _type_counts,

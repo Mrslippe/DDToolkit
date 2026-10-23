@@ -82,7 +82,8 @@ const RANKED = {
   since: '2026-09-01', until: '2026-09-30', by: 'strength',
   purity_threshold: 0.15, total_in_pool: 3, count: 2,
   // 全池聚合（过 10% 门槛后的所有人）—— 两张图必须用它，而不是 items
-  pool: { size: 1200, tiers: { 核心: 240, 次核心: 360, 外层: 600 },
+  pool: { size: 1200, tiers: { 核心: 450, 次核心: 750 },
+          acv: 600, excluded: 40000, pool_rule: '2×ACV',
           bins: { lo: 0.2, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
           axes: {
             attendance: { lo: 0.1, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
@@ -363,5 +364,23 @@ describe('空态与页签（2026-10-23）', () => {
     const last = calls[calls.length - 1]!
     expect(last[1]).toBe('payment')
     expect((last[2] as { offset?: number }).offset).toBe(0)
+  })
+})
+
+describe('ACV 方案（2026-10-23）', () => {
+  async function analyse(): Promise<void> {
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  }
+
+  it('★ 池子按 2×ACV 划定，并写明分流走多少人', async () => {
+    await analyse()
+    const note = q('[data-testid="pool-rule"]')
+    expect(note).toBeTruthy()
+    expect(note!.textContent).toContain('2×平均同接')
+    expect(note!.textContent).toContain('40,000')
   })
 })

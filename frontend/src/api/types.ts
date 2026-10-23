@@ -1627,6 +1627,11 @@ export interface FanRanked {
     axes?: Record<string, { lo: number; hi: number; counts: number[] }>
     pay_split?: { gift: number; guard: number; sc: number }
     type_counts?: Record<string, number>
+    /** 平均同接（去头尾 10%） */
+    acv?: number | null
+    /** 被门槛分流走的人数 */
+    excluded?: number
+    pool_rule?: string
   }
   /** 池内被判为独轮车的人数 */
   spam_in_pool?: number

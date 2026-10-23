@@ -153,18 +153,27 @@ def _raw_axes(u) -> dict[str, float]:
     }
 
 
-def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR) -> AxisTable:
+def build_axis_table(win: Window, *, floor: float = INCLUSION_FLOOR,
+                      pool_size: int | None = None) -> AxisTable:
     """把 `Window` 收成入选者的 `AxisTable`。
 
     Args:
         win: `loader.load_window()` 的结果。
-        floor: 入选门槛（出席率）。
+        floor: 入选门槛（出席率）。`pool_size` 给出时**以人数为准**：
+            先按出席场次降序取前 `pool_size` 人，`floor` 只作为最低噪声门槛。
+        pool_size: 池子人数（ACV 方案：2×平均同接）。`None` = 按 `floor` 切。
 
     Returns:
         `AxisTable`。若没有入选者，返回空表（`len()==0`），不抛异常。
     """
     n = max(1, win.n)
-    pool = [u for u in win.users.values() if u.att_n / n >= floor]
+    eligible = [u for u in win.users.values() if u.att_n / n >= floor]
+    if pool_size is not None and pool_size > 0:
+        # 按出席场次降序（同场次按 uid，保证确定性）取前 pool_size 人
+        eligible.sort(key=lambda u: (-u.att_n, u.uid))
+        pool = eligible[:pool_size]
+    else:
+        pool = eligible
     if not pool:
         return AxisTable(win.vtuber.name, win.n, floor, ())
 

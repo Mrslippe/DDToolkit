@@ -15,7 +15,7 @@ const AXIS_COLOR: Record<string, string> = {
   interaction: '#7c93b5',
   payment: '#fc7079',
 }
-const TIERS = ['核心', '次核心', '外层'] as const
+const TIERS_FALLBACK = ['核心', '次核心'] as const
 const BINS = 20
 
 export type ResultTab = 'overview' | 'attendance' | 'interaction' | 'payment'
@@ -41,6 +41,11 @@ export interface PoolStats {
   axes?: Record<string, { lo: number; hi: number; counts: number[] }>
   pay_split?: { gift: number; guard: number; sc: number }
   type_counts?: Record<string, number>
+  /** 平均同接（去头尾 10%）；缺数据时为 null */
+  acv?: number | null
+  /** 被门槛分流走的人数（未进池） */
+  excluded?: number
+  pool_rule?: string
 }
 
 interface Props {
@@ -93,7 +98,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
       const span = pool.bins.hi - pool.bins.lo || 1
       return {
         kind: 'overview' as const,
-        pie: TIERS.map((name) => ({ name, value: pool.tiers[name] ?? 0 })),
+        pie: Object.entries(pool.tiers).map(([name, value]) => ({ name, value })),
         x: Array.from({ length: BINS }, (_, i) =>
           (pool.bins.lo + (span * (i + 0.5)) / BINS).toFixed(3)),
         y: pool.bins.counts,
@@ -116,7 +121,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
     }
     return {
       kind: 'overview' as const,
-      pie: TIERS.map((name, i) => ({ name, value: counts[i] })),
+      pie: TIERS_FALLBACK.map((name, i) => ({ name, value: counts[i] })),
       x: Array.from({ length: BINS }, (_, i) => (lo + (span * (i + 0.5)) / BINS).toFixed(3)),
       y: bins,
       total: n,
@@ -269,6 +274,14 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
           <span className="wb-card-note" style={{ marginLeft: 8 }}>共 {model.total} 人</span>
         </h3>
         <div className="wb-chart" ref={pieRef} data-testid="chart-pie" />
+        {pool && (
+          <p className="wb-chart-note" data-testid="pool-rule">
+            {pool.acv
+              ? `池子按 2×平均同接（ACV ${Math.round(pool.acv).toLocaleString()}）划定 · `
+                + `另有 ${(pool.excluded ?? 0).toLocaleString()} 人分流走`
+              : '池子按出席率门槛划定（该窗口缺 ACV 数据）'}
+          </p>
+        )}
       </section>
       <section className="wb-card wb-chart-card" data-testid="chart-line-card">
         <h3 className="wb-card-title">
