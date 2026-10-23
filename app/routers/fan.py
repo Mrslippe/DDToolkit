@@ -49,6 +49,9 @@ from app.services.fan import (
     PURITY_THRESHOLD,
     FanDataError,
     FanDataNotFound,
+    AXIS_ATTENDANCE,
+    AXIS_INTERACTION,
+    AXIS_PAYMENT,
     build_axis_table,
     get_vtuber,
     list_vtubers,
@@ -89,7 +92,8 @@ router = APIRouter()
 
 PREF_KEY = "fan_workbench"
 SORT_BY_STRENGTH = "strength"
-SORT_BY = (SORT_BY_STRENGTH,) + CRITERIA
+SORT_BY_AXES = ("attendance", "interaction", "payment")
+SORT_BY = (SORT_BY_STRENGTH,) + SORT_BY_AXES + CRITERIA
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 5000
@@ -219,6 +223,12 @@ def reset_state() -> None:
 def _primary(payload: dict[str, Any], by: str) -> dict[str, float]:
     if by == SORT_BY_STRENGTH:
         return payload["strength"]  # type: ignore[no-any-return]
+    if by in SORT_BY_AXES:
+        # 单轴排序：用该轴的分位（与强度同量纲，0~1）
+        axis = {"attendance": AXIS_ATTENDANCE, "interaction": AXIS_INTERACTION,
+                "payment": AXIS_PAYMENT}[by]
+        table = payload["table"]
+        return {u: float(table.pct[u][axis]) for u in table.uids}
     fitted = fit_criterion(payload["window"], by)
     return score_criterion(payload["table"], fitted.fit)
 
@@ -409,11 +419,13 @@ def cancel_collect(
 @router.get("/fan/{vtuber}/ranked")
 def ranked(
     vtuber: str,
-    by: str | None = Query(None, description="排序口径：strength / retention / income（**必填**）"),
+    by: str | None = Query(None,
+                        description="排序口径：strength / attendance / interaction / payment / retention / income（**必填**）"),
     window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
     since: str | None = Query(None, description="YYYY-MM-DD"),
     until: str | None = Query(None, description="YYYY-MM-DD"),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    offset: int = Query(0, ge=0, description="名单分页偏移（0 起）；全池可翻"),
     ids: str | None = Query(None, description="窗口的场次清单（逗号分隔的 live_id）；给了就只算这几场"),
     _: None = Depends(require_module),
 ) -> dict[str, Any]:
@@ -440,7 +452,8 @@ def ranked(
     table, tags, labels, win = (payload["table"], payload["tags"],
                                 payload["labels"], payload["window"])
     rows = []
-    for pos, uid in enumerate(order[:limit], 1):
+    page = order[offset:offset + limit]
+    for pos, uid in enumerate(page, offset + 1):
         p = table.pct[uid]
         u = win.users.get(uid)
         rows.append({
@@ -468,6 +481,32 @@ def ranked(
         "次核心": max(0, _mid_end - _core_n),
         "外层": max(0, _n - _mid_end),
     }
+    # 三轴分位分布（每个 Tab 的图用它）
+    _axes: dict[str, dict[str, Any]] = {}
+    for _name, _axis in (("attendance", AXIS_ATTENDANCE), ("interaction", AXIS_INTERACTION),
+                         ("payment", AXIS_PAYMENT)):
+        _xs = [float(table.pct[u][_axis]) for u in table.uids
+               if table.pct.get(u, {}).get(_axis) is not None]
+        _alo = min(_xs) if _xs else 0.0
+        _ahi = max(_xs) if _xs else 1.0
+        _aspan = (_ahi - _alo) or 1.0
+        _acounts = [0] * 20
+        for _x in _xs:
+            _acounts[min(19, max(0, int((_x - _alo) / _aspan * 20)))] += 1
+        _axes[_name] = {"lo": round(_alo, 6), "hi": round(_ahi, 6), "counts": _acounts}
+
+    # 付费构成（从场次 stats 取，单位元）
+    _gift = _guard = _sc = 0.0
+    for _sr in win.sessions:
+        _st = getattr(_sr, "stats", None) or {}
+        _gift += float(_st.get("gift") or 0.0)
+        _guard += float(_st.get("guard") or 0.0)
+        _sc += float(_st.get("sc") or 0.0)
+
+    _type_counts: dict[str, int] = {}
+    for _lab in payload["labels"].values():
+        _type_counts[_lab] = _type_counts.get(_lab, 0) + 1
+
     _lo = min(_vals) if _vals else 0.0
     _hi = max(_vals) if _vals else 1.0
     _span = (_hi - _lo) or 1.0
@@ -492,6 +531,10 @@ def ranked(
             "size": _n,
             "tiers": _pool_tiers,
             "bins": {"lo": round(_lo, 6), "hi": round(_hi, 6), "counts": _bins},
+            "axes": _axes,
+            "pay_split": {"gift": round(_gift, 2), "guard": round(_guard, 2),
+                          "sc": round(_sc, 2)},
+            "type_counts": _type_counts,
         },
         "items": rows,
     }

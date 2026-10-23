@@ -1,4 +1,5 @@
 import type {
+  FanSortBy,
   AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
@@ -1095,14 +1096,15 @@ export const api = {
     request<{ ok: boolean }>(
       `/fan/collect/cancel?vtuber=${encodeURIComponent(name)}`, { method: 'POST' }),
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
-  fanRanked: (name: string, by: 'strength' | 'retention' | 'income',
+  fanRanked: (name: string, by: FanSortBy,
               opts?: { since?: string; until?: string; window?: number; limit?: number;
-                        ids?: string[] }) => {
+                       offset?: number; ids?: string[] }) => {
     const q = new URLSearchParams({ by })
     if (opts?.since) q.set('since', opts.since)
     if (opts?.until) q.set('until', opts.until)
     if (opts?.window) q.set('window', String(opts.window))
     if (opts?.limit) q.set('limit', String(opts.limit))
+    if (opts?.offset) q.set('offset', String(opts.offset))
     // 窗口的场次清单：后端据此只算这几场（与采集、计数同一批人）
     if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
     return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)

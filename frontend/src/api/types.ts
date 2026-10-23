@@ -1586,6 +1586,9 @@ export interface FanCollectProgress {
   failures?: FanCollectFailure[]
 }
 
+export type FanSortBy =
+  | 'strength' | 'attendance' | 'interaction' | 'payment' | 'retention' | 'income'
+
 export interface FanRankedRow {
   rank: number
   uid: string
@@ -1597,6 +1600,8 @@ export interface FanRankedRow {
   pay_total: number
   msg_total: number
   tags: string[]
+  /** 独轮车规则名（repeat / low_variety / …）；null 表示不是 */
+  spam?: string | null
 }
 
 export interface FanRanked {
@@ -1619,6 +1624,9 @@ export interface FanRanked {
     size: number
     tiers: Record<string, number>
     bins: { lo: number; hi: number; counts: number[] }
+    axes?: Record<string, { lo: number; hi: number; counts: number[] }>
+    pay_split?: { gift: number; guard: number; sc: number }
+    type_counts?: Record<string, number>
   }
   /** 池内被判为独轮车的人数 */
   spam_in_pool?: number

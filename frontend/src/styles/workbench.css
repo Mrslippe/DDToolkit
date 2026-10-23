@@ -1400,3 +1400,101 @@
   font-size: 11px;
   font-weight: 500;
 }
+
+/* ── 结果页签（2026-10-23）────────────────────────────────────────────── */
+.wb-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 4px 0 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.wb-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 8px 14px 9px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;               /* 压住分隔线，选中态下划线连续 */
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.wb-tab:hover { color: var(--c-primary-deep); }
+
+.wb-tab.is-active {
+  color: var(--c-primary-deep);
+  border-bottom-color: var(--c-primary-deep);
+}
+
+.wb-tab:focus-visible {
+  outline: 2px solid var(--c-primary-deep);
+  outline-offset: 2px;
+  border-radius: var(--pcard-radius-inner);
+}
+
+/* ── 名单卡片与分页 ─────────────────────────────────────────────────── */
+.wb-table-card { margin-top: 14px; }
+
+.wb-table-uid { font-variant-numeric: tabular-nums; }
+
+.wb-table-tags {
+  color: var(--c-text-sub);
+  font-size: 12px;
+  max-width: 220px;
+}
+
+.wb-badge-spam {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(252, 112, 121, 0.12);
+  color: var(--tone-coral-deep);
+  font-size: 10.5px;
+  vertical-align: 1px;
+}
+
+.wb-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.wb-pager-btn {
+  appearance: none;
+  border: 1px solid var(--c-border);
+  background: #fff;
+  border-radius: var(--pcard-radius-inner);
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+
+.wb-pager-btn:hover:not(:disabled) { background: #fff5f7; }
+.wb-pager-btn:disabled { opacity: 0.45; cursor: default; }
+
+.wb-pager-info { font-size: 12px; color: var(--c-text-sub); }
+
+/* ── 付费构成（付费页签右卡）──────────────────────────────────────────── */
+.wb-split { margin: 6px 0 0; }
+
+.wb-split-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(210, 216, 222, 0.35);
+  font-size: 13px;
+}
+
+.wb-split-row:last-child { border-bottom: 0; }
+.wb-split-row dt { color: var(--c-text-sub); }
+.wb-split-row dd { margin: 0; color: var(--c-text-main); }
+.wb-split-pct { color: var(--c-text-sub); font-size: 12px; min-width: 48px; text-align: right; }

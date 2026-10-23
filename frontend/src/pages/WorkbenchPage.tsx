@@ -18,13 +18,22 @@ import Heatmap from '../components/workbench/Heatmap'
 import ProfileCard from '../components/workbench/ProfileCard'
 import PurgeButton from '../components/workbench/PurgeButton'
 import RangeButton from '../components/workbench/RangeButton'
-import ResultCharts from '../components/workbench/ResultCharts'
+import RankedTable from '../components/workbench/RankedTable'
+import ResultCharts, { type ResultTab } from '../components/workbench/ResultCharts'
+import ResultTabs from '../components/workbench/ResultTabs'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
 import '../styles/workbench.css'
 
-/** 名单默认条数（后端上限 5000）。结果区的两张图只反映这一批人，所以卡片上写明 N。 */
-const LIMIT = 300
+/** 名单每页条数（图看全池，名单分页 —— 2026-10-23） */
+const PAGE = 20
+/** 页签 → 后端排序口径 */
+const TAB_BY = {
+  overview: 'strength',
+  attendance: 'attendance',
+  interaction: 'interaction',
+  payment: 'payment',
+} as const
 /** 进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
 const POLL_MS = 1000
 
@@ -67,6 +76,8 @@ export default function WorkbenchPage() {
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
   const [progress, setProgress] = useState<FanCollectProgress | null>(null)
   const [ranked, setRanked] = useState<FanRanked | null>(null)
+  const [tab, setTab] = useState<ResultTab>('overview')
+  const [offset, setOffset] = useState(0)
   /** 换区间后旧结果已不一定对应当前窗口 —— **保留但标灰**，而不是清空（用户 2026-10-19 选 a） */
   const [rankedStale, setRankedStale] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -165,14 +176,17 @@ export default function WorkbenchPage() {
     [activity, win],
   )
 
-  const loadRanked = useCallback(async (): Promise<void> => {
+  const loadRanked = useCallback(async (
+    by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
+    off = 0,
+  ): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
     try {
       setRankedStale(false)
       setRanked(await withNetRetry(
-        () => api.fanRanked(picked, 'strength', {
-          since, until, limit: LIMIT,
+        () => api.fanRanked(picked, by, {
+          since, until, limit: PAGE, offset: off,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
         })))
@@ -184,6 +198,19 @@ export default function WorkbenchPage() {
       setBusy(false)
     }
   }, [picked, since, until, slice])
+
+  /** 切页签：回到第一页，并按新口径重排名单 */
+  const onTab = useCallback((t: ResultTab): void => {
+    setTab(t)
+    setOffset(0)
+    void loadRanked(TAB_BY[t], 0)
+  }, [loadRanked])
+
+  /** 翻页：只换名单，不动图 */
+  const onPage = useCallback((o: number): void => {
+    setOffset(o)
+    void loadRanked(TAB_BY[tab], o)
+  }, [loadRanked, tab])
 
   const startCollect = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return
@@ -317,7 +344,7 @@ export default function WorkbenchPage() {
                         : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
-                             onClick={() => void loadRanked()}
+                             onClick={() => { setTab('overview'); setOffset(0); void loadRanked('strength', 0) }}
                              data-testid="workbench-load">
                     分析
                   </FloatPill>
@@ -331,26 +358,6 @@ export default function WorkbenchPage() {
 
         {/* ── 结果区：结果的主展示区（用户 2026-10-19 第 2 条）── */}
         <section className="wb-card wb-result" data-testid="workbench-result">
-          {/* 出结果时胶囊移进卡片标题行（右侧）；其余状态留在原位 */}
-          {!ranked && win && (
-            <div className="wb-stats" data-testid="workbench-preview">
-              <div className="wb-stat">
-                <span className="wb-stat-label">窗口场次</span>
-                <span className="wb-stat-value">{win.size}</span>
-              </div>
-              <div className="wb-stat">
-                <span className="wb-stat-label">已有</span>
-                <span className="wb-stat-value">{alreadyInWin}</span>
-              </div>
-              <div className="wb-stat">
-                <span className="wb-stat-label">待采</span>
-                <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
-                  {unknown ? '—' : toCollect}
-                </span>
-              </div>
-            </div>
-          )}
-
           {running || busy ? (
             /* 进行中：有大百分比就给，没有就只表示"在动"（**不编造数字**） */
             <div className="wb-busy" data-testid="workbench-progress" aria-live="polite">
@@ -389,7 +396,6 @@ export default function WorkbenchPage() {
                       ? `窗口 ${ranked.requested_sessions} 场 · 实际计入 ${ranked.sessions} 场`
                       : `${ranked.sessions} 场`}
                     · 入池 {ranked.total_in_pool.toLocaleString()} 人
-                    · 本次名单 {ranked.items.length} 人
                   </span>
                 </h2>
                 {win && (
@@ -423,20 +429,20 @@ export default function WorkbenchPage() {
                   )}
                 </div>
               )}
-              <ResultCharts items={ranked.items} pool={ranked.pool} />
+              <ResultTabs value={tab} onChange={onTab} />
+              <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
+              <RankedTable
+                rows={ranked.items}
+                total={ranked.pool?.size ?? ranked.total_in_pool}
+                offset={offset}
+                pageSize={PAGE}
+                onPage={onPage}
+                loading={busy}
+              />
             </>
           ) : (
-            <div className="wb-empty wb-flow" data-testid="result-empty">
-              <p className="wb-flow-title">还没有结果</p>
-              <ol className="wb-flow-steps">
-                <li>
-                  <b>采集</b> —— 在「直播与采集」里拖一个场次窗口，点右下角「采集 N 场」，
-                  把这段时间的弹幕拉到本机
-                </li>
-                <li><b>分析</b> —— 采完点「分析」，按三轴分位算出每个人的核心度</li>
-                <li><b>结果</b> —— 这里会出现分层饼图与核心度分布</li>
-              </ol>
-              <p className="wb-flow-note">已经采过的区间可以直接点「分析」，不必重采。</p>
+            <div className="wb-empty" data-testid="result-empty">
+              <p>请先选择时间范围进行分析</p>
             </div>
           )}
         </section>

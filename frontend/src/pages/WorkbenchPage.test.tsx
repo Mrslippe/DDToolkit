@@ -83,7 +83,13 @@ const RANKED = {
   purity_threshold: 0.15, total_in_pool: 3, count: 2,
   // 全池聚合（过 10% 门槛后的所有人）—— 两张图必须用它，而不是 items
   pool: { size: 1200, tiers: { 核心: 240, 次核心: 360, 外层: 600 },
-          bins: { lo: 0.2, hi: 1, counts: Array.from({ length: 20 }, () => 60) } },
+          bins: { lo: 0.2, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
+          axes: {
+            attendance: { lo: 0.1, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
+            interaction: { lo: 0, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
+            payment: { lo: 0, hi: 1, counts: Array.from({ length: 20 }, () => 60) },
+          },
+          pay_split: { gift: 1000, guard: 3000, sc: 6000 } },
   items: [
     { rank: 1, uid: '19871', type: '综合', strength: 0.9994,
       axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
@@ -163,10 +169,9 @@ describe('数据分析工作台', () => {
     const sel = q<HTMLElement>('[data-testid="workbench-vtuber"]')
     expect(sel).not.toBeNull()
     expect(sel!.textContent).toContain('弥月')   // 优先选已有数据的那个
-    // 滑杆把窗口报上来之后，结果区才出读数（V3/V4/V5 之后不再是日期输入框）
-    const preview = q('[data-testid="workbench-preview"]')!
-    expect(preview.textContent).toContain('窗口场次')
-    expect(preview.textContent).toContain('待采')
+    // 2026-10-23：结果区空态**不再显示采集读数**（用户：没有分析结果前不要展示采集信息）。
+    // 采集相关信息只在「直播与采集」卡里 —— 这里断言"空态没有预览条"即可。
+    expect(q('[data-testid="workbench-preview"]')).toBeNull()
     // 2026-10-19 起这一行是**滑轨区间选择器**（不再是窗口首尾日期）
     expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
     // 区间按钮已移到「直播与采集」卡右下角那一行（2026-10-19 用户第 2 条），
@@ -181,7 +186,12 @@ describe('数据分析工作台', () => {
     // 2026-10-19 用户发现：窗口 75 场、已有 77 场、待采 1。
     // 根因是“已有/待采”拿日期区间去库里数，而边界那两天整天都算进去了。
     // 现在从切片上的 `c` 数：ACTIVITY 是 30 场、每 3 场已采 1 场 ⇒ 已有 10、待采 20。
+    // 2026-10-23：胶囊只在**出结果后**出现在标题行，所以先跑一次分析。
     await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const box = document.querySelector('[data-testid="workbench-preview"]') as HTMLElement
     const txt = box.textContent ?? ''
     const already = Number(/已有\s*(\d+)/.exec(txt)?.[1])
@@ -305,5 +315,53 @@ describe('结果区：全池口径与标题行胶囊', () => {
     const pie = q('[data-testid="chart-pie-card"]')
     expect(pie).toBeTruthy()
     expect(pie!.textContent).toContain('1200')
+  })
+})
+
+describe('空态与页签（2026-10-23）', () => {
+  async function analyse(): Promise<void> {
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  }
+
+  it('★ 空态只留一句引导，不显示采集胶囊', async () => {
+    await mount()
+    const empty = q('[data-testid="result-empty"]')
+    expect(empty).toBeTruthy()
+    expect(empty!.textContent).toContain('请先选择时间范围进行分析')
+    // 采集信息只在「直播与采集」卡里，结果区空态不该出现
+    expect(q('[data-testid="workbench-preview"]')).toBeNull()
+  })
+
+  it('★ 名单按页取：翻页带 offset，仍按当前页签口径', async () => {
+    await analyse()
+    const next = q<HTMLButtonElement>('[data-testid="ranked-next"]')!
+    expect(next).toBeTruthy()
+    await act(async () => { next.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const calls = fanRanked.mock.calls
+    const last = calls[calls.length - 1]!
+    expect(last[1]).toBe('strength')
+    expect((last[2] as { offset?: number }).offset).toBe(20)
+  })
+
+  it('★ 出结果后四个页签都在，切页签按对应口径重排', async () => {
+    await analyse()
+    expect(q('[data-testid="tab-overview"]')).toBeTruthy()
+    expect(q('[data-testid="tab-attendance"]')).toBeTruthy()
+    expect(q('[data-testid="tab-interaction"]')).toBeTruthy()
+    expect(q('[data-testid="tab-payment"]')).toBeTruthy()
+
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="tab-payment"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const calls = fanRanked.mock.calls
+    const last = calls[calls.length - 1]!
+    expect(last[1]).toBe('payment')
+    expect((last[2] as { offset?: number }).offset).toBe(0)
   })
 })
