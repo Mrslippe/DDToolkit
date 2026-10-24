@@ -212,7 +212,7 @@ def test_tags_catalog_has_all_rules(client: TestClient) -> None:
     assert r.status_code == 200
     body = r.json()
     names = {x["name"] for x in body["items"]}
-    assert "满勤" in names and "每场SC" in names and "大额打米" in names
+    assert "全勤" in names and "老头" in names and "独轮车" in names
     assert all(0.0 <= x["prevalence"] <= 1.0 for x in body["items"])
 
 
@@ -220,10 +220,10 @@ def test_lurker_and_full_attendance_tags_fire(client: TestClient) -> None:
     """合成数据里：u_all 与 u_lurk 都满勤（12/12），u_lurk 从不发言。"""
     r = client.get("/fan/弥月/ranked", params={"by": "strength", "window": 12})
     rows = {row["uid"]: row for row in r.json()["items"]}
-    assert "满勤" in rows["u_all"]["tags"]
-    assert "纯黑听" in rows["u_lurk"]["tags"]
+    assert "全勤" in rows["u_all"]["tags"]
+    assert "黑听民" in rows["u_lurk"]["tags"]
     assert "舰长" in rows["u_lurk"]["tags"]
-    assert "话痨" in rows["u_all"]["tags"]
+    assert "互动民" in rows["u_all"]["tags"]
 
 
 def test_tags_do_not_affect_order(client: TestClient) -> None:
