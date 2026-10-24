@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.routers.settings import PREFS_PREFIX
-from app.core.timecn import cn_text, cn_day, sql_day
+from app.core.timecn import CN_TZ, cn_day, cn_text, sql_day
 from app.services.fan import (
     AXES,
     PURITY_THRESHOLD,
