@@ -21,6 +21,7 @@ const fanCollectStatus = vi.fn()
 const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
 const fanSearch = vi.fn()
+const fanTags = vi.fn()
 const fanMember = vi.fn()
 const fanProfile = vi.fn()
 const fanActivity = vi.fn()
@@ -53,6 +54,7 @@ vi.mock('../api/api', () => ({
     fanCollectCancel: (...a: unknown[]) => fanCollectCancel(...a),
     fanRanked: (...a: unknown[]) => fanRanked(...a),
   fanSearch: (...a: unknown[]) => fanSearch(...a),
+  fanTags: (...a: unknown[]) => fanTags(...a),
   fanMember: (...a: unknown[]) => fanMember(...a),
     // 档案卡（V2，2026-10-18）：选中 V 后页面会拉它，桩里必须有，否则整页抛错
     fanProfile: () => fanProfile(),
@@ -138,6 +140,7 @@ beforeEach(() => {
   fanCollectCancel.mockReset().mockResolvedValue({ ok: true })
   fanRanked.mockReset().mockResolvedValue(RANKED)
   fanSearch.mockReset().mockResolvedValue({ items: [], total_match: 0 })
+  fanTags.mockReset().mockResolvedValue({ items: [] })
   fanMember.mockReset().mockResolvedValue({
     uid: '19871', name: '碳了个酸', avatar: '/fan/avatar/19871', type: '综合', strength: 0.9994,
     axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },

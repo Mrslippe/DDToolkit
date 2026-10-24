@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Search } from 'lucide-react'
 import { api, resolveAsset } from '../../api/api'
 import type { FanSearchHit } from '../../api/types'
 
@@ -45,9 +46,9 @@ export default function MemberSearch({ vtuber, since, until, ids, onPick }: Prop
   const shown = useMemo(() => hits.slice(0, 8), [hits])
 
   return (
-    <div className="wb-search" ref={box}>
+    <div className="wb-search search-float" ref={box}>
+      <Search className="search-float-icon" />
       <input
-        className="wb-search-input"
         data-testid="ranked-search"
         placeholder="搜索 uid 或昵称"
         value={q}

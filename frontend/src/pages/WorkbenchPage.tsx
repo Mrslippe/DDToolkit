@@ -82,6 +82,9 @@ export default function WorkbenchPage() {
   /** 懒加载累积的行（切页签时清空） */
   const [rows, setRows] = useState<FanRankedRow[]>([])
   const [hasMore, setHasMore] = useState(false)
+  /** 标签筛选（2026-10-24）：目录与选中项 */
+  const [tagOptions, setTagOptions] = useState<{ name: string; prevalence: number }[]>([])
+  const [tagFilter, setTagFilter] = useState<string[]>([])
   /** 打开详情的成员 uid（null = 关闭） */
   const [memberUid, setMemberUid] = useState<string | null>(null)
   /** 回顶浮钮：滚动超过一屏才出现（与 PostListView 同一套做法） */
@@ -197,6 +200,7 @@ export default function WorkbenchPage() {
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
     append = false,
+    tags: string[] = [],
   ): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
@@ -204,7 +208,7 @@ export default function WorkbenchPage() {
       setRankedStale(false)
       const data = await withNetRetry(
         () => api.fanRanked(picked, by, {
-          since, until, limit: PAGE, offset: off,
+          since, until, limit: PAGE, offset: off, tags,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
         }))
@@ -221,6 +225,13 @@ export default function WorkbenchPage() {
     }
   }, [picked, since, until, slice])
 
+  useEffect(() => {
+    setRows([])
+    setHasMore(false)
+    void loadRanked(TAB_BY[tab], 0, false, tagFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilter.join('|')])
+
   /** 切页签：清空已加载行，按新口径从头拉 */
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
@@ -228,6 +239,15 @@ export default function WorkbenchPage() {
     setHasMore(false)
     void loadRanked(TAB_BY[t], 0, false)
   }, [loadRanked])
+
+  useEffect(() => {
+    if (!picked || !ranked) return
+    let alive = true
+    api.fanTags(picked).then((r) => {
+      if (alive) setTagOptions(r.items ?? [])
+    }).catch(() => { /* 标签目录失败不影响名单 */ })
+    return () => { alive = false }
+  }, [picked, ranked])
 
   /** 懒加载：接着已加载的条数往后取一页 */
   const loadingMore = useRef(false)
@@ -469,8 +489,11 @@ export default function WorkbenchPage() {
                   until={until}
                   ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}
                   onOpenMember={setMemberUid}
+                  tagOptions={tagOptions}
+                  tagFilter={tagFilter}
+                  onTagFilter={setTagFilter}
                   rows={rows}
-                  total={ranked.pool?.size ?? ranked.total_in_pool}
+                  total={ranked.list_total ?? ranked.pool?.size ?? ranked.total_in_pool}
                   hasMore={hasMore}
                   loading={busy}
                   onLoadMore={onLoadMore}

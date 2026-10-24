@@ -473,6 +473,7 @@ def ranked(
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     offset: int = Query(0, ge=0, description="名单分页偏移（0 起）；全池可翻"),
     ids: str | None = Query(None, description="窗口的场次清单（逗号分隔的 live_id）；给了就只算这几场"),
+    tags: str | None = Query(None, description="标签过滤（逗号分隔，**与**语义）"),
     _: None = Depends(require_module),
 ) -> dict[str, Any]:
     """名单。`by` 是**必填**的 —— 不提供默认口径。
@@ -494,6 +495,12 @@ def ranked(
     wanted = [x for x in (ids or "").split(",") if x]
     payload = _compute(vtuber, window, since, until, live_ids=wanted or None)
     order = rank(payload["table"], _primary(payload, by))
+    # 标签过滤（2026-10-24）：多标签是**与**语义 —— 选「舰长+老头」= 既是舰长又是老头
+    if tags:
+        want = {t.strip() for t in tags.split(",") if t.strip()}
+        tag_map = payload["tags"]
+        if want:
+            order = [u for u in order if want <= set(tag_map.get(u, []))]
 
     table, tags, labels, win = (payload["table"], payload["tags"],
                                 payload["labels"], payload["window"])
@@ -587,6 +594,8 @@ def ranked(
         "since": since, "until": until, "by": by,
         "purity_threshold": PURITY_THRESHOLD,
         "total_in_pool": len(table), "count": len(rows),
+        #: 过滤后的名单总数（标签筛选时前端用它当分母）
+        "list_total": len(order),
         #: 池里被判为独轮车的人数（前端可据此提示"Top N 里有 X 人"）
         "spam_in_pool": sum(1 for u in table.uids if u in win.spam),
         #: 全池（过门槛后的所有人）的分层与强度分布 —— 两张图用它，不用 items

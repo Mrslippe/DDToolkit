@@ -1639,6 +1639,8 @@ export interface FanRanked {
   }
   /** 池内被判为独轮车的人数 */
   spam_in_pool?: number
+  /** 过滤后的名单总数（标签筛选时的分页分母） */
+  list_total?: number
 }
 
 

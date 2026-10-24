@@ -1098,17 +1098,23 @@ export const api = {
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
   fanRanked: (name: string, by: FanSortBy,
               opts?: { since?: string; until?: string; window?: number; limit?: number;
-                       offset?: number; ids?: string[] }) => {
+                       offset?: number; ids?: string[]; tags?: string[] }) => {
     const q = new URLSearchParams({ by })
     if (opts?.since) q.set('since', opts.since)
     if (opts?.until) q.set('until', opts.until)
     if (opts?.window) q.set('window', String(opts.window))
     if (opts?.limit) q.set('limit', String(opts.limit))
     if (opts?.offset) q.set('offset', String(opts.offset))
+    if (opts?.tags?.length) q.set('tags', opts.tags.join(','))
     // 窗口的场次清单：后端据此只算这几场（与采集、计数同一批人）
     if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
     return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)
   },
+
+  /** 标签目录（名称 + 占比），给筛选器用 */
+  fanTags: (name: string) =>
+    request<{ items: { name: string; prevalence: number }[] }>(
+      `/fan/${encodeURIComponent(name)}/tags`),
 
   /** 池内搜索（uid / 昵称模糊） */
   fanSearch: (name: string, q: string,

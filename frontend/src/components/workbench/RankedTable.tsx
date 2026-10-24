@@ -3,6 +3,7 @@ import { resolveAsset } from '../../api/api'
 import type { FanRankedRow } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
 import MemberSearch from './MemberSearch'
+import TagFilter from './TagFilter'
 import TagPills from './TagPills'
 
 interface Props {
@@ -21,6 +22,10 @@ interface Props {
   until: string
   ids: string[]
   onOpenMember: (uid: string) => void
+  /** 标签筛选（与后端 `tags` 参数同义） */
+  tagOptions: { name: string; prevalence: number }[]
+  tagFilter: string[]
+  onTagFilter: (next: string[]) => void
 }
 
 /** 头像失败时退回昵称/uid 首字 */
@@ -57,6 +62,7 @@ const pct = (v: number) => v.toFixed(3)
 export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview',
   vtuber, since, until, ids, onOpenMember,
+  tagOptions, tagFilter, onTagFilter,
 }: Props) {
   const sentinel = useRef<HTMLDivElement | null>(null)
 
@@ -105,8 +111,11 @@ export default function RankedTable({
               : `已加载 ${rows.length.toLocaleString()} / 全池 ${total.toLocaleString()} 人`}
           </span>
         </h3>
-        <MemberSearch vtuber={vtuber} since={since} until={until} ids={ids}
-                      onPick={onOpenMember} />
+        <div className="wb-head-tools">
+          <MemberSearch vtuber={vtuber} since={since} until={until} ids={ids}
+                        onPick={onOpenMember} />
+          <TagFilter tags={tagOptions} value={tagFilter} onChange={onTagFilter} />
+        </div>
       </div>
 
       {rows.length === 0 && !loading ? (

@@ -1841,3 +1841,64 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   margin-right: 4px;
   vertical-align: -3px;
 }
+
+/* 标签筛选按钮 + 弹层（2026-10-24） */
+.wb-head-tools { display: flex; align-items: center; gap: 8px; }
+
+.wb-tagfilter { position: relative; }
+
+.wb-tagfilter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  color: var(--c-text-main);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.wb-tagfilter-btn.is-on { color: var(--c-primary-deep); }
+
+.wb-tagfilter-pop {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 30;
+  width: 200px;
+  padding: 6px;
+  background: #fff;
+  border-radius: var(--pcard-radius-inner);
+  box-shadow: var(--pcard-shadow);
+}
+
+.wb-tagfilter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wb-tagfilter-row:hover { background: #fff5f7; }
+.wb-tagfilter-pct { margin-left: auto; color: var(--c-text-sub); font-size: 11px; }
+
+.wb-tagfilter-clear {
+  width: 100%;
+  margin-top: 4px;
+  padding: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(201, 64, 111, 0.08);
+  color: var(--c-primary-deep);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* 搜索框用项目通用样式后，宽度上限收一点，和筛选按钮并排 */
+.wb-search.search-float input { width: 170px; }
