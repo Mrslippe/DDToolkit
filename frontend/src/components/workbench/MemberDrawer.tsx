@@ -76,6 +76,11 @@ function SessionChart({ series, color, unit }: {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        // ⚠️ 图表在横向滚动容器里（overflow-x:auto 会**裁掉**溢出的 tooltip）。
+        // 挂到 body 上就绕开了裁剪 —— 这是 ECharts 5.5+ 的 `appendTo`。
+        appendTo: () => document.body,
+        confine: false,
+        extraCssText: 'z-index: 80;',
         formatter: (ps: unknown) => {
           const arr = ps as { dataIndex: number }[]
           const i = arr?.[0]?.dataIndex ?? 0
@@ -88,13 +93,24 @@ function SessionChart({ series, color, unit }: {
       xAxis: {
         type: 'category',
         data: series.map((d) => d.start_at.slice(5, 16)),
-        axisLabel: { fontSize: 9, color: '#5b6c7e', interval: Math.max(0, Math.floor(n / 8)) },
+        // 只标首 / 中 / 尾三个，避免 75 场时标签糊成一片
+        axisLabel: {
+          fontSize: 9,
+          color: '#5b6c7e',
+          hideOverlap: true,
+          interval: (i: number) => i === 0 || i === Math.floor((n - 1) / 2) || i === n - 1,
+        },
         axisTick: { show: false },
         axisLine: { lineStyle: { color: 'rgba(210,216,222,0.9)' } },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { fontSize: 9, color: '#5b6c7e' },
+        splitNumber: 2,
+        axisLabel: {
+          fontSize: 9,
+          color: '#5b6c7e',
+          formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)),
+        },
         splitLine: { lineStyle: { color: 'rgba(210,216,222,0.45)' } },
       },
       series: [{
