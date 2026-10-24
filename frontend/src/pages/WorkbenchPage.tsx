@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ChevronUp } from 'lucide-react'
 import { api } from '../api/api'
 import type {
   FanActivity, FanCollectProgress, FanRanked, FanRankedRow, FanSessionPreview, FanVtuber,
@@ -83,6 +84,9 @@ export default function WorkbenchPage() {
   const [hasMore, setHasMore] = useState(false)
   /** 打开详情的成员 uid（null = 关闭） */
   const [memberUid, setMemberUid] = useState<string | null>(null)
+  /** 回顶浮钮：滚动超过一屏才出现（与 PostListView 同一套做法） */
+  const pageRef = useRef<HTMLDivElement | null>(null)
+  const [showTop, setShowTop] = useState(false)
   /** 换区间后旧结果已不一定对应当前窗口 —— **保留但标灰**，而不是清空（用户 2026-10-19 选 a） */
   const [rankedStale, setRankedStale] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -181,6 +185,14 @@ export default function WorkbenchPage() {
     [activity, win],
   )
 
+  useEffect(() => {
+    const el = pageRef.current
+    if (!el) return
+    const onScroll = () => setShowTop(el.scrollTop > 600)
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
   const loadRanked = useCallback(async (
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
@@ -267,7 +279,7 @@ export default function WorkbenchPage() {
   // ── 模块关着：不是"错误"，是带下一步动作的空态 ──────────────────────────
   if (enabled === false) {
     return (
-      <div className="wb-page">
+      <div className="wb-page" ref={pageRef}>
         <div className="wb-inner">
           <section className="wb-card">
             <div className="wb-empty" data-testid="workbench-disabled">
@@ -284,7 +296,7 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="wb-page">
+    <div className="wb-page" ref={pageRef}>
       <div className="wb-inner">
         <header className="wb-head">
           <h1 className="wb-title">数据分析工作台</h1>
@@ -530,6 +542,16 @@ export default function WorkbenchPage() {
           换算成日期区间时实测误差 0~1 场；结果区的两张图只反映<b>当前名单里的 N 人</b>，不是全池。
           <Link to="/" style={{ marginLeft: 8 }}>回到帖子浏览</Link>
         </p>
+
+        <button
+          type="button"
+          aria-label="回到顶部"
+          className={`back-to-top${showTop ? ' on' : ''}`}
+          data-testid="back-to-top"
+          onClick={() => pageRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+        >
+          <ChevronUp className="size-5" />
+        </button>
       </div>
     </div>
   )

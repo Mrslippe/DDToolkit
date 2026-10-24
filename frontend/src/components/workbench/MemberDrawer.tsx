@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { api, resolveAsset } from '../../api/api'
 import type { FanMemberDetail } from '../../api/types'
 
@@ -43,23 +44,15 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
     return () => { alive = false }
   }, [vtuber, uid, since, until, ids])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <>
-      <div className="wb-drawer-mask" onClick={onClose} />
-      <aside className="wb-drawer" data-testid="member-drawer" role="dialog" aria-label="成员详情">
-        <header className="wb-drawer-head">
-          <span className="wb-drawer-title">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="wb-member-dialog" data-testid="member-drawer">
+        <DialogHeader>
+          <DialogTitle>
             {data?.name || uid}
             <span className="wb-table-uid-sub">{uid}</span>
-          </span>
-          <button type="button" className="wb-drawer-close" onClick={onClose} aria-label="关闭">×</button>
-        </header>
+          </DialogTitle>
+        </DialogHeader>
 
         {err && <p className="wb-hint">{err}</p>}
         {!data && !err && <p className="wb-hint">读取中…</p>}
@@ -110,7 +103,7 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
             </div>
           </div>
         )}
-      </aside>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -75,6 +75,7 @@ from app.services.fan.collector import (
     plan_range,
 )
 from app.services.fan.avatars import fetch_avatar, prefetch
+from app.services.fan import member_index
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
 from app.services.fan.pool import core_size_for, pool_size_for, tier_sizes_for, window_acv
@@ -569,6 +570,14 @@ def ranked(
     # 后台预热第一页头像：用户滚到名单时基本已就绪（失败静默，不阻塞响应）
     if offset == 0:
         prefetch([r["uid"] for r in rows[:40]], resolve_data_dir())
+        # 成员详情索引：后台扫一遍窗口 raw（约 5 s），用户点开详情时就不必等了
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, member_index.build, resolve_data_dir(),
+                                 win.vtuber.subdir,
+                                 [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions])
+        except RuntimeError:
+            pass
 
     return {
         "vtuber": table.vtuber, "window": window, "sessions": win.n,
@@ -659,22 +668,16 @@ def member_detail(
         raise HTTPException(404, "该用户不在当前名单里")
 
     u = win.users[uid]
-    raw_dir = resolve_data_dir() / win.vtuber.subdir / "raw"
-    series = []
-    for sr in win.sessions:
-        try:
-            raw = json.loads((raw_dir / f"{sr.live_id}.json").read_text(encoding="utf-8"))
-            a = raw.get(uid) or {}
-        except (OSError, ValueError):
-            a = {}
-        series.append({
-            "live_id": sr.live_id,
-            "start_at": str(sr.start_at)[:16],
-            "m": int(a.get("m") or 0),
-            "p": round(float(a.get("p") or 0.0), 2),
-            "e": int(a.get("e") or 0),
-            "uniq": int(a.get("uniq") or 0),
-        })
+    # 逐场切片走**窗口级索引**（2026-10-24）：原来每次都重读 75 个 raw，实测 5.9 s/次；
+    # 现在每个窗口只扫一遍，之后任意用户 O(1)。
+    idx = member_index.build(
+        resolve_data_dir(), win.vtuber.subdir,
+        [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
+    )
+    series = [{
+        "live_id": lid, "start_at": start_at,
+        "m": m, "p": p_, "e": e, "uniq": uq,
+    } for lid, start_at, m, p_, e, uq in idx.get(uid, [])]
 
     return {
         "uid": uid,

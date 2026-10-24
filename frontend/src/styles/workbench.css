@@ -1716,3 +1716,12 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 .wb-drawer-sec { font-size: 12.5px; color: var(--c-text-sub); font-weight: 500; margin: 16px 0 6px; }
 .wb-drawer-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* 回顶浮钮：沿用 posts.css 的 `.back-to-top` 外观，但在工作台里用 fixed 钉住视口
+   （`.wb-page` 自身是滚动容器，absolute 会跟着内容滚走） */
+.wb-page .back-to-top {
+  position: fixed;
+  right: 26px;
+  bottom: 26px;
+  z-index: 40;
+}

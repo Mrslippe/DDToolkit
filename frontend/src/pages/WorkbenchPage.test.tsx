@@ -430,13 +430,14 @@ describe('搜索 / 标签 / 详情（2026-10-24）', () => {
     expect(q('[data-testid="ranked-search-pop"]')).toBeTruthy()
   })
 
-  it('★ 点名单行打开详情抽屉', async () => {
+  it('★ 点名单行打开详情弹窗', async () => {
     await analyse()
     const row = document.querySelector('[data-testid="ranked-table"] tbody tr') as HTMLElement
     expect(row).toBeTruthy()
     await act(async () => { row.click() })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(q('[data-testid="member-drawer"]')).toBeTruthy()
+    // Dialog 走 portal 渲染到 body，必须查 document 而不是 host
+    expect(document.querySelector('[data-testid="member-drawer"]')).toBeTruthy()
     expect(fanMember).toHaveBeenCalled()
   })
 })

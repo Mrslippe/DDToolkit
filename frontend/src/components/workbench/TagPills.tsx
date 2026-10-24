@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 interface Props {
   tags: string[]
-  /** 单行最多显示几个，超出收进下拉 */
+  /** 单行最多显示几个（默认 5），超出收进下拉 */
   max?: number
 }
 
@@ -27,7 +27,7 @@ function tone(tag: string) {
  * 用 CSS hover 展开（`:hover` + `:focus-within`），不引入 Popover 依赖 ——
  * 名单每行都挂一个弹层组件代价太大。
  */
-export default function TagPills({ tags, max = 3 }: Props) {
+export default function TagPills({ tags, max = 5 }: Props) {
   const [open, setOpen] = useState(false)      // 仅供键盘/触屏兜底
   if (!tags.length) return <span className="wb-tag-empty">—</span>
   const shown = tags.slice(0, max)
