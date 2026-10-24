@@ -105,10 +105,12 @@ LEVEL_NONE = "none"
 LEVEL_SUSPECTED = "suspected"
 LEVEL_CONFIRMED = "confirmed"
 
-#: 确定档：证据场次下限
-CONFIRM_MIN_LOW_SESSIONS = 3
+#: 确定档：低多样性场次下限（2026-10-25 用户定：连续两场高强度刷屏即算确定）
+CONFIRM_MIN_LOW_SESSIONS = 2
 #: 确定档：整体不同文本率上限
 CONFIRM_MAX_VARIETY = 0.20
+#: 确定档：低多样性场占证据场的比例下限（比「疑似」更严）
+CONFIRM_LOW_SHARE = 0.60
 #: 疑似档：整体不同文本率上限（比确定档松）
 SUSPECT_MAX_VARIETY = 0.25
 
@@ -116,7 +118,7 @@ SUSPECT_MAX_VARIETY = 0.25
 def level_for(*, m: int, uniq: int, sessions: list[tuple[int, int]]) -> str:
     """三档判定。`sessions` = 每场 `(弹幕数, 去重文本数)`。
 
-    - **确定**：累计 ≥200 条、整体不同文本率 ≤20%、且 ≥3 场低多样性（占比 ≥50%）；
+    - **确定**：累计 ≥200 条、整体不同文本率 ≤20%、且 ≥2 场低多样性（占比 ≥60%）；
     - **疑似**：累计 ≥200 条，命中旧判据（整体 ≤25%）但持续性不足；
       或低多样性场 ≥50% 但整体率略高（≤25%）。
     - **不是**：其余。
@@ -130,7 +132,7 @@ def level_for(*, m: int, uniq: int, sessions: list[tuple[int, int]]) -> str:
 
     if (variety <= CONFIRM_MAX_VARIETY
             and len(low) >= CONFIRM_MIN_LOW_SESSIONS
-            and share >= LOW_VARIETY_SHARE):
+            and share >= CONFIRM_LOW_SHARE):
         return LEVEL_CONFIRMED
     if variety <= SUSPECT_MAX_VARIETY or (share >= LOW_VARIETY_SHARE and low):
         return LEVEL_SUSPECTED

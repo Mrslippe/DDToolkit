@@ -611,8 +611,13 @@ def load_window(
         if tr is not None:
             flag2, rule2 = verdict(tr)
             if flag2:
-                spam_levels[uid] = "confirmed"
-                rule = rule or rule2
+                # v2 是**时间分布**判据（与 v1 的重复率不同源），所以不套 v1 的低多样性门槛；
+                # 但同样要过"跨场"这道门：至少两场有足够样本，才谈得上"确定"。
+                evidence_n = sum(1 for mm, _uq in per if mm >= 20)
+                lvl2 = "confirmed" if evidence_n >= 2 else "suspected"
+                if lvl2 == "confirmed" or spam_levels.get(uid) != "confirmed":
+                    spam_levels[uid] = lvl2
+                rule = rule or (rule2 if lvl2 == "confirmed" else None)
         if rule:
             spam[uid] = rule
     return Window(v, n, sessions, users, warnings, spam, spam_levels, slices)
