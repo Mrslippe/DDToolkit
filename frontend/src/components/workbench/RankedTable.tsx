@@ -122,7 +122,18 @@ export default function RankedTable({
         <p className="wb-hint">这一页没有数据。</p>
       ) : (
         <div className="wb-table-wrap">
-          <table className="wb-table wb-table-ranked" data-testid="ranked-table">
+          <table className="wb-table wb-table-ranked is-fixed" data-testid="ranked-table">
+            <colgroup>
+              <col style={{ width: '44px' }} />   {/* # */}
+              <col style={{ width: '52px' }} />   {/* 头像 */}
+              <col style={{ width: '210px' }} />  {/* 昵称 */}
+              <col style={{ width: '84px' }} />   {/* 强度 */}
+              <col style={{ width: '92px' }} />   {/* 出席分位 */}
+              <col style={{ width: '92px' }} />   {/* 弹幕分位 */}
+              <col style={{ width: '92px' }} />   {/* 付费分位 */}
+              {detailHead && <col style={{ width: '150px' }} />}
+              <col />                              {/* 标签：吃掉剩余 */}
+            </colgroup>
             <thead>
               <tr>
                 <th>#</th><th>用户</th><th>昵称</th>
@@ -132,8 +143,9 @@ export default function RankedTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.uid} className="wb-row-click"
+              {rows.map((r, i) => (
+                <tr key={r.uid} className="wb-row-click wb-row-enter"
+                    style={{ animationDelay: `${Math.min(i, 12) * 18}ms` }}
                     onClick={() => onOpenMember(r.uid)}>
                   <td className="wb-table-rank">{r.rank}</td>
                   <td><Avatar row={r} /></td>

@@ -85,6 +85,8 @@ export default function WorkbenchPage() {
   /** 标签筛选（2026-10-24）：目录与选中项 */
   const [tagOptions, setTagOptions] = useState<{ name: string; prevalence: number }[]>([])
   const [tagFilter, setTagFilter] = useState<string[]>([])
+  /** 当前筛选的实时副本：`loadRanked` 可能被定时/翻页调用，闭包里的 state 会过期 */
+  const tagFilterRef = useRef<string[]>([])
   /** 打开详情的成员 uid（null = 关闭） */
   const [memberUid, setMemberUid] = useState<string | null>(null)
   /** 回顶浮钮：滚动超过一屏才出现（与 PostListView 同一套做法） */
@@ -200,7 +202,7 @@ export default function WorkbenchPage() {
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
     append = false,
-    tags: string[] = [],
+    tags?: string[],
   ): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
@@ -208,7 +210,7 @@ export default function WorkbenchPage() {
       setRankedStale(false)
       const data = await withNetRetry(
         () => api.fanRanked(picked, by, {
-          since, until, limit: PAGE, offset: off, tags,
+          since, until, limit: PAGE, offset: off, tags: tags ?? tagFilterRef.current,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
         }))
@@ -226,7 +228,7 @@ export default function WorkbenchPage() {
   }, [picked, since, until, slice])
 
   useEffect(() => {
-    setRows([])
+    tagFilterRef.current = tagFilter
     setHasMore(false)
     void loadRanked(TAB_BY[tab], 0, false, tagFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,9 +237,8 @@ export default function WorkbenchPage() {
   /** 切页签：清空已加载行，按新口径从头拉 */
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
-    setRows([])
     setHasMore(false)
-    void loadRanked(TAB_BY[t], 0, false)
+    void loadRanked(TAB_BY[t], 0, false, tagFilterRef.current)
   }, [loadRanked])
 
   useEffect(() => {
@@ -391,7 +392,7 @@ export default function WorkbenchPage() {
                         : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
-                             onClick={() => { setTab('overview'); setRows([]); setHasMore(false); void loadRanked('strength', 0, false) }}
+                             onClick={() => { setTab('overview'); setRows([]); setHasMore(false); void loadRanked('strength', 0, false, tagFilterRef.current) }}
                              data-testid="workbench-load">
                     分析
                   </FloatPill>

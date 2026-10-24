@@ -1902,3 +1902,24 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 搜索框用项目通用样式后，宽度上限收一点，和筛选按钮并排 */
 .wb-search.search-float input { width: 170px; }
+
+/* 固定列宽：筛选前后各列位置不变（2026-10-24 用户反馈） */
+.wb-table-ranked.is-fixed { table-layout: fixed; }
+
+.wb-table-ranked.is-fixed td,
+.wb-table-ranked.is-fixed th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 标签列不参与伸缩，超出仍由「+N」收口 */
+.wb-table-ranked.is-fixed td.wb-table-tags { overflow: visible; }
+
+/* 名单刷新：只有行做依次淡入，容器与图表不动（避免整块重排闪动） */
+@keyframes wb-row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.wb-row-enter { animation: wb-row-in 220ms ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-row-enter { animation: none; }
+}
