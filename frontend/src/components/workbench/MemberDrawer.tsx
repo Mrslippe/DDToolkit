@@ -92,7 +92,8 @@ function SessionChart({ series, color, unit }: {
       },
       xAxis: {
         type: 'category',
-        data: series.map((d) => d.start_at.slice(5, 16)),
+        // 横轴只要日期（MM-DD）；具体时分仍留在 tooltip 里
+        data: series.map((d) => d.start_at.slice(5, 10)),
         // 只标首 / 中 / 尾三个，避免 75 场时标签糊成一片
         axisLabel: {
           fontSize: 9,
