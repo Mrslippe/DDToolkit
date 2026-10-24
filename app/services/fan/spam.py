@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 #: 判定算法版本。改判定逻辑必须 +1，并在报告里写清楚用的是哪一版。
-SPAM_ALGO_VERSION = 1
+SPAM_ALGO_VERSION = 3
 
 #: v1 的参数（只作为默认值；调用方可以覆盖）
 MIN_MSG_FOR_JUDGEMENT = 200  # 少于这么多条不判（2026-10-21：与 v2 对齐）
@@ -66,3 +66,31 @@ def is_spam(
     dup_rate = 1 - min(uniq, m) / m
     maxrep_ratio = maxrep / m if m else 0.0
     return dup_rate >= dup_rate_threshold or maxrep_ratio >= maxrep_ratio_threshold
+
+
+# ── v3（2026-10-25）：**跨场次持续性** ────────────────────────────────
+#
+# 旧判据只看窗口累计的 `uniq/m`。问题：用户 483347460 在明前奶绿窗口里共 538 条、
+# 整体不同文本率 13.9% 被判独轮车 —— 但拆开看是**一场歌回的 404 条打call**（0%）
+# 把整体拉低了，其余 23 场几乎都正常（71.8% / 100% / 66.7%）。
+# 打call 是场景行为，不是刷屏人格。
+#
+# 因此要求：**同一行为在多数场次里持续出现**才算独轮车。
+
+#: 单场至少这么多条，才拿来做"场次证据"（太少是噪声）
+MIN_SESSION_MSGS = 20
+#: 单场判为"低多样性"的阈值（不同文本率）
+SESSION_VARIETY = 0.20
+#: 至少几场低多样性
+MIN_LOW_VARIETY_SESSIONS = 2
+#: 低多样性场次占"有证据场次"的比例下限
+LOW_VARIETY_SHARE = 0.50
+
+
+def is_spam_across_sessions(sessions: list[tuple[int, int]]) -> bool:
+    """`sessions` = 每场的 `(弹幕数, 去重文本数)`；判定是否**跨场持续**刷屏。"""
+    evidence = [(m, uniq) for m, uniq in sessions if m >= MIN_SESSION_MSGS]
+    if not evidence:
+        return False
+    low = [1 for m, uniq in evidence if uniq / m <= SESSION_VARIETY]
+    return len(low) >= MIN_LOW_VARIETY_SESSIONS and len(low) / len(evidence) >= LOW_VARIETY_SHARE

@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Callable, Iterable
 
-from app.services.fan.spam import is_spam
+from app.services.fan.spam import is_spam, is_spam_across_sessions
 from app.services.fan.spam2 import Trace, feed, verdict
 from app.core.timecn import cn_day
 from app.core import config as _core_config
@@ -599,7 +599,9 @@ def load_window(
         rule = None
         if u.text_tracked and u.m >= 20:
             flag1 = is_spam(uniq=u.uniq, maxrep=u.maxrep, m=u.m)
-            if flag1:
+            # v3：还要求**多数场次**都低多样性 —— 单场打call 不算独轮车
+            if flag1 and is_spam_across_sessions(
+                    [(sl[2], sl[5]) for sl in slices.get(uid, [])]):
                 rule = "repeat"
         tr = traces.get(uid)
         if tr is not None:
