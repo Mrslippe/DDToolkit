@@ -1809,3 +1809,13 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 }
 
 .wb-tag { display: inline-flex; align-items: center; }
+
+/* 标签统一「无描边 + 浅阴影」的浮片语义（2026-10-24） */
+.wb-tag {
+  border: 0;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10), 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+
+.wb-tag-more {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10);
+}

@@ -15,12 +15,12 @@ const GUARD_ICON: Record<string, string> = {
 }
 
 /** 每个标签一套固定配色（2026-10-24 用户指定 + 自选） */
-const STYLE: Record<string, { bg: string; fg: string; border?: string }> = {
-  舰长: { bg: 'rgba(59,130,246,0.12)', fg: '#1d63c9', border: 'rgba(59,130,246,0.30)' },
-  提督: { bg: 'rgba(124,58,237,0.12)', fg: '#6d28d9', border: 'rgba(124,58,237,0.30)' },
-  总督: { bg: 'rgba(220,38,38,0.12)', fg: '#b91c1c', border: 'rgba(220,38,38,0.30)' },
+const STYLE: Record<string, { bg: string; fg: string }> = {
+  舰长: { bg: 'rgba(59,130,246,0.12)', fg: '#1d63c9' },
+  提督: { bg: 'rgba(124,58,237,0.12)', fg: '#6d28d9' },
+  总督: { bg: 'rgba(220,38,38,0.12)', fg: '#b91c1c' },
   黑听民: { bg: 'rgba(148,163,184,0.18)', fg: '#4b5563' },                    // 灰
-  互动民: { bg: '#ffffff', fg: '#5b6c7e', border: 'rgba(148,163,184,0.55)' },  // 白/浅
+  互动民: { bg: '#ffffff', fg: '#5b6c7e' },  // 白/浅
   老头: { bg: 'rgba(234,179,8,0.16)', fg: '#a16207' },                        // 金
   sc民: { bg: 'rgba(14,165,233,0.14)', fg: '#0369a1' },                       // 蓝
   全勤: { bg: 'rgba(201,64,111,0.12)', fg: '#b23a63' },                       // 品牌深粉
@@ -32,11 +32,8 @@ const FALLBACK = { bg: 'rgba(148,163,184,0.14)', fg: '#4b5a6b' }
 
 function pillStyle(tag: string): React.CSSProperties {
   const c = STYLE[tag] ?? FALLBACK
-  return {
-    background: c.bg,
-    color: c.fg,
-    border: `1px solid ${c.border ?? 'transparent'}`,
-  }
+  // 无描边、浅阴影的「浮片」语义（2026-10-24 用户定）：靠阴影分层，不靠边框
+  return { background: c.bg, color: c.fg }
 }
 
 /** 单个标签胶囊；大航海三档带官方图标 */
