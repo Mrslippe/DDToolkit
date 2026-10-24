@@ -1934,3 +1934,6 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 切页签不再重播面板淡入（重挂载会让图表整体闪一下） */
 .wb-tabpanel { animation: none; }
+
+/* 收入占比（付费细节列的辅助信息） */
+.wb-pay-share { color: var(--c-primary-deep); font-size: 11.5px; }

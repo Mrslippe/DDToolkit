@@ -216,6 +216,17 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         "acv": acv, "pool_size": pool_size, "core_n": core_n,
         "tier_sizes": tier_sizes_for(win),
     }
+    # 收入贡献占比（2026-10-25）：某人付费 / **池内总收入**。
+    # 比"付费分位"更能区分尾部 —— 分位是排名，¥300 与 ¥20,000 只差 0.14；
+    # 占比是量级，二者差 75 倍（0.03% vs 2.2%）。
+    _pool_pay = sum(win.users[u].pay for u in table.uids)
+    payload["pay_total_pool"] = _pool_pay
+    payload["pay_share"] = {
+        u: (win.users[u].pay / _pool_pay if _pool_pay > 0 else 0.0) for u in table.uids
+    }
+    _by_pay = sorted(table.uids, key=lambda x: -win.users[x].pay)
+    payload["pay_rank"] = {u: i for i, u in enumerate(_by_pay, 1)}
+
     # 标签占比：分母是**入选池**（名单里看到的比例），不是全体观测用户
     _pool_tags: dict[str, int] = {}
     for _uid in table.uids:
@@ -528,6 +539,10 @@ def ranked(
             "att_sessions": u.att_n if u else 0,
             "att_rate": round(u.att_n / max(1, win.n), 6) if u else 0.0,
             "pay_total": round(table.tie[uid]["pay"], 2),
+            #: 收入贡献占比（该用户付费 / 池内总收入）
+            "pay_share": round(payload["pay_share"].get(uid, 0.0), 8),
+            #: 池内付费名次（1 = 最高）
+            "pay_rank": payload["pay_rank"].get(uid),
             "msg_total": int(table.tie[uid]["msg"]),
             # 独轮车标记（v1 重复率 ∪ v2 时间分布）；None = 不是
             "spam": win.spam.get(uid),
@@ -719,6 +734,8 @@ def member_detail(
             "msg_total": u.m,
             "msg_unique": u.uniq,
             "pay_total": round(u.pay, 2),
+            "pay_share": round(payload["pay_share"].get(uid, 0.0), 8),
+            "pay_rank": payload["pay_rank"].get(uid),
             "gift_cnt": u.gift_cnt,
             "guard_cnt": u.guard_cnt,
             "sc_cnt": u.sc_cnt,

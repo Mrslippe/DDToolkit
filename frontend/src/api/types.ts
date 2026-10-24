@@ -1602,6 +1602,10 @@ export interface FanRankedRow {
   att_sessions: number
   att_rate: number
   pay_total: number
+  /** 收入贡献占比（该用户付费 / 池内总收入） */
+  pay_share?: number
+  /** 池内付费名次（1 = 最高） */
+  pay_rank?: number
   msg_total: number
   tags: string[]
   /** 独轮车规则名（repeat / low_variety / …）；null 表示不是 */
@@ -1676,6 +1680,10 @@ export interface FanMemberDetail {
     msg_total: number
     msg_unique: number
     pay_total: number
+  /** 收入贡献占比（该用户付费 / 池内总收入） */
+  pay_share?: number
+  /** 池内付费名次（1 = 最高） */
+  pay_rank?: number
     gift_cnt: number
     guard_cnt: number
     sc_cnt: number

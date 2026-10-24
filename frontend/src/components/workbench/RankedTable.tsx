@@ -98,7 +98,16 @@ export default function RankedTable({
         </>
       )
     }
-    if (tab === 'payment') return r.pay_total > 0 ? `¥${r.pay_total.toLocaleString()}` : '—'
+    if (tab === 'payment') {
+      if (r.pay_total <= 0) return '—'
+      // 金额 + 收入占比：分位在尾部挤成一条线，占比才是量级（¥300≈0.03%，¥2万≈2.2%）
+      return (
+        <>
+          ¥{r.pay_total.toLocaleString()}
+          {r.pay_share ? <span className="wb-pay-share"> · {(r.pay_share * 100).toFixed(2)}%</span> : null}
+        </>
+      )
+    }
     return null
   }
 

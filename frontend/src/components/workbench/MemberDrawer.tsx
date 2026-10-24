@@ -201,6 +201,13 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
             <h4 className="wb-drawer-sec">付费</h4>
             <dl className="wb-kv">
               <div><dt>总付费</dt><dd>¥{data.totals.pay_total.toLocaleString()}</dd></div>
+              <div><dt>收入占比</dt>
+                <dd>
+                  {data.totals.pay_share != null
+                    ? `${(data.totals.pay_share * 100).toFixed(2)}%`
+                    : '—'}
+                  {data.totals.pay_rank ? ` · 池内第 ${data.totals.pay_rank}` : ''}
+                </dd></div>
               <div><dt>每笔均值</dt>
                 <dd>{data.totals.pay_events ? `¥${data.totals.pay_per_event.toFixed(2)}` : '—'}</dd></div>
             </dl>
