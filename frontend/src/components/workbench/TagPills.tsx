@@ -3,7 +3,7 @@ import ProxyImage from '../common/ProxyImage'
 
 interface Props {
   tags: string[]
-  /** 单行最多显示几个（默认 5），超出收进下拉 */
+  /** 单行最多显示几个（默认 3），超出收进「+N」 */
   max?: number
 }
 
@@ -15,17 +15,24 @@ const GUARD_ICON: Record<string, string> = {
 }
 
 /** 每个标签一套固定配色（2026-10-24 用户指定 + 自选） */
+/**
+ * 4 个语义家族（2026-10-24 设计收敛）：同族同色相、用深浅与图标区分层级。
+ *   · 身份/消费力：总督 → 提督 → 舰长（同一蓝，由深到浅）
+ *   · 付费行为：老头（金）· sc民（青）
+ *   · 行为特征：互动民（浅）· 黑听民（灰）
+ *   · 状态：全勤（品牌粉）· 新人（绿）· 独轮车（警示红）
+ */
 const STYLE: Record<string, { bg: string; fg: string }> = {
-  舰长: { bg: 'rgba(59,130,246,0.12)', fg: '#1d63c9' },
-  提督: { bg: 'rgba(124,58,237,0.12)', fg: '#6d28d9' },
-  总督: { bg: 'rgba(220,38,38,0.12)', fg: '#b91c1c' },
-  黑听民: { bg: 'rgba(148,163,184,0.18)', fg: '#4b5563' },                    // 灰
-  互动民: { bg: '#ffffff', fg: '#5b6c7e' },  // 白/浅
-  老头: { bg: 'rgba(234,179,8,0.16)', fg: '#a16207' },                        // 金
-  sc民: { bg: 'rgba(14,165,233,0.14)', fg: '#0369a1' },                       // 蓝
-  全勤: { bg: 'rgba(201,64,111,0.12)', fg: '#b23a63' },                       // 品牌深粉
-  新人: { bg: 'rgba(16,185,129,0.14)', fg: '#047857' },                       // 绿
-  独轮车: { bg: 'rgba(252,112,121,0.14)', fg: '#b2353c' },                    // 珊瑚
+  总督: { bg: 'rgba(29,99,201,0.20)', fg: '#123f80' },
+  提督: { bg: 'rgba(29,99,201,0.14)', fg: '#1d63c9' },
+  舰长: { bg: 'rgba(29,99,201,0.09)', fg: '#2f74d0' },
+  老头: { bg: 'rgba(234,179,8,0.18)', fg: '#8a5a06' },
+  sc民: { bg: 'rgba(6,182,212,0.14)', fg: '#0e7490' },
+  互动民: { bg: '#f8fafc', fg: '#64748b' },
+  黑听民: { bg: 'rgba(100,116,139,0.16)', fg: '#475569' },
+  全勤: { bg: 'rgba(201,64,111,0.12)', fg: '#b23a63' },
+  新人: { bg: 'rgba(16,185,129,0.14)', fg: '#047857' },
+  独轮车: { bg: 'rgba(220,38,38,0.12)', fg: '#b91c1c' },
 }
 
 const FALLBACK = { bg: 'rgba(148,163,184,0.14)', fg: '#4b5a6b' }
@@ -61,7 +68,7 @@ function Pill({ tag }: { tag: string }) {
  * 不换行；超过 `max`（默认 5）收进「+N」，hover / 聚焦 / 点击都能展开。
  * 配色表在 `STYLE` 里 —— 以后改颜色只改那一处。
  */
-export default function TagPills({ tags, max = 5 }: Props) {
+export default function TagPills({ tags, max = 3 }: Props) {
   const [open, setOpen] = useState(false)
   if (!tags.length) return <span className="wb-tag-empty">—</span>
   const shown = tags.slice(0, max)
