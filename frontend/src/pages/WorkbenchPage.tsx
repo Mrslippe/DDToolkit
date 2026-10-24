@@ -216,8 +216,10 @@ export default function WorkbenchPage() {
         }))
       setRanked(data)
       setRows((prev) => (append ? [...prev, ...data.items] : data.items))
-      const total = data.pool?.size ?? data.total_in_pool
-      setHasMore(off + data.items.length < total)
+      const total = data.list_total ?? data.pool?.size ?? data.total_in_pool
+      // 一页空 = 到底（否则 `off + 0 < total` 永远成立，观察者会无限触发、
+      // 按钮在「加载中…/加载更多」之间反复闪 —— 2026-10-24 用户反馈）
+      setHasMore(data.items.length > 0 && off + data.items.length < total)
       setErr(null)
     } catch (e) {
       setErr(friendly(e as Error))
@@ -253,7 +255,7 @@ export default function WorkbenchPage() {
   /** 懒加载：接着已加载的条数往后取一页 */
   const loadingMore = useRef(false)
   const onLoadMore = useCallback((): void => {
-    if (loadingMore.current) return
+    if (loadingMore.current || !hasMore) return
     loadingMore.current = true
     void loadRanked(TAB_BY[tab], rows.length, true).finally(() => {
       loadingMore.current = false

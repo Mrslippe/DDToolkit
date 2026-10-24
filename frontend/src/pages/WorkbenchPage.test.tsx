@@ -448,3 +448,21 @@ describe('搜索 / 标签 / 详情（2026-10-24）', () => {
     expect(fanMember).toHaveBeenCalled()
   })
 })
+
+describe('懒加载到底即停（2026-10-24 回归）', () => {
+  it('★ 第二页为空后显示「已到末尾」，不再发请求', async () => {
+    await mount()
+    await act(async () => { q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const before = fanRanked.mock.calls.length
+
+    fanRanked.mockResolvedValueOnce({ ...RANKED, items: [], list_total: 2 })
+    const more = q<HTMLButtonElement>('[data-testid="ranked-more"]')!
+    await act(async () => { more.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(fanRanked.mock.calls.length).toBe(before + 1)
+    expect(q('[data-testid="ranked-more"]')).toBeNull()          // 按钮消失
+    expect(document.body.textContent).toContain('已到末尾')
+  })
+})
