@@ -453,8 +453,11 @@ async def fan_avatar(uid: str) -> Response:
             face = (((r.json() or {}).get("data") or {}).get("card") or {}).get("face")
             if not face:
                 raise HTTPException(404, "该用户没有头像")
-            img = await c.get(face, headers={"User-Agent": UA_CHROME,
-                                             "Referer": "https://www.bilibili.com/"})
+            # B 站图床支持 `@64w_64h.jpg` 后缀做服务端缩放：原图 230KB+，
+            # 缩到 64px 只有 ~1.3KB —— 一页 20 个头像差两个数量级。
+            thumb = face + "@80w_80h.jpg" if face.endswith((".jpg", ".png")) else face
+            img = await c.get(thumb, headers={"User-Agent": UA_CHROME,
+                                              "Referer": "https://www.bilibili.com/"})
             if img.status_code != 200 or not img.content:
                 raise HTTPException(404, "头像下载失败")
     except httpx.HTTPError as exc:

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { resolveAsset } from '../../api/api'
 import type { FanRankedRow } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
 
@@ -19,7 +20,9 @@ function Avatar({ row }: { row: FanRankedRow }) {
   // 0 = danmakus CDN，1 = 本地代理，2 = 首字兜底
   const [stage, setStage] = useState(0)
   const label = (row.name || row.uid).slice(0, 1).toUpperCase()
-  const src = stage === 0 ? row.avatar : stage === 1 ? row.avatar_proxy : undefined
+  // ⚠️ 代理地址必须拼上 apiBase —— 相对路径会落到**页面来源**（tauri://localhost / 5173），
+  // 不是后端，症状是"每张头像都裂成首字"（与 devlog/294 的视频代理同一条坑）。
+  const src = stage === 0 ? row.avatar : stage === 1 ? resolveAsset(row.avatar_proxy) : undefined
   if (!src || stage > 1) {
     return <span className="wb-avatar wb-avatar-fallback">{label}</span>
   }
