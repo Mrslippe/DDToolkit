@@ -602,7 +602,8 @@ def load_window(
         rule = None
         per = [(sl[2], sl[5]) for sl in slices.get(uid, [])]
         if u.text_tracked and u.m >= 20:
-            level = level_for(m=u.m, uniq=u.uniq, sessions=per)
+            level = level_for(m=u.m, uniq=u.uniq, sessions=per,
+                              speaking_sessions=u.msg_sess)
             if level != "none":
                 spam_levels[uid] = level
             if level == "confirmed":
@@ -613,8 +614,10 @@ def load_window(
             if flag2:
                 # v2 是**时间分布**判据（与 v1 的重复率不同源），所以不套 v1 的低多样性门槛；
                 # 但同样要过"跨场"这道门：至少两场有足够样本，才谈得上"确定"。
+                # 场次太少的同样只能"疑似"（与 v4 口径一致）
                 evidence_n = sum(1 for mm, _uq in per if mm >= 20)
-                lvl2 = "confirmed" if evidence_n >= 2 else "suspected"
+                lvl2 = ("confirmed" if evidence_n >= 2 and u.msg_sess >= 5
+                        else "suspected")
                 if lvl2 == "confirmed" or spam_levels.get(uid) != "confirmed":
                     spam_levels[uid] = lvl2
                 rule = rule or (rule2 if lvl2 == "confirmed" else None)
