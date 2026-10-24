@@ -306,6 +306,9 @@ class Window:
     warnings: list[str] = field(default_factory=list)
     #: uid → 独轮车规则（`sustained` / `window` / `cross_session`）；空 = 不是
     spam: dict[str, str] = field(default_factory=dict)
+    #: uid → 逐场切片 [(live_id, start_at, m, p, e, uniq)]（2026-10-24）
+    #: 在读取 raw 的**同一遍**里顺手产出，供成员详情 O(1) 查询，避免二次扫描。
+    slices: dict[str, list[tuple]] = field(default_factory=dict)
 
     @property
     def n(self) -> int:
@@ -502,6 +505,7 @@ def load_window(
     #    因此中途失败会带来很小的位置偏移 —— 这两个字段只喂展示标签（`新面孔`），
     #    不影响任何分量；实测该分支从未触发（0/225）。
     users: dict[str, UserFact] = {}
+    slices: dict[str, list[tuple]] = {}
     traces: dict[str, Trace] = {}
     total = max(1, len(sessions) - 1)
     ok: list[SessionRef] = []
@@ -548,6 +552,11 @@ def load_window(
             u.gift_cnt += _as_int(a, "gift_cnt", warnings, where)
             u.guard_cnt += _as_int(a, "guard_cnt", warnings, where)
             u.pay += pay
+            _e = int(a.get("e") or 0)
+            if m or pay or _e:
+                slices.setdefault(uid, []).append(
+                    (sr.live_id, str(sr.start_at)[:16], m, round(pay, 2), _e,
+                     int(a.get("uniq") or 0) if "uniq" in a else 0))
             if m > 0:
                 u.msg_sess += 1
             if sc > 0:
@@ -590,7 +599,7 @@ def load_window(
                 rule = rule or rule2
         if rule:
             spam[uid] = rule
-    return Window(v, n, sessions, users, warnings, spam)
+    return Window(v, n, sessions, users, warnings, spam, slices)
 
 
 def load_all(before_n: int = 75) -> dict[str, Window]:

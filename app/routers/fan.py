@@ -219,10 +219,8 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     # 成员详情索引（2026-10-24 用户定案）：**在分析阶段同步建**，让用户显式等待一次。
     # 放在这里而不是后台预热，是因为"分析完成"应当意味着"详情可秒开" ——
     # 后台建的索引会在用户点开详情时还没好，表现为"有时快有时慢"，比固定等待更难预期。
-    member_index.build(
-        resolve_data_dir(), win.vtuber.subdir,
-        [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
-    )
+    # 切片由 `load_window` 在读 raw 的同一遍里产出 ⇒ 这里只是登记，不再扫第二遍
+    member_index.put(win.vtuber.subdir, [sr.live_id for sr in win.sessions], win.slices)
 
     _CACHE[key] = payload
     logger.info("fan: 已计算 %s（%s 场 · 区间 %s~%s）→ %s 人入池",
@@ -671,10 +669,13 @@ def member_detail(
     u = win.users[uid]
     # 逐场切片走**窗口级索引**（2026-10-24）：原来每次都重读 75 个 raw，实测 5.9 s/次；
     # 现在每个窗口只扫一遍，之后任意用户 O(1)。
-    idx = member_index.build(
-        resolve_data_dir(), win.vtuber.subdir,
-        [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
-    )
+    _ids = [sr.live_id for sr in win.sessions]
+    idx = member_index.get(win.vtuber.subdir, _ids)
+    if idx is None:            # 兜底：老缓存或索引被清掉时再扫一遍
+        idx = member_index.build(
+            resolve_data_dir(), win.vtuber.subdir,
+            [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
+        )
     series = [{
         "live_id": lid, "start_at": start_at,
         "m": m, "p": p_, "e": e, "uniq": uq,

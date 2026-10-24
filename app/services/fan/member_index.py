@@ -24,6 +24,18 @@ _INDEX: dict[tuple[str, tuple[str, ...]], dict[str, list[tuple]]] = {}
 _MAX_WINDOWS = 4
 
 
+def put(subdir: str, live_ids: list[str], slices: dict[str, list[tuple]]) -> None:
+    """直接接收 `load_window` 已经读出来的切片（2026-10-24：省掉第二遍扫描）。"""
+    key = (subdir, tuple(live_ids))
+    if len(_INDEX) >= _MAX_WINDOWS:
+        _INDEX.pop(next(iter(_INDEX)))
+    _INDEX[key] = slices
+
+
+def get(subdir: str, live_ids: list[str]) -> dict[str, list[tuple]] | None:
+    return _INDEX.get((subdir, tuple(live_ids)))
+
+
 def clear() -> None:
     _INDEX.clear()
 
