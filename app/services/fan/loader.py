@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence, Callable, Iterable
 
-from app.services.fan.spam import is_spam, is_spam_across_sessions
+from app.services.fan.spam import is_spam, is_spam_across_sessions, level_for
 from app.services.fan.spam2 import Trace, feed, verdict
 from app.core.timecn import cn_day
 from app.core import config as _core_config
@@ -311,6 +311,8 @@ class Window:
     warnings: list[str] = field(default_factory=list)
     #: uid → 独轮车规则（`sustained` / `window` / `cross_session`）；空 = 不是
     spam: dict[str, str] = field(default_factory=dict)
+    #: uid → 独轮车**分档**（none/suspected/confirmed，2026-10-25）
+    spam_levels: dict[str, str] = field(default_factory=dict)
     #: uid → 逐场切片 [(live_id, start_at, m, p, e, uniq)]（2026-10-24）
     #: 在读取 raw 的**同一遍**里顺手产出，供成员详情 O(1) 查询，避免二次扫描。
     slices: dict[str, list[tuple]] = field(default_factory=dict)
@@ -594,23 +596,26 @@ def load_window(
     if not sessions:
         warnings.append(f"{v.name}：没有可用场次（requested n={n}）")
     # 独轮车判定：v1（重复率，用累计 uniq/maxrep）+ v2（时间分布），**并集**
-    spam: dict[str, str] = {}
+    spam: dict[str, str] = {}          # 只放**确定**档（标签「独轮车」据此判定）
+    spam_levels: dict[str, str] = {}   # 三档全量（详情页展示）
     for uid, u in users.items():
         rule = None
+        per = [(sl[2], sl[5]) for sl in slices.get(uid, [])]
         if u.text_tracked and u.m >= 20:
-            flag1 = is_spam(uniq=u.uniq, maxrep=u.maxrep, m=u.m)
-            # v3：还要求**多数场次**都低多样性 —— 单场打call 不算独轮车
-            if flag1 and is_spam_across_sessions(
-                    [(sl[2], sl[5]) for sl in slices.get(uid, [])]):
+            level = level_for(m=u.m, uniq=u.uniq, sessions=per)
+            if level != "none":
+                spam_levels[uid] = level
+            if level == "confirmed":
                 rule = "repeat"
         tr = traces.get(uid)
         if tr is not None:
             flag2, rule2 = verdict(tr)
             if flag2:
+                spam_levels[uid] = "confirmed"
                 rule = rule or rule2
         if rule:
             spam[uid] = rule
-    return Window(v, n, sessions, users, warnings, spam, slices)
+    return Window(v, n, sessions, users, warnings, spam, spam_levels, slices)
 
 
 def load_all(before_n: int = 75) -> dict[str, Window]:

@@ -1695,6 +1695,8 @@ export interface FanMemberDetail {
   }
   tags: string[]
   spam?: string | null
+  /** 独轮车三档：none / suspected / confirmed */
+  spam_level?: 'none' | 'suspected' | 'confirmed'
   window_sessions: number
   series: FanMemberSeriesPoint[]
 }

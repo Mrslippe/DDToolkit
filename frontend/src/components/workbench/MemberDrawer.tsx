@@ -208,9 +208,11 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
 
             <h4 className="wb-drawer-sec">独轮车判定</h4>
             <div className="wb-spam-box">
-              {data.totals.spam_rule
-                ? <span className="wb-badge-spam">判为独轮车（{data.totals.spam_rule}）</span>
-                : <span className="wb-ok">未命中</span>}
+              {data.spam_level === 'confirmed'
+                ? <span className="wb-badge-spam">确定独轮车</span>
+                : data.spam_level === 'suspected'
+                  ? <span className="wb-badge-suspect">疑似独轮车</span>
+                  : <span className="wb-ok">不是独轮车</span>}
               <span className="wb-spam-ev">
                 不同文本率 {data.totals.variety == null ? '未追踪'
                   : pct(data.totals.variety)} · 单条最大重复 {data.totals.maxrep}

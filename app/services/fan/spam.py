@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 #: 判定算法版本。改判定逻辑必须 +1，并在报告里写清楚用的是哪一版。
-SPAM_ALGO_VERSION = 3
+SPAM_ALGO_VERSION = 4
 
 #: v1 的参数（只作为默认值；调用方可以覆盖）
 MIN_MSG_FOR_JUDGEMENT = 200  # 少于这么多条不判（2026-10-21：与 v2 对齐）
@@ -94,3 +94,44 @@ def is_spam_across_sessions(sessions: list[tuple[int, int]]) -> bool:
         return False
     low = [1 for m, uniq in evidence if uniq / m <= SESSION_VARIETY]
     return len(low) >= MIN_LOW_VARIETY_SESSIONS and len(low) / len(evidence) >= LOW_VARIETY_SHARE
+
+
+# ── v4（2026-10-25）：三档分层 ────────────────────────────────────────
+#
+# 独轮车不是二元的：单场打call 与 跨场复读 之间有明显中间地带。
+# 用户要求分三档 —— **不是 / 疑似 / 确定**，判据全部来自可解释的统计量。
+
+LEVEL_NONE = "none"
+LEVEL_SUSPECTED = "suspected"
+LEVEL_CONFIRMED = "confirmed"
+
+#: 确定档：证据场次下限
+CONFIRM_MIN_LOW_SESSIONS = 3
+#: 确定档：整体不同文本率上限
+CONFIRM_MAX_VARIETY = 0.20
+#: 疑似档：整体不同文本率上限（比确定档松）
+SUSPECT_MAX_VARIETY = 0.25
+
+
+def level_for(*, m: int, uniq: int, sessions: list[tuple[int, int]]) -> str:
+    """三档判定。`sessions` = 每场 `(弹幕数, 去重文本数)`。
+
+    - **确定**：累计 ≥200 条、整体不同文本率 ≤20%、且 ≥3 场低多样性（占比 ≥50%）；
+    - **疑似**：累计 ≥200 条，命中旧判据（整体 ≤25%）但持续性不足；
+      或低多样性场 ≥50% 但整体率略高（≤25%）。
+    - **不是**：其余。
+    """
+    if m < 200:
+        return LEVEL_NONE
+    variety = uniq / m if m else 1.0
+    evidence = [(mm, uu) for mm, uu in sessions if mm >= MIN_SESSION_MSGS]
+    low = [1 for mm, uu in evidence if uu / mm <= SESSION_VARIETY]
+    share = len(low) / len(evidence) if evidence else 0.0
+
+    if (variety <= CONFIRM_MAX_VARIETY
+            and len(low) >= CONFIRM_MIN_LOW_SESSIONS
+            and share >= LOW_VARIETY_SHARE):
+        return LEVEL_CONFIRMED
+    if variety <= SUSPECT_MAX_VARIETY or (share >= LOW_VARIETY_SHARE and low):
+        return LEVEL_SUSPECTED
+    return LEVEL_NONE

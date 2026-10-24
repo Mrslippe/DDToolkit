@@ -1923,3 +1923,12 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 @media (prefers-reduced-motion: reduce) {
   .wb-row-enter { animation: none; }
 }
+
+/* 独轮车「疑似」徽章（2026-10-25 三档） */
+.wb-badge-suspect {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(234, 179, 8, 0.16);
+  color: #8a5a06;
+  font-size: 11.5px;
+}

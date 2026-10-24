@@ -524,6 +524,8 @@ def ranked(
             "msg_total": int(table.tie[uid]["msg"]),
             # 独轮车标记（v1 重复率 ∪ v2 时间分布）；None = 不是
             "spam": win.spam.get(uid),
+        #: 独轮车三档：none / suspected / confirmed（2026-10-25）
+        "spam_level": win.spam_levels.get(uid, "none"),
             "tags": tags.get(uid, []),
         })
 
@@ -729,6 +731,8 @@ def member_detail(
         },
         "tags": payload["tags"].get(uid, []),
         "spam": win.spam.get(uid),
+        #: 独轮车三档：none / suspected / confirmed（2026-10-25）
+        "spam_level": win.spam_levels.get(uid, "none"),
         "window_sessions": win.n,
         "series": series,
     }
