@@ -254,14 +254,10 @@ export default function WorkbenchPage() {
   }, [ranked])
 
   /** 懒加载：接着已加载的条数往后取一页 */
-  const loadingMore = useRef(false)
   const onLoadMore = useCallback((): void => {
-    if (loadingMore.current || !hasMore) return
-    loadingMore.current = true
-    void loadRanked(TAB_BY[tab], rows.length, true).finally(() => {
-      loadingMore.current = false
-    })
-  }, [loadRanked, tab, rows.length])
+    if (busy || !hasMore) return
+    void loadRanked(TAB_BY[tab], rows.length, true)
+  }, [busy, hasMore, loadRanked, tab, rows.length])
 
   const startCollect = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return

@@ -71,6 +71,21 @@ const AXIS_TITLE: Record<Exclude<ResultTab, 'overview'>, string> = {
  *
  * ⚠️ **口径**：图永远覆盖**全池**（过 10% 门槛的所有人），与下方名单（当前页 20 条）无关。
  */
+
+/** ECharts 实例与宿主 DOM 绑定：宿主被替换（切页签重挂载）时必须重建，否则画到已经脱离文档的节点上 —— 表现为"图不见了"。 */
+function ensureChart(
+  api: { current: ReturnType<typeof echarts.init> | null },
+  host: HTMLDivElement | null,
+) {
+  if (!host) return null
+  if (api.current && api.current.getDom() !== host) {
+    api.current.dispose()
+    api.current = null
+  }
+  api.current ??= echarts.init(host)
+  return api.current
+}
+
 export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
   const pieRef = useRef<HTMLDivElement>(null)
   const lineRef = useRef<HTMLDivElement>(null)
@@ -132,7 +147,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
   useEffect(() => {
     if (tab !== 'overview' || !pieRef.current || !canRender()) return
     try {
-      pieApi.current ??= echarts.init(pieRef.current)
+      ensureChart(pieApi, pieRef.current)
       const opt: EChartsCoreOption = {
         tooltip: { trigger: 'item', formatter: '{b}：{c} 人（{d}%）' },
         series: [{
@@ -145,7 +160,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
             .map((d, i) => ({ ...d, itemStyle: { color: PINK[i] } })),
         }],
       }
-      pieApi.current.setOption(opt, true)
+      ensureChart(pieApi, pieRef.current)?.setOption(opt, true)
     } catch { /* jsdom / 无 canvas：静默降级 */ }
   }, [model, tab])
 
@@ -153,7 +168,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
   useEffect(() => {
     if (tab !== 'overview' || !lineRef.current || !canRender()) return
     try {
-      lineApi.current ??= echarts.init(lineRef.current)
+      ensureChart(lineApi, lineRef.current)
       const opt: EChartsCoreOption = {
         grid: { left: 44, right: 12, top: 16, bottom: 28 },
         tooltip: { trigger: 'axis' },
@@ -179,7 +194,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
           areaStyle: { color: 'rgba(255,162,180,0.16)' },
         }],
       }
-      lineApi.current.setOption(opt, true)
+      ensureChart(lineApi, lineRef.current)?.setOption(opt, true)
     } catch { /* 同上 */ }
   }, [model, tab])
 
@@ -187,7 +202,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
   useEffect(() => {
     if (tab === 'overview' || !axisRef.current || !canRender()) return
     try {
-      axisApi.current ??= echarts.init(axisRef.current)
+      ensureChart(axisApi, axisRef.current)
       const color = AXIS_COLOR[tab] ?? PINK[0]
       const opt: EChartsCoreOption = {
         grid: { left: 44, right: 12, top: 16, bottom: 28 },
@@ -210,7 +225,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
           itemStyle: { color, borderRadius: [3, 3, 0, 0] },
         }],
       }
-      axisApi.current.setOption(opt, true)
+      ensureChart(axisApi, axisRef.current)?.setOption(opt, true)
     } catch { /* 同上 */ }
   }, [model, tab])
 
