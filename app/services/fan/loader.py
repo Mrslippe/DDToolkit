@@ -234,6 +234,11 @@ class UserFact:
     text_tracked: bool = False
     #: 昵称（展示用；老数据为空串）
     name: str = ""
+    #: 付费拆解（2026-10-24）：礼物 / 舰长类 / SC 的金额，以及付费笔数
+    gift_amt: float = 0.0
+    guard_amt: float = 0.0
+    sc_amt: float = 0.0
+    pay_events: int = 0
     #: 首次出场时滞的累计（分钟，相对本场最早事件）与场次数 —— 均值用于出勤轴的档内排序
     lag_sum: float = 0.0
     lag_cnt: int = 0
@@ -549,6 +554,10 @@ def load_window(
             sr.sum_sc += sc
             sr.sum_pay += pay
             sr.n_pairs += 1
+            u.gift_amt += _as_float(a, "g", warnings, where)
+            u.guard_amt += _as_float(a, "gd", warnings, where)
+            u.sc_amt += _as_float(a, "sc", warnings, where)
+            u.pay_events += _as_int(a, "pe", warnings, where)
             u.gift_cnt += _as_int(a, "gift_cnt", warnings, where)
             u.guard_cnt += _as_int(a, "guard_cnt", warnings, where)
             u.pay += pay

@@ -1679,6 +1679,17 @@ export interface FanMemberDetail {
     first_seen: number
     last_seen: number
     max_repeat: number
+    window_sessions: number
+    msg_per_session: number
+    mean_lag_minutes: number | null
+    gift_amt: number
+    guard_amt: number
+    sc_amt: number
+    pay_events: number
+    pay_per_event: number
+    variety: number | null
+    maxrep: number
+    spam_rule: string | null
   }
   tags: string[]
   spam?: string | null

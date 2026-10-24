@@ -143,7 +143,11 @@ beforeEach(() => {
     axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
     totals: { att_sessions: 12, att_rate: 1, msg_total: 4159, msg_unique: 2000, pay_total: 26660,
               gift_cnt: 3, guard_cnt: 1, sc_cnt: 20, sessions_with_pay: 9,
-              first_seen: 0, last_seen: 1, max_repeat: 30 },
+              first_seen: 0, last_seen: 1, max_repeat: 30,
+              window_sessions: 12, msg_per_session: 346.6, mean_lag_minutes: 8.2,
+              gift_amt: 120, guard_amt: 16000, sc_amt: 10540,
+              pay_events: 24, pay_per_event: 1110.8, variety: 0.48, maxrep: 30,
+              spam_rule: null },
     tags: ['满勤', '大额打米'], spam: null, window_sessions: 12,
     series: [{ live_id: 'x', start_at: '2026-09-01 20:00', m: 100, p: 10, e: 1, uniq: 90 }],
   })

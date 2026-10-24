@@ -14,6 +14,30 @@ interface Props {
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`
 
+/** 付费构成条：礼物 / 舰长类 / SC 的金额与占比（B 站只按大类给金额，不分舰长等级） */
+function PayBreakdown({ totals }: { totals: FanMemberDetail['totals'] }) {
+  const rows = [
+    { name: '舰长类', v: totals.guard_amt, color: '#c9406f' },
+    { name: '醒目留言', v: totals.sc_amt, color: '#fc7079' },
+    { name: '礼物', v: totals.gift_amt, color: '#7c93b5' },
+  ]
+  const sum = rows.reduce((s, r) => s + r.v, 0) || 1
+  return (
+    <div className="wb-pay">
+      {rows.map((r) => (
+        <div className="wb-pay-row" key={r.name}>
+          <span className="wb-pay-name">{r.name}</span>
+          <span className="wb-pay-bar">
+            <i style={{ width: `${(r.v / sum) * 100}%`, background: r.color }} />
+          </span>
+          <span className="wb-pay-val">¥{r.v.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          <span className="wb-pay-pct">{((r.v / sum) * 100).toFixed(1)}%</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** 逐场弹幕数的小柱图（不引图表库：一行 SVG 就够） */
 function Spark({ values, color }: { values: number[]; color: string }) {
   const max = Math.max(1, ...values)
@@ -64,29 +88,48 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
               <div>
                 <div className="wb-drawer-type">{data.type} · 强度 {data.strength.toFixed(3)}</div>
                 <div className="wb-drawer-sub">
-                  出席 {data.totals.att_sessions} 场（{pct(data.totals.att_rate)}）
-                  {data.spam && <span className="wb-badge-spam">独轮车</span>}
+                  出席 {data.totals.att_sessions}/{data.totals.window_sessions} 场（{pct(data.totals.att_rate)}）
                 </div>
               </div>
             </div>
 
+            <h4 className="wb-drawer-sec">行为</h4>
             <dl className="wb-kv">
-              <div><dt>总弹幕</dt><dd>{data.totals.msg_total.toLocaleString()}</dd></div>
-              <div><dt>去重文本</dt><dd>{data.totals.msg_unique.toLocaleString()}</dd></div>
-              <div><dt>付费总额</dt><dd>¥{data.totals.pay_total.toLocaleString()}</dd></div>
-              <div><dt>SC 场次</dt><dd>{data.totals.sessions_with_pay}</dd></div>
-              <div><dt>礼物 / 舰长 / SC</dt>
-                <dd>{data.totals.gift_cnt} / {data.totals.guard_cnt} / {data.totals.sc_cnt}</dd></div>
-              <div><dt>首次 / 末次</dt>
-                <dd>{pct(data.totals.first_seen)} → {pct(data.totals.last_seen)}</dd></div>
+              <div><dt>出席场次</dt><dd>{data.totals.att_sessions} / {data.totals.window_sessions}</dd></div>
+              <div><dt>场均弹幕</dt><dd>{data.totals.msg_per_session.toFixed(1)}</dd></div>
+              <div><dt>场均入场时滞</dt>
+                <dd>{data.totals.mean_lag_minutes == null ? '—' : `${data.totals.mean_lag_minutes.toFixed(1)} 分`}</dd></div>
+              <div><dt>总弹幕 / 去重</dt>
+                <dd>{data.totals.msg_total.toLocaleString()} / {data.totals.msg_unique.toLocaleString()}</dd></div>
             </dl>
 
+            <h4 className="wb-drawer-sec">付费</h4>
+            <dl className="wb-kv">
+              <div><dt>总付费</dt><dd>¥{data.totals.pay_total.toLocaleString()}</dd></div>
+              <div><dt>每笔均值</dt>
+                <dd>{data.totals.pay_events ? `¥${data.totals.pay_per_event.toFixed(2)}` : '—'}</dd></div>
+            </dl>
+            <PayBreakdown totals={data.totals} />
+
+            <h4 className="wb-drawer-sec">独轮车判定</h4>
+            <div className="wb-spam-box">
+              {data.totals.spam_rule
+                ? <span className="wb-badge-spam">判为独轮车（{data.totals.spam_rule}）</span>
+                : <span className="wb-ok">未命中</span>}
+              <span className="wb-spam-ev">
+                不同文本率 {data.totals.variety == null ? '未追踪'
+                  : pct(data.totals.variety)} · 单条最大重复 {data.totals.maxrep}
+                （判据：不同文本率 ≤20%）
+              </span>
+            </div>
+
+            <h4 className="wb-drawer-sec">逐场趋势</h4>
             <div className="wb-drawer-chart">
-              <h4>逐场弹幕数</h4>
+              <h5>弹幕数</h5>
               <Spark values={data.series.map((s) => s.m)} color="#c9406f" />
             </div>
             <div className="wb-drawer-chart">
-              <h4>逐场付费（元）</h4>
+              <h5>付费（元）</h5>
               <Spark values={data.series.map((s) => s.p)} color="#fc7079" />
             </div>
 

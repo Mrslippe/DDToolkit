@@ -1725,3 +1725,39 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   bottom: 26px;
   z-index: 40;
 }
+
+/* ── 成员详情补充：付费构成 / 独轮车证据（2026-10-24）── */
+.wb-pay { margin-top: 8px; display: flex; flex-direction: column; gap: 7px; }
+
+.wb-pay-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 84px 48px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--c-text-main);
+}
+
+.wb-pay-name { color: var(--c-text-sub); }
+
+.wb-pay-bar {
+  height: 8px;
+  background: rgba(210, 216, 222, 0.35);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.wb-pay-bar i { display: block; height: 100%; border-radius: 999px; }
+
+.wb-pay-val { text-align: right; font-variant-numeric: tabular-nums; }
+.wb-pay-pct { text-align: right; color: var(--c-text-sub); font-variant-numeric: tabular-nums; }
+
+.wb-spam-box { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.wb-spam-ev { color: var(--c-text-sub); }
+.wb-ok { color: var(--tone-navy-deep); }
+
+.wb-drawer-chart h5 {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--c-text-sub);
+}

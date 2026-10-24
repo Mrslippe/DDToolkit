@@ -698,6 +698,22 @@ def member_detail(
             "guard_cnt": u.guard_cnt,
             "sc_cnt": u.sc_cnt,
             "sessions_with_pay": u.sc_sess,
+            # ── 2026-10-24 用户要求补的字段 ──
+            #: 总场次（分母）与场均弹幕（出席场次为分母）
+            "window_sessions": win.n,
+            "msg_per_session": round(u.m / max(1, u.att_n), 2),
+            #: 场均入场时滞（分钟）：该用户最早事件 − 本场最早事件，按出席场次平均
+            "mean_lag_minutes": round(u.mean_lag, 2) if u.mean_lag is not None else None,
+            #: 付费拆解与每笔均值
+            "gift_amt": round(u.gift_amt, 2),
+            "guard_amt": round(u.guard_amt, 2),
+            "sc_amt": round(u.sc_amt, 2),
+            "pay_events": u.pay_events,
+            "pay_per_event": round(u.pay / u.pay_events, 2) if u.pay_events else 0.0,
+            #: 独轮车判定的证据强度：不同文本率（越低越像）、单条最大重复、是否够样本
+            "variety": round(u.uniq / max(1, u.m), 4) if u.text_tracked else None,
+            "maxrep": u.maxrep,
+            "spam_rule": win.spam.get(uid),
             "first_seen": round(u.first_pos, 4),
             "last_seen": round(u.last_pos, 4),
             "max_repeat": u.maxrep,
