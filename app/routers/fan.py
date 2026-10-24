@@ -599,6 +599,111 @@ def ranked(
     }
 
 
+@router.get("/fan/{vtuber}/search")
+def search_member(
+    vtuber: str,
+    q: str = Query(..., min_length=1, description="uid 或昵称的模糊串"),
+    window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    since: str | None = Query(None, description="YYYY-MM-DD"),
+    until: str | None = Query(None, description="YYYY-MM-DD"),
+    limit: int = Query(20, ge=1, le=100),
+    ids: str | None = Query(None, description="窗口的场次清单（逗号分隔）"),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """在**当前窗口的池子里**按 uid / 昵称模糊搜索（2026-10-24）。
+
+    只搜池内的人 —— 被分流走的人不在名单里，搜到也没法看详情，反而误导。
+    """
+    since, until = _range_or_none(since, until)
+    wanted = [x for x in (ids or "").split(",") if x]
+    payload = _compute(vtuber, window, since, until, live_ids=wanted or None)
+    table, win = payload["table"], payload["window"]
+    strength = payload["strength"]
+    labels = payload["labels"]
+    needle = q.strip().lower()
+
+    hits = []
+    for uid in table.uids:
+        name = win.users[uid].name or ""
+        if needle in uid.lower() or needle in name.lower():
+            hits.append(uid)
+    hits.sort(key=lambda u: (-strength[u], u))
+    items = [{
+        "uid": u, "name": win.users[u].name or "", "type": labels[u],
+        "strength": round(strength[u], 6),
+        "avatar": f"/fan/avatar/{u}",
+    } for u in hits[:limit]]
+    return {"q": q, "count": len(items), "total_match": len(hits), "items": items}
+
+
+@router.get("/fan/{vtuber}/member/{uid}")
+def member_detail(
+    vtuber: str,
+    uid: str,
+    window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    since: str | None = Query(None, description="YYYY-MM-DD"),
+    until: str | None = Query(None, description="YYYY-MM-DD"),
+    ids: str | None = Query(None, description="窗口的场次清单（逗号分隔）"),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """单个池内用户的全部明细（2026-10-24）。
+
+    含：总量（出席/弹幕/去重/付费/礼物/舰长/SC）、三轴分位、标签，
+    以及**逐场序列**（该场弹幕数、付费、是否入场）—— 详情页的曲线用它。
+    """
+    since, until = _range_or_none(since, until)
+    wanted = [x for x in (ids or "").split(",") if x]
+    payload = _compute(vtuber, window, since, until, live_ids=wanted or None)
+    table, win = payload["table"], payload["window"]
+    if uid not in table.uids:
+        raise HTTPException(404, "该用户不在当前名单里")
+
+    u = win.users[uid]
+    raw_dir = resolve_data_dir() / win.vtuber.subdir / "raw"
+    series = []
+    for sr in win.sessions:
+        try:
+            raw = json.loads((raw_dir / f"{sr.live_id}.json").read_text(encoding="utf-8"))
+            a = raw.get(uid) or {}
+        except (OSError, ValueError):
+            a = {}
+        series.append({
+            "live_id": sr.live_id,
+            "start_at": str(sr.start_at)[:16],
+            "m": int(a.get("m") or 0),
+            "p": round(float(a.get("p") or 0.0), 2),
+            "e": int(a.get("e") or 0),
+            "uniq": int(a.get("uniq") or 0),
+        })
+
+    return {
+        "uid": uid,
+        "name": u.name or "",
+        "avatar": f"/fan/avatar/{uid}",
+        "type": payload["labels"][uid],
+        "strength": round(payload["strength"][uid], 6),
+        "axis_percentiles": {a: round(table.pct[uid][a], 6) for a in AXES},
+        "totals": {
+            "att_sessions": u.att_n,
+            "att_rate": round(u.att_n / max(1, win.n), 6),
+            "msg_total": u.m,
+            "msg_unique": u.uniq,
+            "pay_total": round(u.pay, 2),
+            "gift_cnt": u.gift_cnt,
+            "guard_cnt": u.guard_cnt,
+            "sc_cnt": u.sc_cnt,
+            "sessions_with_pay": u.sc_sess,
+            "first_seen": round(u.first_pos, 4),
+            "last_seen": round(u.last_pos, 4),
+            "max_repeat": u.maxrep,
+        },
+        "tags": payload["tags"].get(uid, []),
+        "spam": win.spam.get(uid),
+        "window_sessions": win.n,
+        "series": series,
+    }
+
+
 @router.get("/fan/{vtuber}/tags")
 def tag_catalog(
     vtuber: str,

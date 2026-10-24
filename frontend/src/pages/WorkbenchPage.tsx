@@ -21,6 +21,7 @@ import RangeButton from '../components/workbench/RangeButton'
 import RankedTable from '../components/workbench/RankedTable'
 import ResultCharts, { type ResultTab } from '../components/workbench/ResultCharts'
 import ResultTabs from '../components/workbench/ResultTabs'
+import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
 import '../styles/workbench.css'
@@ -80,6 +81,8 @@ export default function WorkbenchPage() {
   /** 懒加载累积的行（切页签时清空） */
   const [rows, setRows] = useState<FanRankedRow[]>([])
   const [hasMore, setHasMore] = useState(false)
+  /** 打开详情的成员 uid（null = 关闭） */
+  const [memberUid, setMemberUid] = useState<string | null>(null)
   /** 换区间后旧结果已不一定对应当前窗口 —— **保留但标灰**，而不是清空（用户 2026-10-19 选 a） */
   const [rankedStale, setRankedStale] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -449,6 +452,11 @@ export default function WorkbenchPage() {
               >
                 <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
                 <RankedTable
+                  vtuber={picked}
+                  since={since}
+                  until={until}
+                  ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}
+                  onOpenMember={setMemberUid}
                   rows={rows}
                   total={ranked.pool?.size ?? ranked.total_in_pool}
                   hasMore={hasMore}
@@ -464,6 +472,17 @@ export default function WorkbenchPage() {
             </div>
           )}
         </section>
+
+        {memberUid && (
+          <MemberDrawer
+            vtuber={picked}
+            uid={memberUid}
+            since={since}
+            until={until}
+            ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}
+            onClose={() => setMemberUid(null)}
+          />
+        )}
 
         {/* 采集结果弹窗（2026-10-19 用户第 2 条）：成功 / 跳过 / 失败 + **逐场失败原因** */}
         <AlertDialog open={summary !== null} onOpenChange={(o) => { if (!o) setSummary(null) }}>

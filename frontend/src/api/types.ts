@@ -1640,3 +1640,48 @@ export interface FanRanked {
   /** 池内被判为独轮车的人数 */
   spam_in_pool?: number
 }
+
+
+export interface FanSearchHit {
+  uid: string
+  name: string
+  type: string
+  strength: number
+  avatar: string
+}
+
+export interface FanMemberSeriesPoint {
+  live_id: string
+  start_at: string
+  m: number
+  p: number
+  e: number
+  uniq: number
+}
+
+export interface FanMemberDetail {
+  uid: string
+  name: string
+  avatar: string
+  type: string
+  strength: number
+  axis_percentiles: Record<string, number>
+  totals: {
+    att_sessions: number
+    att_rate: number
+    msg_total: number
+    msg_unique: number
+    pay_total: number
+    gift_cnt: number
+    guard_cnt: number
+    sc_cnt: number
+    sessions_with_pay: number
+    first_seen: number
+    last_seen: number
+    max_repeat: number
+  }
+  tags: string[]
+  spam?: string | null
+  window_sessions: number
+  series: FanMemberSeriesPoint[]
+}

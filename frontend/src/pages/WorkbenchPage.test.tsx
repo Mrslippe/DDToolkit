@@ -20,6 +20,8 @@ const fanCollect = vi.fn()
 const fanCollectStatus = vi.fn()
 const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
+const fanSearch = vi.fn()
+const fanMember = vi.fn()
 const fanProfile = vi.fn()
 const fanActivity = vi.fn()
 
@@ -50,6 +52,8 @@ vi.mock('../api/api', () => ({
     fanCollectStatus: (...a: unknown[]) => fanCollectStatus(...a),
     fanCollectCancel: (...a: unknown[]) => fanCollectCancel(...a),
     fanRanked: (...a: unknown[]) => fanRanked(...a),
+  fanSearch: (...a: unknown[]) => fanSearch(...a),
+  fanMember: (...a: unknown[]) => fanMember(...a),
     // 档案卡（V2，2026-10-18）：选中 V 后页面会拉它，桩里必须有，否则整页抛错
     fanProfile: () => fanProfile(),
     // 删除按钮只在弹窗打开时才调它；桩留着，免得以后加交互时整页抛错
@@ -133,6 +137,16 @@ beforeEach(() => {
   fanCollectStatus.mockReset().mockResolvedValue({ items: [], count: 0 })
   fanCollectCancel.mockReset().mockResolvedValue({ ok: true })
   fanRanked.mockReset().mockResolvedValue(RANKED)
+  fanSearch.mockReset().mockResolvedValue({ items: [], total_match: 0 })
+  fanMember.mockReset().mockResolvedValue({
+    uid: '19871', name: '碳了个酸', avatar: '/fan/avatar/19871', type: '综合', strength: 0.9994,
+    axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
+    totals: { att_sessions: 12, att_rate: 1, msg_total: 4159, msg_unique: 2000, pay_total: 26660,
+              gift_cnt: 3, guard_cnt: 1, sc_cnt: 20, sessions_with_pay: 9,
+              first_seen: 0, last_seen: 1, max_repeat: 30 },
+    tags: ['满勤', '大额打米'], spam: null, window_sessions: 12,
+    series: [{ live_id: 'x', start_at: '2026-09-01 20:00', m: 100, p: 10, e: 1, uniq: 90 }],
+  })
   fanActivity.mockReset().mockResolvedValue(ACTIVITY)
   // 档案卡（V2）的桩：只要"读到了"的形状就够，本文件不判它的视觉细节
   fanProfile.mockReset().mockResolvedValue({
@@ -384,5 +398,45 @@ describe('ACV 方案（2026-10-23）', () => {
     expect(note).toBeTruthy()
     expect(note!.textContent).toContain('3×平均同接')
     expect(note!.textContent).toContain('40,000')
+  })
+})
+
+describe('搜索 / 标签 / 详情（2026-10-24）', () => {
+  async function analyse(): Promise<void> {
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  }
+
+  it('★ 标题行有搜索框，输入后展示下拉', async () => {
+    await analyse()
+    const input = q<HTMLInputElement>('[data-testid="ranked-search"]')!
+    expect(input).toBeTruthy()
+    fanSearch.mockResolvedValueOnce({
+      items: [{ uid: '19871', name: '碳了个酸', type: '综合', strength: 0.99, avatar: '/fan/avatar/19871' }],
+      total_match: 1,
+    })
+    await act(async () => {
+      // React 会拦截 value 的赋值，必须走原型上的 setter 才能触发 onChange
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '碳')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 320)) })
+    expect(fanSearch).toHaveBeenCalled()
+    expect(q('[data-testid="ranked-search-pop"]')).toBeTruthy()
+  })
+
+  it('★ 点名单行打开详情抽屉', async () => {
+    await analyse()
+    const row = document.querySelector('[data-testid="ranked-table"] tbody tr') as HTMLElement
+    expect(row).toBeTruthy()
+    await act(async () => { row.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(q('[data-testid="member-drawer"]')).toBeTruthy()
+    expect(fanMember).toHaveBeenCalled()
   })
 })

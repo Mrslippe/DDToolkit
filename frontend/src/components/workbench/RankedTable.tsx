@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { resolveAsset } from '../../api/api'
 import type { FanRankedRow } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
+import MemberSearch from './MemberSearch'
+import TagPills from './TagPills'
 
 interface Props {
   rows: FanRankedRow[]
@@ -13,6 +15,12 @@ interface Props {
   onLoadMore: () => void
   /** 当前页签：决定「细节」列展示哪个轴的分量 */
   tab?: ResultTab
+  /** 搜索与详情需要的上下文 */
+  vtuber: string
+  since: string
+  until: string
+  ids: string[]
+  onOpenMember: (uid: string) => void
 }
 
 /** 头像失败时退回昵称/uid 首字 */
@@ -48,6 +56,7 @@ const pct = (v: number) => v.toFixed(3)
  */
 export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview',
+  vtuber, since, until, ids, onOpenMember,
 }: Props) {
   const sentinel = useRef<HTMLDivElement | null>(null)
 
@@ -87,14 +96,18 @@ export default function RankedTable({
 
   return (
     <section className="wb-card wb-table-card" data-testid="ranked-table-card">
-      <h3 className="wb-card-title">
-        名单
-        <span className="wb-card-note" style={{ marginLeft: 8 }}>
-          {loading && rows.length === 0
-            ? '加载中…'
-            : `已加载 ${rows.length.toLocaleString()} / 全池 ${total.toLocaleString()} 人`}
-        </span>
-      </h3>
+      <div className="wb-card-head">
+        <h3 className="wb-card-title">
+          名单
+          <span className="wb-card-note" style={{ marginLeft: 8 }}>
+            {loading && rows.length === 0
+              ? '加载中…'
+              : `已加载 ${rows.length.toLocaleString()} / 全池 ${total.toLocaleString()} 人`}
+          </span>
+        </h3>
+        <MemberSearch vtuber={vtuber} since={since} until={until} ids={ids}
+                      onPick={onOpenMember} />
+      </div>
 
       {rows.length === 0 && !loading ? (
         <p className="wb-hint">这一页没有数据。</p>
@@ -111,7 +124,8 @@ export default function RankedTable({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.uid}>
+                <tr key={r.uid} className="wb-row-click"
+                    onClick={() => onOpenMember(r.uid)}>
                   <td className="wb-table-rank">{r.rank}</td>
                   <td><Avatar row={r} /></td>
                   <td className="wb-table-name" title={r.uid}>
@@ -123,7 +137,7 @@ export default function RankedTable({
                   <td>{pct(r.axis_percentiles.interaction ?? 0)}</td>
                   <td>{pct(r.axis_percentiles.payment ?? 0)}</td>
                   {detailHead && <td>{detail(r)}</td>}
-                  <td className="wb-table-tags">{r.tags.join(' · ') || '—'}</td>
+                  <td className="wb-table-tags"><TagPills tags={r.tags} /></td>
                 </tr>
               ))}
             </tbody>

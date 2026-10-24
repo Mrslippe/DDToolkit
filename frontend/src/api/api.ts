@@ -1,6 +1,6 @@
 import type {
   FanSortBy,
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -1108,6 +1108,28 @@ export const api = {
     // 窗口的场次清单：后端据此只算这几场（与采集、计数同一批人）
     if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
     return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)
+  },
+
+  /** 池内搜索（uid / 昵称模糊） */
+  fanSearch: (name: string, q: string,
+              opts?: { since?: string; until?: string; ids?: string[]; limit?: number }) => {
+    const p = new URLSearchParams({ q })
+    if (opts?.since) p.set('since', opts.since)
+    if (opts?.until) p.set('until', opts.until)
+    if (opts?.limit) p.set('limit', String(opts.limit))
+    if (opts?.ids?.length) p.set('ids', opts.ids.join(','))
+    return request<{ items: FanSearchHit[]; total_match: number }>(
+      `/fan/${encodeURIComponent(name)}/search?${p}`)
+  },
+
+  /** 单个成员的全部明细（含逐场序列） */
+  fanMember: (name: string, uid: string,
+              opts?: { since?: string; until?: string; ids?: string[] }) => {
+    const p = new URLSearchParams()
+    if (opts?.since) p.set('since', opts.since)
+    if (opts?.until) p.set('until', opts.until)
+    if (opts?.ids?.length) p.set('ids', opts.ids.join(','))
+    return request<FanMemberDetail>(`/fan/${encodeURIComponent(name)}/member/${uid}?${p}`)
   },
 
   /** 保存偏好（枚举白名单在后端；不在集合内 → 400） */
