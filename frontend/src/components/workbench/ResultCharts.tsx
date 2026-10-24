@@ -15,7 +15,7 @@ const AXIS_COLOR: Record<string, string> = {
   interaction: '#7c93b5',
   payment: '#fc7079',
 }
-const TIERS_FALLBACK = ['核心', '次核心'] as const
+const TIERS_FALLBACK = ['核心', '次核心', '外层'] as const
 const BINS = 20
 
 export type ResultTab = 'overview' | 'attendance' | 'interaction' | 'payment'

@@ -73,7 +73,7 @@ from app.services.fan.collector import (
 )
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
-from app.services.fan.pool import core_size_for, pool_size_for, window_acv
+from app.services.fan.pool import core_size_for, pool_size_for, tier_sizes_for, window_acv
 from app.services.fan.tags import explain as explain_tags
 from app.services.fan.timeline import (
     MAX_LAG,
@@ -209,6 +209,7 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         "tags": tag_all(win, table),
         "since": since, "until": until,
         "acv": acv, "pool_size": pool_size, "core_n": core_n,
+        "tier_sizes": tier_sizes_for(win),
     }
     _CACHE[key] = payload
     logger.info("fan: 已计算 %s（%s 场 · 区间 %s~%s）→ %s 人入池",
@@ -485,9 +486,19 @@ def ranked(
     _n = len(_vals)
     # 分层按 ACV（2026-10-23 用户定案）：核心 = 0.75×ACV，次核心 = 1.25×ACV；
     # 池子本身已经是 2×ACV，所以"外层"取消，多出来的人记在 `excluded`（分流走）。
-    _core_want = payload.get("core_n") or 0
-    _core_n = min(_n, int(_core_want)) if _core_want else round(_n * 0.375)
-    _pool_tiers = {"核心": _core_n, "次核心": max(0, _n - _core_n)}
+    # 三层按 ACV 人数切（2026-10-24 用户定案）：核心 0.75×、次核心 1.25×、外层 1.0×。
+    # 名单已按核心度排过序（build_axis_table 里），这里按**强度**再排一次保证层级单调。
+    _tier_want = payload.get("tier_sizes") or {}
+    _ranked = sorted(table.uids, key=lambda u: (-payload["strength"][u], u))
+    _pool_tiers: dict[str, int] = {}
+    _cursor = 0
+    for _name in ("核心", "次核心", "外层"):
+        _want = int(_tier_want.get(_name) or 0)
+        _take = min(_want, max(0, _n - _cursor)) if _want else 0
+        _pool_tiers[_name] = _take
+        _cursor += _take
+    if _cursor < _n:                      # 没配三层时（无 ACV）退回对半切
+        _pool_tiers["次核心"] += _n - _cursor
     # 三轴分位分布（每个 Tab 的图用它）
     _axes: dict[str, dict[str, Any]] = {}
     for _name, _axis in (("attendance", AXIS_ATTENDANCE), ("interaction", AXIS_INTERACTION),
