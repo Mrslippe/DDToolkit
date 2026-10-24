@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.routers.settings import PREFS_PREFIX
-from app.core.timecn import CN_TZ, cn_day, sql_day
+from app.core.timecn import cn_text, cn_day, sql_day
 from app.services.fan import (
     AXES,
     PURITY_THRESHOLD,
@@ -674,10 +674,10 @@ def member_detail(
     if idx is None:            # 兜底：老缓存或索引被清掉时再扫一遍
         idx = member_index.build(
             resolve_data_dir(), win.vtuber.subdir,
-            [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
+            [(sr.live_id, str(sr.start_at)) for sr in win.sessions],
         )
     series = [{
-        "live_id": lid, "start_at": start_at,
+        "live_id": lid, "start_at": cn_text(start_at),
         "m": m, "p": p_, "e": e, "uniq": uq,
     } for lid, start_at, m, p_, e, uq in idx.get(uid, [])]
 

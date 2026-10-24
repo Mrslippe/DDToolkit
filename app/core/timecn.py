@@ -59,13 +59,28 @@ def parse_utc(s: str) -> datetime | None:
         try:
             return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         except ValueError:
-            return None
+            try:
+                # 切片里存的是分钟精度（`[:16]`），也要认
+                return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
 
 
 def cn_day(s: str) -> str:
     """UTC 字符串 → **东八区日期** `YYYY-MM-DD`。无法解析时退回原串前 10 位。"""
     dt = parse_utc(s)
     return dt.astimezone(CN_TZ).strftime("%Y-%m-%d") if dt else str(s)[:10]
+
+
+def cn_text(s: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """UTC 字符串 → **东八区展示串**。
+
+    凡是"把库里的时间给前端看"都走这里 —— 少了它就会出现"与场次时间差 8 小时"那类 bug
+    （2026-10-24 用户发现详情 tooltip 的时间对不上，就是名字里少了这一步）。
+    解析失败时退回原串前 16 位（宁可显示旧值，也不要抛错把整页带崩）。
+    """
+    dt = parse_utc(s)
+    return dt.astimezone(CN_TZ).strftime(fmt) if dt else str(s)[:16]
 
 
 def sql_day(column: str = "s.start_at") -> str:

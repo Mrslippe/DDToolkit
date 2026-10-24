@@ -70,6 +70,16 @@ function SessionChart({ series, color, unit }: {
       chart.current = echarts.init(box.current)
     } catch { return }
 
+    const axisLabels = (): string[] => {
+      const seen = new Map<string, number>()
+      return series.map((d) => {
+        const day = d.start_at.slice(5, 10)
+        const k = (seen.get(day) ?? 0) + 1
+        seen.set(day, k)
+        return k === 1 ? day : `${day}#${k}`
+      })
+    }
+
     const opt: EChartsCoreOption = {
       animation: false,
       grid: { left: 6, right: 6, top: 8, bottom: 18 },
@@ -92,8 +102,8 @@ function SessionChart({ series, color, unit }: {
       },
       xAxis: {
         type: 'category',
-        // 横轴只要日期（MM-DD）；具体时分仍留在 tooltip 里
-        data: series.map((d) => d.start_at.slice(5, 10)),
+        // 横轴只要日期（MM-DD）；同一天多场时补 `#2/#3`，避免出现重复标签
+        data: axisLabels(),
         // 只标首 / 中 / 尾三个，避免 75 场时标签糊成一片
         axisLabel: {
           fontSize: 9,

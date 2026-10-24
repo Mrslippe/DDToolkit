@@ -564,7 +564,7 @@ def load_window(
             _e = int(a.get("e") or 0)
             if m or pay or _e:
                 slices.setdefault(uid, []).append(
-                    (sr.live_id, str(sr.start_at)[:16], m, round(pay, 2), _e,
+                    (sr.live_id, str(sr.start_at), m, round(pay, 2), _e,
                      int(a.get("uniq") or 0) if "uniq" in a else 0))
             if m > 0:
                 u.msg_sess += 1
