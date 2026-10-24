@@ -5,6 +5,8 @@ interface Props {
   /** 可选的标签清单（来自 /fan/{v}/tags） */
   tags: { name: string; prevalence: number }[]
   value: string[]
+  loading?: boolean
+  error?: string | null
   onChange: (next: string[]) => void
 }
 
@@ -14,7 +16,7 @@ interface Props {
  * 语义是**与**：选「舰长 + 老头」= 既是舰长又是老头（后端 `tags` 参数按 AND 过滤）。
  * 弹层点外部关闭；「清除」一键复位。
  */
-export default function TagFilter({ tags, value, onChange }: Props) {
+export default function TagFilter({ tags, loading, error, value, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement | null>(null)
 
@@ -45,7 +47,11 @@ export default function TagFilter({ tags, value, onChange }: Props) {
 
       {open && (
         <div className="wb-tagfilter-pop" data-testid="tag-filter-pop">
-          {tags.length === 0 && <p className="wb-search-empty">还没有标签数据</p>}
+          {loading && <p className="wb-search-empty">加载中…</p>}
+          {!loading && error && <p className="wb-search-empty">取不到标签：{error}</p>}
+          {!loading && !error && tags.length === 0 && (
+            <p className="wb-search-empty">还没有标签数据</p>
+          )}
           {tags.map((t) => (
             <label key={t.name} className="wb-tagfilter-row">
               <input

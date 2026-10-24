@@ -84,6 +84,8 @@ export default function WorkbenchPage() {
   const [hasMore, setHasMore] = useState(false)
   /** 标签筛选（2026-10-24）：目录与选中项 */
   const [tagOptions, setTagOptions] = useState<{ name: string; prevalence: number }[]>([])
+  const [tagLoading, setTagLoading] = useState(false)
+  const [tagError, setTagError] = useState<string | null>(null)
   const [tagFilter, setTagFilter] = useState<string[]>([])
   /** 当前筛选的实时副本：`loadRanked` 可能被定时/翻页调用，闭包里的 state 会过期 */
   const tagFilterRef = useRef<string[]>([])
@@ -244,13 +246,21 @@ export default function WorkbenchPage() {
   }, [loadRanked])
 
   useEffect(() => {
-    if (!picked || !ranked) return
+    if (!picked || !ranked || !since || !until) return
     let alive = true
-    api.fanTags(picked).then((r) => {
+    setTagLoading(true)
+    setTagError(null)
+    api.fanTags(picked, {
+      since, until,
+      ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
+    }).then((r) => {
       if (alive) setTagOptions(r.items ?? [])
-    }).catch(() => { /* 标签目录失败不影响名单 */ })
+    }).catch((e: Error) => {
+      // 不再静默：取不到标签要能看见原因（用户看不到本进程日志）
+      if (alive) setTagError(e.message || '标签目录加载失败')
+    }).finally(() => { if (alive) setTagLoading(false) })
     return () => { alive = false }
-  }, [picked, ranked])
+  }, [picked, ranked, since, until, slice])
 
   /** 懒加载：接着已加载的条数往后取一页 */
   const loadingMore = useRef(false)
@@ -493,6 +503,8 @@ export default function WorkbenchPage() {
                   ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}
                   onOpenMember={setMemberUid}
                   tagOptions={tagOptions}
+                  tagLoading={tagLoading}
+                  tagError={tagError}
                   tagFilter={tagFilter}
                   onTagFilter={setTagFilter}
                   rows={rows}

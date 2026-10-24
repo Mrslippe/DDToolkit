@@ -24,6 +24,8 @@ interface Props {
   onOpenMember: (uid: string) => void
   /** 标签筛选（与后端 `tags` 参数同义） */
   tagOptions: { name: string; prevalence: number }[]
+  tagLoading?: boolean
+  tagError?: string | null
   tagFilter: string[]
   onTagFilter: (next: string[]) => void
 }
@@ -62,7 +64,7 @@ const pct = (v: number) => v.toFixed(3)
 export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview',
   vtuber, since, until, ids, onOpenMember,
-  tagOptions, tagFilter, onTagFilter,
+  tagOptions, tagLoading, tagError, tagFilter, onTagFilter,
 }: Props) {
   const sentinel = useRef<HTMLDivElement | null>(null)
 
@@ -114,7 +116,8 @@ export default function RankedTable({
         <div className="wb-head-tools">
           <MemberSearch vtuber={vtuber} since={since} until={until} ids={ids}
                         onPick={onOpenMember} />
-          <TagFilter tags={tagOptions} value={tagFilter} onChange={onTagFilter} />
+          <TagFilter tags={tagOptions} loading={tagLoading} error={tagError}
+                     value={tagFilter} onChange={onTagFilter} />
         </div>
       </div>
 

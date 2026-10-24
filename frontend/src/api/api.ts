@@ -1111,10 +1111,23 @@ export const api = {
     return request<FanRanked>(`/fan/${encodeURIComponent(name)}/ranked?${q}`)
   },
 
-  /** 标签目录（名称 + 占比），给筛选器用 */
-  fanTags: (name: string) =>
-    request<{ items: { name: string; prevalence: number }[] }>(
-      `/fan/${encodeURIComponent(name)}/tags`),
+  /**
+   * 标签目录（名称 + 占比），给筛选器用。
+   *
+   * ⚠️ **必须带上与 `/ranked` 相同的窗口参数**：后端的计算缓存按
+   * (主播, 窗口, 起止, 场次清单) 作键，参数不一致会触发**另一次完整计算**（十几秒），
+   * 筛选弹层就会在数据回来前显示"没有标签"。
+   */
+  fanTags: (name: string,
+            opts?: { since?: string; until?: string; ids?: string[] }) => {
+    const q = new URLSearchParams()
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
+    const qs = q.toString()
+    return request<{ items: { name: string; prevalence: number }[] }>(
+      `/fan/${encodeURIComponent(name)}/tags${qs ? `?${qs}` : ''}`)
+  },
 
   /** 池内搜索（uid / 昵称模糊） */
   fanSearch: (name: string, q: string,
