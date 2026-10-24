@@ -216,6 +216,14 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         "acv": acv, "pool_size": pool_size, "core_n": core_n,
         "tier_sizes": tier_sizes_for(win),
     }
+    # 成员详情索引（2026-10-24 用户定案）：**在分析阶段同步建**，让用户显式等待一次。
+    # 放在这里而不是后台预热，是因为"分析完成"应当意味着"详情可秒开" ——
+    # 后台建的索引会在用户点开详情时还没好，表现为"有时快有时慢"，比固定等待更难预期。
+    member_index.build(
+        resolve_data_dir(), win.vtuber.subdir,
+        [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions],
+    )
+
     _CACHE[key] = payload
     logger.info("fan: 已计算 %s（%s 场 · 区间 %s~%s）→ %s 人入池",
                 v.name, win.n, since or "…", until or "…", len(table))
@@ -223,6 +231,7 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
 
 
 def clear_cache() -> None:
+    member_index.clear()
     """数据变了就失效（采集完成后由任务自己调用）。"""
     _CACHE.clear()
     _PLAN_CACHE.clear()
@@ -570,14 +579,6 @@ def ranked(
     # 后台预热第一页头像：用户滚到名单时基本已就绪（失败静默，不阻塞响应）
     if offset == 0:
         prefetch([r["uid"] for r in rows[:40]], resolve_data_dir())
-        # 成员详情索引：后台扫一遍窗口 raw（约 5 s），用户点开详情时就不必等了
-        try:
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, member_index.build, resolve_data_dir(),
-                                 win.vtuber.subdir,
-                                 [(sr.live_id, str(sr.start_at)[:16]) for sr in win.sessions])
-        except RuntimeError:
-            pass
 
     return {
         "vtuber": table.vtuber, "window": window, "sessions": win.n,

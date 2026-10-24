@@ -404,7 +404,7 @@ export default function WorkbenchPage() {
                   ? `已处理 ${progress.done}/${progress.total || '?'} 场`
                     + (progress.failed > 0 ? ` · 失败 ${progress.failed}` : '')
                     + (progress.current ? ` · 当前 ${progress.current}` : '')
-                  : '正在算名单与分层，通常几秒内完成。'}
+                  : '正在算名单与分层，**首次分析还要建详情索引**，约 10–20 秒；索引建好后点任意成员即可秒开。'}
               </p>
             </div>
           ) : ranked ? (
