@@ -1761,3 +1761,31 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   font-weight: 500;
   color: var(--c-text-sub);
 }
+
+/* ── 详情弹窗：限高可滚 + 栏目分隔（2026-10-24 用户反馈）─────────────── */
+.wb-member-dialog {
+  max-height: 78vh;          /* 与项目其他弹窗的观感一致：留出页头与页脚 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wb-member-dialog .wb-drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 18px 24px;
+}
+
+/* 栏目标题：加粗放大 + 上方的发丝线，避免和上一行正文糊在一起 */
+.wb-drawer-sec {
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(210, 216, 222, 0.55);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  letter-spacing: 0.2px;
+}
+
+.wb-drawer-sec:first-child { margin-top: 6px; border-top: 0; padding-top: 0; }

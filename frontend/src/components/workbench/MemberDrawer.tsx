@@ -39,14 +39,21 @@ function PayBreakdown({ totals }: { totals: FanMemberDetail['totals'] }) {
 }
 
 /** 逐场弹幕数的小柱图（不引图表库：一行 SVG 就够） */
-function Spark({ values, color }: { values: number[]; color: string }) {
+function Spark({ values, labels, color, unit }: {
+  values: number[]; labels: string[]; color: string; unit: string
+}) {
   const max = Math.max(1, ...values)
   const n = values.length || 1
   return (
     <svg className="wb-spark" viewBox={`0 0 ${n * 2} 40`} preserveAspectRatio="none" role="img">
       {values.map((v, i) => {
         const h = Math.max(1, (v / max) * 38)
-        return <rect key={i} x={i * 2} y={40 - h} width={1.6} height={h} fill={color} />
+        return (
+          <rect key={i} x={i * 2} y={40 - h} width={1.6} height={40} fill={color} opacity={0.9}>
+            {/* hover 显示该场时间与数值（原生 title，无 JS） */}
+            <title>{`${labels[i] ?? ''} · ${v.toLocaleString()} ${unit}`}</title>
+          </rect>
+        )
       })}
     </svg>
   )
@@ -126,11 +133,15 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
             <h4 className="wb-drawer-sec">逐场趋势</h4>
             <div className="wb-drawer-chart">
               <h5>弹幕数</h5>
-              <Spark values={data.series.map((s) => s.m)} color="#c9406f" />
+              <Spark values={data.series.map((s) => s.m)}
+                     labels={data.series.map((s) => s.start_at)}
+                     color="#c9406f" unit="条" />
             </div>
             <div className="wb-drawer-chart">
               <h5>付费（元）</h5>
-              <Spark values={data.series.map((s) => s.p)} color="#fc7079" />
+              <Spark values={data.series.map((s) => s.p)}
+                     labels={data.series.map((s) => s.start_at)}
+                     color="#fc7079" unit="元" />
             </div>
 
             <h4 className="wb-drawer-sec">三轴分位</h4>
