@@ -1789,3 +1789,12 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 }
 
 .wb-drawer-sec:first-child { margin-top: 6px; border-top: 0; padding-top: 0; }
+
+/* 逐场图表：场次多时横向滚动（2026-10-24） */
+.wb-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.wb-chart-inner { min-width: 100%; }

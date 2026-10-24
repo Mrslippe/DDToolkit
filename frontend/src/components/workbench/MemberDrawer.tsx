@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import * as echarts from 'echarts/core'
+import type { EChartsCoreOption } from 'echarts/core'
+import { BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { api, resolveAsset } from '../../api/api'
+
+echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 import type { FanMemberDetail } from '../../api/types'
 
 interface Props {
@@ -38,24 +45,78 @@ function PayBreakdown({ totals }: { totals: FanMemberDetail['totals'] }) {
   )
 }
 
-/** 逐场弹幕数的小柱图（不引图表库：一行 SVG 就够） */
-function Spark({ values, labels, color, unit }: {
-  values: number[]; labels: string[]; color: string; unit: string
+/**
+ * 逐场柱状图（2026-10-24 改 ECharts）。
+ *
+ * - **场次多时横向滚动**：容器宽度 = 场次 × 每根柱子的最小宽度，外层 `overflow-x: auto`；
+ *   不加 `dataZoom` —— 弹窗空间小，缩放容易误触；
+ * - tooltip 一次给出「时间 / 弹幕 / 付费 / 入场」四项，比原生 `title` 单行更有用；
+ * - 卸载时 `dispose()`，避免反复开关累积实例。
+ */
+function SessionChart({ series, color, unit }: {
+  series: { start_at: string; m: number; p: number; e: number }[]
+  color: string
+  unit: string
 }) {
-  const max = Math.max(1, ...values)
-  const n = values.length || 1
+  const box = useRef<HTMLDivElement | null>(null)
+  const chart = useRef<ReturnType<typeof echarts.init> | null>(null)
+  const n = Math.max(1, series.length)
+
+  useEffect(() => {
+    if (!box.current) return
+    let ok = true
+    try {
+      if (!document.createElement('canvas').getContext('2d')) return   // jsdom 没有 canvas
+      chart.current = echarts.init(box.current)
+    } catch { return }
+
+    const opt: EChartsCoreOption = {
+      animation: false,
+      grid: { left: 6, right: 6, top: 8, bottom: 18 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (ps: unknown) => {
+          const arr = ps as { dataIndex: number }[]
+          const i = arr?.[0]?.dataIndex ?? 0
+          const d = series[i]
+          if (!d) return ''
+          return `${d.start_at}<br/>弹幕 ${d.m.toLocaleString()} 条`
+            + `<br/>付费 ¥${d.p.toLocaleString()}<br/>入场 ${d.e} 次`
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: series.map((d) => d.start_at.slice(5, 16)),
+        axisLabel: { fontSize: 9, color: '#5b6c7e', interval: Math.max(0, Math.floor(n / 8)) },
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: 'rgba(210,216,222,0.9)' } },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { fontSize: 9, color: '#5b6c7e' },
+        splitLine: { lineStyle: { color: 'rgba(210,216,222,0.45)' } },
+      },
+      series: [{
+        type: 'bar',
+        barWidth: '62%',
+        itemStyle: { color, borderRadius: [2, 2, 0, 0] },
+        data: series.map((d) => (unit === '元' ? d.p : d.m)),
+      }],
+    }
+    chart.current.setOption(opt, true)
+    if (!ok) return
+    return () => {
+      chart.current?.dispose()
+      chart.current = null
+    }
+  }, [series, color, unit, n])
+
   return (
-    <svg className="wb-spark" viewBox={`0 0 ${n * 2} 40`} preserveAspectRatio="none" role="img">
-      {values.map((v, i) => {
-        const h = Math.max(1, (v / max) * 38)
-        return (
-          <rect key={i} x={i * 2} y={40 - h} width={1.6} height={40} fill={color} opacity={0.9}>
-            {/* hover 显示该场时间与数值（原生 title，无 JS） */}
-            <title>{`${labels[i] ?? ''} · ${v.toLocaleString()} ${unit}`}</title>
-          </rect>
-        )
-      })}
-    </svg>
+    <div className="wb-chart-scroll">
+      <div ref={box} className="wb-chart-inner"
+           style={{ width: `${Math.max(360, n * 14)}px`, height: '64px' }} />
+    </div>
   )
 }
 
@@ -133,15 +194,11 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
             <h4 className="wb-drawer-sec">逐场趋势</h4>
             <div className="wb-drawer-chart">
               <h5>弹幕数</h5>
-              <Spark values={data.series.map((s) => s.m)}
-                     labels={data.series.map((s) => s.start_at)}
-                     color="#c9406f" unit="条" />
+              <SessionChart series={data.series} color="#c9406f" unit="条" />
             </div>
             <div className="wb-drawer-chart">
               <h5>付费（元）</h5>
-              <Spark values={data.series.map((s) => s.p)}
-                     labels={data.series.map((s) => s.start_at)}
-                     color="#fc7079" unit="元" />
+              <SessionChart series={data.series} color="#fc7079" unit="元" />
             </div>
 
             <h4 className="wb-drawer-sec">三轴分位</h4>
