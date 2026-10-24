@@ -277,7 +277,7 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
         {pool && (
           <p className="wb-chart-note" data-testid="pool-rule">
             {pool.acv
-              ? `池子按 2×平均同接（ACV ${Math.round(pool.acv).toLocaleString()}）划定 · `
+              ? `池子按 3×平均同接（ACV ${Math.round(pool.acv).toLocaleString()}）划定 · `
                 + `另有 ${(pool.excluded ?? 0).toLocaleString()} 人分流走`
               : '池子按出席率门槛划定（该窗口缺 ACV 数据）'}
           </p>

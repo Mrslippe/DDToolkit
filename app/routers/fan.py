@@ -36,7 +36,11 @@ import time
 from datetime import UTC, date, datetime
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
+
+from app.core.useragent import UA_CHROME
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -426,6 +430,41 @@ def cancel_collect(
 
 
 # ── 名单 ────────────────────────────────────────────────────────────────────
+@router.get("/fan/avatar/{uid}")
+async def fan_avatar(uid: str) -> Response:
+    """按 uid 代理 B 站头像，落盘缓存。
+
+    **公开路径**（`<img>` 带不了 token）：因此内部只接受纯数字 uid，且只打 B 站 card 接口，
+    不转发任意 URL。失败返回 404，前端用昵称首字占位。
+    """
+    if not uid.isdigit() or len(uid) > 20:
+        raise HTTPException(400, "uid 必须是纯数字")
+    cache_dir = resolve_data_dir() / "avatars"
+    cache = cache_dir / f"{uid}.jpg"
+    if cache.is_file():
+        return FileResponse(cache, media_type="image/jpeg")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as c:
+            r = await c.get("https://api.bilibili.com/x/web-interface/card",
+                            params={"mid": uid},
+                            headers={"User-Agent": UA_CHROME,
+                                     "Referer": "https://www.bilibili.com"})
+            face = (((r.json() or {}).get("data") or {}).get("card") or {}).get("face")
+            if not face:
+                raise HTTPException(404, "该用户没有头像")
+            img = await c.get(face, headers={"User-Agent": UA_CHROME,
+                                             "Referer": "https://www.bilibili.com/"})
+            if img.status_code != 200 or not img.content:
+                raise HTTPException(404, "头像下载失败")
+    except httpx.HTTPError as exc:
+        raise HTTPException(404, "头像取不到") from exc
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(img.content)
+    return Response(img.content, media_type=img.headers.get("content-type", "image/jpeg"))
+
+
 @router.get("/fan/{vtuber}/ranked")
 def ranked(
     vtuber: str,
@@ -468,6 +507,11 @@ def ranked(
         u = win.users.get(uid)
         rows.append({
             "rank": pos, "uid": uid, "type": labels[uid],
+            # 展示用：昵称（采集时落的 uName）与头像代理地址
+            "name": (u.name if u else "") or "",
+            # 前端优先用 danmakus 的 CDN（快、无代理），失败再退回本地代理
+            "avatar": f"https://workers.vrp.moe/api/bilibili/avatar/{uid}?size=64",
+            "avatar_proxy": f"/fan/avatar/{uid}",
             "strength": round(payload["strength"][uid], 6),
             "axis_percentiles": {a: round(p[a], 6) for a in AXES},
             "att_sessions": u.att_n if u else 0,

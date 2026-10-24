@@ -380,7 +380,7 @@ describe('ACV 方案（2026-10-23）', () => {
     await analyse()
     const note = q('[data-testid="pool-rule"]')
     expect(note).toBeTruthy()
-    expect(note!.textContent).toContain('2×平均同接')
+    expect(note!.textContent).toContain('3×平均同接')
     expect(note!.textContent).toContain('40,000')
   })
 })

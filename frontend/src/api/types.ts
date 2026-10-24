@@ -1592,6 +1592,12 @@ export type FanSortBy =
 export interface FanRankedRow {
   rank: number
   uid: string
+  /** 昵称（采集时落的 uName；老数据为空串） */
+  name?: string
+  /** 头像 URL（优先 danmakus CDN） */
+  avatar?: string
+  /** 头像本地代理（CDN 失败时用） */
+  avatar_proxy?: string
   type: string
   strength: number
   axis_percentiles: Record<string, number>

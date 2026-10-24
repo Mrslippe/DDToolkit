@@ -232,6 +232,8 @@ class UserFact:
     maxrep: int = 0
     #: 是否至少有一场带文本指纹。False = **未跟踪**，不代表"没有重复"
     text_tracked: bool = False
+    #: 昵称（展示用；老数据为空串）
+    name: str = ""
     #: 首次出场时滞的累计（分钟，相对本场最早事件）与场次数 —— 均值用于出勤轴的档内排序
     lag_sum: float = 0.0
     lag_cnt: int = 0
@@ -553,6 +555,10 @@ def load_window(
             gt = a.get("guard_top")
             if isinstance(gt, str) and _GUARD_RANK.get(gt, 0) > _GUARD_RANK.get(u.guard_top or "", 0):
                 u.guard_top = gt
+            if not u.name:
+                _nm = a.get("n")
+                if isinstance(_nm, str) and _nm.strip():
+                    u.name = _nm.strip()[:40]
             u.last_pos = max(u.last_pos, pos)
             u.first_pos = min(u.first_pos, pos)
             # 独轮车 v2 需要**逐条序列**（时间分布），这里顺手喂进去；

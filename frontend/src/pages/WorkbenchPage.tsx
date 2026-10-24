@@ -358,7 +358,7 @@ export default function WorkbenchPage() {
 
         {/* ── 结果区：结果的主展示区（用户 2026-10-19 第 2 条）── */}
         <section className="wb-card wb-result" data-testid="workbench-result">
-          {running || busy ? (
+          {running || (busy && !ranked) ? (
             /* 进行中：有大百分比就给，没有就只表示"在动"（**不编造数字**） */
             <div className="wb-busy" data-testid="workbench-progress" aria-live="polite">
               <div className="wb-busy-head">
@@ -430,15 +430,22 @@ export default function WorkbenchPage() {
                 </div>
               )}
               <ResultTabs value={tab} onChange={onTab} />
-              <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
-              <RankedTable
-                rows={ranked.items}
-                total={ranked.pool?.size ?? ranked.total_in_pool}
-                offset={offset}
-                pageSize={PAGE}
-                onPage={onPage}
-                loading={busy}
-              />
+              <div
+                className={`wb-tabpanel${busy ? ' is-loading' : ''}`}
+                data-testid="result-panel"
+                key={`${tab}-${offset}`}
+              >
+                <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
+                <RankedTable
+                  rows={ranked.items}
+                  total={ranked.pool?.size ?? ranked.total_in_pool}
+                  offset={offset}
+                  pageSize={PAGE}
+                  onPage={onPage}
+                  loading={busy}
+                  tab={tab}
+                />
+              </div>
             </>
           ) : (
             <div className="wb-empty" data-testid="result-empty">

@@ -54,7 +54,9 @@ logger = logging.getLogger(__name__)
 TOKEN_HEADER = "X-DDToolkit-Token"
 
 # 公开路径（**精确前缀**，见模块 docstring 的取舍说明）
-PUBLIC_PREFIXES = ("/healthz", "/static/")
+#: `/fan/avatar/` 公开的理由（2026-10-24）：`<img src>` 带不了 `X-DDToolkit-Token`。
+#: 端点内部只接受**纯数字 uid**，且只代理 B 站头像、结果落盘缓存 —— 没有任意 URL 转发。
+PUBLIC_PREFIXES = ("/healthz", "/static/", "/fan/avatar/")
 # 公开的**单个路径 + 方法**组合（`/img-proxy`、`/video-proxy` 只在 GET 上公开：
 # 它们没有写语义，但把方法限死可以让"以后给它加个 POST"自动落进要鉴权的那一侧）
 PUBLIC_EXACT = {

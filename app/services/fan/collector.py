@@ -396,12 +396,19 @@ def aggregate(records: list[dict], *,
                                  "g": 0.0, "gd": 0.0, "sc": 0.0,
                                  "sc_cnt": 0, "gift_cnt": 0, "guard_cnt": 0,
                                  "guard_top": None,
+                                #: 昵称（2026-10-24）：取该用户第一条非空 `uName`。
+                                #: 只存展示用，不参与任何计算。
+                                "n": "",
                                  # ── 文本指纹（2026-10-20）：只存**派生数字**，原文不落盘。
                                  # `m` 仍是原始条数，**永不删除**（下游按需选用）。
                                  # `uniq` = 去重后的不同文本条数；`maxrep` = 单条文本的
                                  # 最大重复次数。判定（是否独轮车）**不在这里做**，
                                  # 见 `spam.py` 的版本化入口。
                                  "uniq": 0, "maxrep": 0}
+        if not u.get("n"):
+            _nm = rec.get("uName")
+            if isinstance(_nm, str) and _nm.strip():
+                u["n"] = _nm.strip()[:40]
         if t == T_DANMAKU:
             u["m"] += 1
             if isinstance(ms, (int, float)):
@@ -626,7 +633,11 @@ async def collect(
                     p.skipped += 1
                     return
                 p.current = s.start_at
-                recs, _extra = await fetch_records(client, s.live_id, with_extra=True)
+                _got = await fetch_records(client, s.live_id, with_extra=True)
+                if _got is None:
+                    recs, _extra = None, {}
+                else:
+                    recs, _extra = _got
                 if recs is None:
                     p.failed += 1
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
