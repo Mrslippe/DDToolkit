@@ -512,9 +512,9 @@ def ranked(
             "rank": pos, "uid": uid, "type": labels[uid],
             # 展示用：昵称（采集时落的 uName）与头像代理地址
             "name": (u.name if u else "") or "",
-            # 前端优先用 danmakus 的 CDN（快、无代理），失败再退回本地代理
-            "avatar": f"https://workers.vrp.moe/api/bilibili/avatar/{uid}?size=64",
-            "avatar_proxy": f"/fan/avatar/{uid}",
+            # ⚠️ 只给本地代理路径（2026-10-24）：danmakus 的 CDN（workers.vrp.moe）
+            # 在我们这儿一律 403，前端先试它只会让每个头像都先失败一次、并刷满错误上报。
+            "avatar": f"/fan/avatar/{uid}",
             "strength": round(payload["strength"][uid], 6),
             "axis_percentiles": {a: round(p[a], 6) for a in AXES},
             "att_sessions": u.att_n if u else 0,

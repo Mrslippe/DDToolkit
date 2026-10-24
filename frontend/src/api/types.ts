@@ -1594,10 +1594,8 @@ export interface FanRankedRow {
   uid: string
   /** 昵称（采集时落的 uName；老数据为空串） */
   name?: string
-  /** 头像 URL（优先 danmakus CDN） */
+  /** 头像地址（**相对路径**，前端必须用 resolveAsset 拼 apiBase） */
   avatar?: string
-  /** 头像本地代理（CDN 失败时用） */
-  avatar_proxy?: string
   type: string
   strength: number
   axis_percentiles: Record<string, number>
