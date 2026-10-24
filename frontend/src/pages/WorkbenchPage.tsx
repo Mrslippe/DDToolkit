@@ -245,22 +245,13 @@ export default function WorkbenchPage() {
     void loadRanked(TAB_BY[t], 0, false, tagFilterRef.current)
   }, [loadRanked])
 
+  // 标签目录随 /ranked 一起返回（2026-10-25）：不再单独发请求 ——
+  // 之前那次请求命不中同一份计算缓存，会触发十几秒重算，筛选弹层在数据回来前只能空着。
   useEffect(() => {
-    if (!picked || !ranked || !since || !until) return
-    let alive = true
-    setTagLoading(true)
+    setTagOptions(ranked?.tag_catalog ?? [])
     setTagError(null)
-    api.fanTags(picked, {
-      since, until,
-      ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
-    }).then((r) => {
-      if (alive) setTagOptions(r.items ?? [])
-    }).catch((e: Error) => {
-      // 不再静默：取不到标签要能看见原因（用户看不到本进程日志）
-      if (alive) setTagError(e.message || '标签目录加载失败')
-    }).finally(() => { if (alive) setTagLoading(false) })
-    return () => { alive = false }
-  }, [picked, ranked, since, until, slice])
+    setTagLoading(false)
+  }, [ranked])
 
   /** 懒加载：接着已加载的条数往后取一页 */
   const loadingMore = useRef(false)
@@ -493,7 +484,6 @@ export default function WorkbenchPage() {
               <div
                 className={`wb-tabpanel${busy ? ' is-loading' : ''}`}
                 data-testid="result-panel"
-                key={tab}
               >
                 <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
                 <RankedTable

@@ -1641,6 +1641,8 @@ export interface FanRanked {
   spam_in_pool?: number
   /** 过滤后的名单总数（标签筛选时的分页分母） */
   list_total?: number
+  /** 标签目录（池内占比），随名单一起返回 */
+  tag_catalog?: { name: string; prevalence: number }[]
 }
 
 

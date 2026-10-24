@@ -1508,11 +1508,10 @@
 /* ── 结果分页容器（2026-10-24）：固定最小高度 + 切换动画 ─────────────── */
 .wb-tabpanel {
   min-height: 560px;            /* 切页签/翻页时高度不塌，避免滚动跳顶 */
-  animation: wb-fade 180ms ease;
-  transition: opacity 120ms ease;
+  /* 2026-10-25：去掉淡入与 `is-loading` 降透明 ——
+     每次切页签都会 busy → 整块面板先暗一下再亮回来，用户看到的就是"所有卡片闪动"。
+     现在只让**行**做进入动画，容器始终不透明、不重挂载。 */
 }
-
-.wb-tabpanel.is-loading { opacity: 0.55; }
 
 @keyframes wb-fade {
   from { opacity: 0; transform: translateY(4px); }
@@ -1932,3 +1931,6 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   color: #8a5a06;
   font-size: 11.5px;
 }
+
+/* 切页签不再重播面板淡入（重挂载会让图表整体闪一下） */
+.wb-tabpanel { animation: none; }

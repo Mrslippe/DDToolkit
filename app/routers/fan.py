@@ -216,6 +216,13 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         "acv": acv, "pool_size": pool_size, "core_n": core_n,
         "tier_sizes": tier_sizes_for(win),
     }
+    # 标签占比：分母是**入选池**（名单里看到的比例），不是全体观测用户
+    _pool_tags: dict[str, int] = {}
+    for _uid in table.uids:
+        for _t in payload["tags"].get(_uid, []):
+            _pool_tags[_t] = _pool_tags.get(_t, 0) + 1
+    payload["tag_prev"] = {k: v / max(1, len(table.uids)) for k, v in _pool_tags.items()}
+
     # 成员详情索引（2026-10-24 用户定案）：**在分析阶段同步建**，让用户显式等待一次。
     # 放在这里而不是后台预热，是因为"分析完成"应当意味着"详情可秒开" ——
     # 后台建的索引会在用户点开详情时还没好，表现为"有时快有时慢"，比固定等待更难预期。
@@ -601,6 +608,13 @@ def ranked(
         #: 池里被判为独轮车的人数（前端可据此提示"Top N 里有 X 人"）
         "spam_in_pool": sum(1 for u in table.uids if u in win.spam),
         #: 全池（过门槛后的所有人）的分层与强度分布 —— 两张图用它，不用 items
+        # 标签目录随名单一起返回（2026-10-25）：筛选器不必再发一次请求，
+        # 也就没有"分析刚完成、点开筛选还在算"的十几秒等待。
+        "tag_catalog": [
+            {"name": name, "prevalence": round(prev, 6)}
+            for name, prev in sorted(payload["tag_prev"].items(),
+                                     key=lambda kv: -kv[1])
+        ],
         "pool": {
             "size": _n,
             "tiers": _pool_tiers,
