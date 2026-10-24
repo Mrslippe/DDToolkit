@@ -47,6 +47,9 @@ const BARE_IMG_ALLOWED: Record<string, string> = {
   'components/LoginDialog.tsx': '`qr.image` 是后端转好的 **data URL**（`weibo_auth._to_data_url`），不出网',
   [HERO]: '`heroDivider` 是构建期打包进来的 svg（`assets/icons/hero-divider.svg`）',
   [SIDEBAR]: '企划图标来自 `import.meta.glob` 扫的**本地素材**（`assets/groups/*.svg`）',
+  'components/workbench/RankedTable.tsx':
+    '名单头像走**本地代理** `/fan/avatar/<uid>`（resolveAsset 拼绝对地址、后端落盘缓存），不是远程图；'
+    + '这里还需要自定义「失败 → 首字」的兜底，ProxyImage 的 onError 语义不适用',
 }
 
 /**

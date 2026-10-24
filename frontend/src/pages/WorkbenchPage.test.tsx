@@ -337,16 +337,18 @@ describe('空态与页签（2026-10-23）', () => {
     expect(q('[data-testid="workbench-preview"]')).toBeNull()
   })
 
-  it('★ 名单按页取：翻页带 offset，仍按当前页签口径', async () => {
+  it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
     await analyse()
-    const next = q<HTMLButtonElement>('[data-testid="ranked-next"]')!
-    expect(next).toBeTruthy()
-    await act(async () => { next.click() })
+    const more = q<HTMLButtonElement>('[data-testid="ranked-more"]')!
+    expect(more).toBeTruthy()
+    await act(async () => { more.click() })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const calls = fanRanked.mock.calls
     const last = calls[calls.length - 1]!
     expect(last[1]).toBe('strength')
-    expect((last[2] as { offset?: number }).offset).toBe(20)
+    expect((last[2] as { offset?: number }).offset).toBe(2)   // 首屏 mock 2 行
+    // 追加后表格行数翻倍（同两行再来一次）
+    expect(document.querySelectorAll('[data-testid="ranked-table"] tbody tr').length).toBe(4)
   })
 
   it('★ 出结果后四个页签都在，切页签按对应口径重排', async () => {

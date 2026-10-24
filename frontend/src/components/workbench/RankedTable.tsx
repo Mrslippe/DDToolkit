@@ -1,27 +1,26 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { resolveAsset } from '../../api/api'
 import type { FanRankedRow } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
 
 interface Props {
   rows: FanRankedRow[]
-  /** 全池人数（分页分母） */
+  /** 全池人数（懒加载的分母） */
   total: number
-  offset: number
-  pageSize: number
-  onPage: (offset: number) => void
+  /** 还有没有下一页 */
+  hasMore: boolean
   loading?: boolean
+  onLoadMore: () => void
   /** 当前页签：决定「细节」列展示哪个轴的分量 */
   tab?: ResultTab
 }
 
-/** 头像失败时退回昵称/uid 首字（B 站可能没有头像，或取不到） */
+/** 头像失败时退回昵称/uid 首字 */
 function Avatar({ row }: { row: FanRankedRow }) {
   const [bad, setBad] = useState(false)
   const label = (row.name || row.uid).slice(0, 1).toUpperCase()
-  // ⚠️ 必须用 resolveAsset 拼 apiBase —— 相对路径会落到**页面来源**（tauri://localhost / 5173），
-  // 不是后端，症状是"每张头像都裂成首字"（与 devlog/294 的视频代理同一条坑）。
-  // 也只走本地代理：danmakus 的 CDN 在我们这儿 403，先试它只会先把错误刷一遍。
+  // ⚠️ 必须用 resolveAsset 拼 apiBase：相对路径会落到页面来源（tauri://localhost / 5173）。
+  // 也只走本地代理 —— danmakus 的 CDN 在我们这儿 403，先试它只会把错误刷一遍。
   const src = resolveAsset(row.avatar)
   if (bad || !src) {
     return <span className="wb-avatar wb-avatar-fallback">{label}</span>
@@ -40,21 +39,30 @@ function Avatar({ row }: { row: FanRankedRow }) {
 const pct = (v: number) => v.toFixed(3)
 
 /**
- * 结果名单（2026-10-24 改版）。
+ * 结果名单（2026-10-24 改懒加载）。
  *
- * 列固定为：序号 / 头像 / 昵称 / 强度 / 出席分位 / 弹幕分位 / 付费分位 / [细节] / 标签。
- *
- * - **总览页**：不显示「细节」列 —— 直接看三个分位与强度；
- * - **出席 / 互动 / 付费页**：插一列该轴的**原始细节**（出席场次、弹幕条数、付费金额），
- *   也就是"分位背后的实数"。
+ * - 首屏 20 条，滚到底自动追加下一页（`IntersectionObserver`），卡片**向下自然展开**；
+ * - 同时保留「加载更多」按钮，作为没有 `IntersectionObserver` 时的兜底；
+ * - 列固定：序号 / 头像 / 昵称 / 强度 / 三分位 / [细节] / 标签；
+ *   细节列只在出席/互动/付费页出现，总览页直接看计算值。
  */
 export default function RankedTable({
-  rows, total, offset, pageSize, onPage, loading, tab = 'overview',
+  rows, total, hasMore, loading, onLoadMore, tab = 'overview',
 }: Props) {
-  const from = total === 0 ? 0 : offset + 1
-  const to = Math.min(total, offset + rows.length)
-  const canPrev = offset > 0
-  const canNext = to < total
+  const sentinel = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const el = sentinel.current
+    if (!el || !hasMore || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !loading) onLoadMore()
+      },
+      { rootMargin: '160px' },        // 快到底就开始取，滚动不顿
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, loading, onLoadMore])
 
   const detailHead = tab === 'attendance' ? '出席细节'
     : tab === 'interaction' ? '弹幕细节'
@@ -82,11 +90,13 @@ export default function RankedTable({
       <h3 className="wb-card-title">
         名单
         <span className="wb-card-note" style={{ marginLeft: 8 }}>
-          {loading ? '加载中…' : `第 ${from}–${to} 人 / 全池 ${total.toLocaleString()} 人`}
+          {loading && rows.length === 0
+            ? '加载中…'
+            : `已加载 ${rows.length.toLocaleString()} / 全池 ${total.toLocaleString()} 人`}
         </span>
       </h3>
 
-      {rows.length === 0 ? (
+      {rows.length === 0 && !loading ? (
         <p className="wb-hint">这一页没有数据。</p>
       ) : (
         <div className="wb-table-wrap">
@@ -121,28 +131,20 @@ export default function RankedTable({
         </div>
       )}
 
-      <div className="wb-pager">
-        <button
-          type="button"
-          className="wb-pager-btn"
-          data-testid="ranked-prev"
-          disabled={!canPrev || loading}
-          onClick={() => onPage(Math.max(0, offset - pageSize))}
-        >
-          上一页
-        </button>
-        <span className="wb-pager-info">
-          第 {Math.floor(offset / pageSize) + 1} / {Math.max(1, Math.ceil(total / pageSize))} 页
-        </span>
-        <button
-          type="button"
-          className="wb-pager-btn"
-          data-testid="ranked-next"
-          disabled={!canNext || loading}
-          onClick={() => onPage(offset + pageSize)}
-        >
-          下一页
-        </button>
+      <div className="wb-loadmore" ref={sentinel}>
+        {hasMore ? (
+          <button
+            type="button"
+            className="wb-pager-btn"
+            data-testid="ranked-more"
+            disabled={loading}
+            onClick={onLoadMore}
+          >
+            {loading ? '加载中…' : '加载更多'}
+          </button>
+        ) : rows.length > 0 ? (
+          <span className="wb-loadmore-end">已到末尾</span>
+        ) : null}
       </div>
     </section>
   )

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/api'
 import type {
-  FanActivity, FanCollectProgress, FanRanked, FanSessionPreview, FanVtuber,
+  FanActivity, FanCollectProgress, FanRanked, FanRankedRow, FanSessionPreview, FanVtuber,
 } from '../api/types'
 import FloatPill from '../components/common/FloatPill'
 import {
@@ -77,7 +77,9 @@ export default function WorkbenchPage() {
   const [progress, setProgress] = useState<FanCollectProgress | null>(null)
   const [ranked, setRanked] = useState<FanRanked | null>(null)
   const [tab, setTab] = useState<ResultTab>('overview')
-  const [offset, setOffset] = useState(0)
+  /** 懒加载累积的行（切页签时清空） */
+  const [rows, setRows] = useState<FanRankedRow[]>([])
+  const [hasMore, setHasMore] = useState(false)
   /** 换区间后旧结果已不一定对应当前窗口 —— **保留但标灰**，而不是清空（用户 2026-10-19 选 a） */
   const [rankedStale, setRankedStale] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -179,38 +181,48 @@ export default function WorkbenchPage() {
   const loadRanked = useCallback(async (
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
+    append = false,
   ): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
     try {
       setRankedStale(false)
-      setRanked(await withNetRetry(
+      const data = await withNetRetry(
         () => api.fanRanked(picked, by, {
           since, until, limit: PAGE, offset: off,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
-        })))
+        }))
+      setRanked(data)
+      setRows((prev) => (append ? [...prev, ...data.items] : data.items))
+      const total = data.pool?.size ?? data.total_in_pool
+      setHasMore(off + data.items.length < total)
       setErr(null)
     } catch (e) {
       setErr(friendly(e as Error))
-      setRanked(null)
+      if (!append) setRanked(null)
     } finally {
       setBusy(false)
     }
   }, [picked, since, until, slice])
 
-  /** 切页签：回到第一页，并按新口径重排名单 */
+  /** 切页签：清空已加载行，按新口径从头拉 */
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
-    setOffset(0)
-    void loadRanked(TAB_BY[t], 0)
+    setRows([])
+    setHasMore(false)
+    void loadRanked(TAB_BY[t], 0, false)
   }, [loadRanked])
 
-  /** 翻页：只换名单，不动图 */
-  const onPage = useCallback((o: number): void => {
-    setOffset(o)
-    void loadRanked(TAB_BY[tab], o)
-  }, [loadRanked, tab])
+  /** 懒加载：接着已加载的条数往后取一页 */
+  const loadingMore = useRef(false)
+  const onLoadMore = useCallback((): void => {
+    if (loadingMore.current) return
+    loadingMore.current = true
+    void loadRanked(TAB_BY[tab], rows.length, true).finally(() => {
+      loadingMore.current = false
+    })
+  }, [loadRanked, tab, rows.length])
 
   const startCollect = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return
@@ -344,7 +356,7 @@ export default function WorkbenchPage() {
                         : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
-                             onClick={() => { setTab('overview'); setOffset(0); void loadRanked('strength', 0) }}
+                             onClick={() => { setTab('overview'); setRows([]); setHasMore(false); void loadRanked('strength', 0, false) }}
                              data-testid="workbench-load">
                     分析
                   </FloatPill>
@@ -433,16 +445,15 @@ export default function WorkbenchPage() {
               <div
                 className={`wb-tabpanel${busy ? ' is-loading' : ''}`}
                 data-testid="result-panel"
-                key={`${tab}-${offset}`}
+                key={tab}
               >
                 <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
                 <RankedTable
-                  rows={ranked.items}
+                  rows={rows}
                   total={ranked.pool?.size ?? ranked.total_in_pool}
-                  offset={offset}
-                  pageSize={PAGE}
-                  onPage={onPage}
+                  hasMore={hasMore}
                   loading={busy}
+                  onLoadMore={onLoadMore}
                   tab={tab}
                 />
               </div>
