@@ -132,7 +132,7 @@ export default function RankedTable({
               </>}
               {tab === 'attendance' && <>
                 <col style={{ width: '92px' }} /><col style={{ width: '80px' }} />
-                <col style={{ width: '96px' }} /><col style={{ width: '260px' }} />
+                <col style={{ width: '96px' }} /><col style={{ width: '412px' }} />
               </>}
               {tab === 'interaction' && <>
                 <col style={{ width: '92px' }} /><col style={{ width: '120px' }} />

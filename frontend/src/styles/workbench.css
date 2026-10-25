@@ -1941,25 +1941,25 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 /* 结果区出现/消失会切换滚动条，导致整页宽度跳动 —— 预留滚动条槽位（2026-10-25） */
 .wb-page { scrollbar-gutter: stable; }
 
-/* ── 出席明细图（2026-10-25）────────────────────────────────────────── */
+/* ── 出席明细图（2026-10-25 定稿）──────────────────────────────────── */
 .wb-bits { position: relative; display: inline-block; }
 
+/* 固定 20 列 × 14px + 6px 间距；不换行、不压缩 —— 场次少就右侧留白 */
 .wb-bits-grid {
-  display: flex;
-  flex-wrap: wrap;          /* 场次多就向下换行，不横向滚动 */
-  gap: 2px;
-  max-width: 250px;
+  display: grid;
+  grid-template-columns: repeat(20, 14px);
+  grid-auto-rows: 14px;
+  gap: 6px;
 }
 
 .wb-bit {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: rgba(210, 216, 222, 0.9);   /* 未出席：灰 */
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: #ececec;         /* 缺席：极浅灰 */
 }
 
-.wb-bit.on { background: #52c41a; }        /* 出席：绿 */
+.wb-bit.on { background: #4cc85a; }   /* 出席：亮绿 */
 
 .wb-bits-empty { color: var(--c-text-sub); }
 
@@ -1968,27 +1968,19 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   top: 100%;
   left: 0;
   z-index: 40;
-  margin-top: 6px;
-  padding: 8px 10px;
+  margin-top: 8px;
+  padding: 10px 12px;
   background: #fff;
   border-radius: var(--pcard-radius-inner);
   box-shadow: var(--pcard-shadow);
-  min-width: 240px;
 }
 
-.wb-bits-pop-head { display: block; font-size: 12px; color: var(--c-text-main); margin-bottom: 6px; }
-
-.wb-bits-pop-grid {
-  display: grid;
-  grid-template-columns: 1fr;   /* 逐条向下排；浮层自带纵向滚动 */
-  gap: 2px;
-  max-height: 220px;
-  overflow-y: auto;
+.wb-bits-pop-head {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--c-text-sub);
 }
-
-.wb-bits-pop-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
-.wb-bits-pop-when { color: var(--c-text-sub); font-variant-numeric: tabular-nums; }
-.wb-bits-pop-title { color: var(--c-text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 
 /* 高亮当前页签的关键指标列 */
 .wb-th-key { color: var(--c-primary-deep); }
