@@ -567,7 +567,9 @@ def load_window(
             if m or pay or _e:
                 slices.setdefault(uid, []).append(
                     (sr.live_id, str(sr.start_at), m, round(pay, 2), _e,
-                     int(a.get("uniq") or 0) if "uniq" in a else 0))
+                     int(a.get("uniq") or 0) if "uniq" in a else 0,
+                     # 第 7 位：本场首次出场时滞（分钟）—— 出席明细图据此上色
+                     (round(_lag, 1) if _lag is not None else None)))
             if m > 0:
                 u.msg_sess += 1
             if sc > 0:

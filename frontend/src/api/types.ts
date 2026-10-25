@@ -1610,8 +1610,8 @@ export interface FanRankedRow {
   tags: string[]
   /** 独轮车规则名（repeat / low_variety / …）；null 表示不是 */
   spam?: string | null
-  /** 出席明细位图（1=出席，顺序同窗口场次） */
-  att_bits?: number[]
+  /** 出席明细：null=没出席；数字=该场首次出场时滞（分钟），用来上色 */
+  att_bits?: (number | null)[]
   mean_lag_minutes?: number | null
   msg_per_session?: number
   msg_unique?: number

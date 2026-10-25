@@ -2,13 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 interface Props {
-  /** 窗口内逐场是否出席（1=出席），顺序与窗口场次一致 */
-  bits: number[]
+  /** 逐场的**首次出场时滞**（分钟）；null = 没出席 */
+  bits: (number | null)[]
   /** 各场次的时间与标题（方块 tooltip 用） */
   sessions: { at: string; title?: string }[]
   /** 出席场次数（分子）与总场次 */
   att: number
   total: number
+}
+
+/** 时滞超过这个分钟数就算"最淡"（按池内实测 95 分位附近取值） */
+const LAG_CAP = 30
+
+/**
+ * 时滞 → 颜色深浅（2026-10-25 用户口径）：**时滞越长颜色越淡**。
+ * 0 分钟用品牌绿 `#4CC85A`，`LAG_CAP` 分钟以上用浅绿 `#D8F3DC`，中间线性插值。
+ */
+function lagColor(lag: number | null): string {
+  if (lag === null) return '#ececec'          // 没出席
+  const t = Math.max(0, Math.min(1, lag / LAG_CAP))
+  const from = [0x4c, 0xc8, 0x5a]
+  const to = [0xd8, 0xf3, 0xdc]
+  const ch = from.map((c0, i) => Math.round(c0 + (to[i] - c0) * t))
+  return `rgb(${ch[0]}, ${ch[1]}, ${ch[2]})`
 }
 
 /** 每行方块数（默认区与浮层一致，2026-10-25 用户定） */
@@ -71,11 +87,13 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
 
   const head = bits.slice(0, COLS * ROWS)
 
-  const cell = (b: number, i: number) => (
+  const cell = (b: number | null, i: number) => (
     <i
       key={i}
-      className={b ? 'wb-bit on' : 'wb-bit'}
-      title={`${(sessions[i]?.at ?? '').slice(5, 16)}${sessions[i]?.title ? ` · ${sessions[i]!.title}` : ''}`}
+      className={b === null ? 'wb-bit' : 'wb-bit on'}
+      style={b === null ? undefined : { background: lagColor(b) }}
+      title={`${(sessions[i]?.at ?? '').slice(5, 16)}${sessions[i]?.title ? ` · ${sessions[i]!.title}` : ''}`
+        + `${b === null ? ' · 未出席' : ` · 时滞 ${b.toFixed(1)} 分`}`}
     />
   )
 

@@ -1961,7 +1961,7 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   background: #ececec;         /* 缺席：极浅灰 */
 }
 
-.wb-bit.on { background: #4cc85a; }   /* 出席：亮绿 */
+.wb-bit.on { background: #4cc85a; }   /* 出席：亮绿（具体深浅由行内 style 按时滞覆盖） */
 
 .wb-bits-empty { color: var(--c-text-sub); }
 

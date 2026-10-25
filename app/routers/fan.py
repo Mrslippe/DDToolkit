@@ -230,17 +230,19 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     # 出席位图（2026-10-25）：窗口内逐场是否出现（以"有入场事件"为准）
     _session_ids = [sr.live_id for sr in win.sessions]
     _pos = {lid: i for i, lid in enumerate(_session_ids)}
+    # 出席明细：`None` = 没出席；数字 = 该场首次出场时滞（分钟）。
+    # 口径必须与 `att_n` 一致：loader 里**只要出现在 raw 就算出席**（不看入场事件 e）。
+    # 前端据此上色：时滞越长颜色越淡（2026-10-25 用户口径）。
     payload["att_bits"] = {}
     for _uid in table.uids:
-        bits = [0] * len(_session_ids)
+        lags: list[float | None] = [None] * len(_session_ids)
         for sl in win.slices.get(_uid, []):
             i = _pos.get(sl[0])
-            # ⚠️ 口径必须与 `att_n` 一致：loader 里**只要出现在 raw 就算出席**
-            #（不看有没有入场事件 e）。早先要求 e>0，于是"满勤但没进过场"的用户
-            # 画出全灰的明细图（2026-10-25 用户报里斯マラ）。
-            if i is not None:
-                bits[i] = 1
-        payload["att_bits"][_uid] = bits
+            if i is None:
+                continue
+            lag = sl[6] if len(sl) > 6 else None
+            lags[i] = float(lag) if lag is not None else 0.0
+        payload["att_bits"][_uid] = lags
 
     payload["pay_share"] = {
         u: (win.users[u].pay / _pool_pay if _pool_pay > 0 else 0.0) for u in table.uids
