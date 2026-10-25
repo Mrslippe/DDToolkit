@@ -43,7 +43,10 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
     const el = grid.current
     if (el) {
       const r = el.getBoundingClientRect()
-      setPos({ x: r.left, y: r.bottom + 8 })
+      // 浮层与方块区**同原点**：20 列 × 14px + 6px 间距两边完全一致，
+      // 于是浮层里的第 N 格恰好压在表里的第 N 格上（"放大镜"式一一重叠，2026-10-25 用户定）。
+      // 浮层自身有 8px 内边距，所以整体左上各减 8，让格子而不是卡片边缘对齐。
+      setPos({ x: r.left - 8, y: r.top - 8 })
     }
     setOpen(true)
   }
