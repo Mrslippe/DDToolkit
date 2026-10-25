@@ -57,8 +57,15 @@ function clampNum(v: number, lo: number, hi: number): number {
  * - **跟手系数**：带子行程 `trackW - bandW` 对应可滚范围 `innerW - clientW`
  *   ⇒ 恰好等于 `innerW / trackW`。早先用 `range / trackW` 小了一个数量级，所以「鼠标比带子快」。
  */
-/** stateKey → 滑轨状态（内存态，随页面存活） */
-const SLIDER_STATE = new Map<string, { start: number; size: number; scale: number }>()
+/**
+ * stateKey → 滑轨状态（内存态，随页面存活）。
+ *
+ * ⚠️ 位置存的是**相对位置 `pos ∈ [0,1]`**（0=最左，1=最右），不是绝对下标：
+ * 各 V 的场次数不同，同一下标在别处含义完全不同；而且下标在恢复过程中会被
+ * 并行的 clamp 改写一次，来回切换几次就"漂移"（2026-10-25 用户实测）。
+ * 相对位置对场次数不变，且默认 1 正好是"贴最右"。
+ */
+const SLIDER_STATE = new Map<string, { pos: number; size: number; scale: number }>()
 
 export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
                                         stateKey, coverTick, onChange }: Props) {
@@ -68,8 +75,13 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
   const maxGrade = grades[grades.length - 1]
   const saved = stateKey ? SLIDER_STATE.get(stateKey) : undefined
   const [size, setSize] = useState(saved?.size ?? Math.min(minGrade, total || minGrade))
-  const [start, setStart] = useState(
-    saved?.start ?? Math.max(0, total - Math.min(minGrade, total)))
+  /** 恢复过程中不要回写缓存（否则会被并行的 clamp 覆盖成"漂移后的值"） */
+  const restoring = useRef(false)
+  const [start, setStart] = useState(() => {
+    const sz = Math.min(saved?.size ?? minGrade, total || minGrade)
+    if (saved?.pos === undefined) return Math.max(0, total - sz)
+    return Math.max(0, Math.min(Math.round(saved.pos * Math.max(0, total - sz)), total - sz))
+  })
   const [scale, setScale] = useState(saved?.scale ?? 1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
@@ -144,18 +156,25 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
   useEffect(() => {
     if (total < 1 || !stateKey || restoredKey.current === stateKey) return
     restoredKey.current = stateKey
+    restoring.current = true
     const st = SLIDER_STATE.get(stateKey)
     const wantSize = Math.min(st?.size ?? minGrade, total)
-    const wantStart = Math.max(0, Math.min(st?.start ?? total - wantSize, total - wantSize))
+    const span = Math.max(0, total - wantSize)
+    const wantStart = st?.pos === undefined
+      ? span                                   // 默认：贴最右
+      : Math.max(0, Math.min(Math.round(st.pos * span), span))
     setSize(wantSize)
     setStart(wantStart)
     if (st?.scale) setScale(st.scale)
+    // 等本轮渲染与 clamp 跑完再放开回写
+    requestAnimationFrame(() => { restoring.current = false })
   }, [stateKey, total, minGrade])
 
-  /* 任何变动都写回缓存（切走再回来原样恢复） */
+  /* 任何变动都写回缓存（位置存**相对比例**，切走再回来原样恢复） */
   useEffect(() => {
-    if (!stateKey || total < 1) return
-    SLIDER_STATE.set(stateKey, { start, size, scale })
+    if (!stateKey || total < 1 || restoring.current) return
+    const span = Math.max(1, total - size)
+    SLIDER_STATE.set(stateKey, { pos: Math.min(1, Math.max(0, start / span)), size, scale })
   }, [stateKey, start, size, scale, total])
 
   /* 换档时把窗口居中 */
