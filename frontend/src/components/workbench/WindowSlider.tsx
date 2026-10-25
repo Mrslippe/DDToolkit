@@ -125,7 +125,9 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
   /** 把窗口夹进可视区（滚动 / 换档 / 缩放都要跑） */
   const clamp = useCallback(() => {
     const el = scrollRef.current
-    if (!el || suppress.current) return
+    // 还没量到宽度（隐藏/首帧/切 V 的过渡）时**绝不夹取**：
+    // 此时 last 会算成 0 → hi ≤ 0 → start 被拽回左边界，再回写就成了"漂移"
+    if (!el || !el.clientWidth || suppress.current) return
     const st = stepRef.current
     const first = Math.round((el.scrollLeft - PAD) / st)
     const last = Math.floor((el.scrollLeft + el.clientWidth - PAD) / st)
@@ -163,6 +165,8 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     if (total < 1 || !stateKey || !owned || restoredKey.current === stateKey) return
     restoredKey.current = stateKey
     restoring.current = true
+    // 恢复期间抑制 clamp：它会把 start 拽进**当前视野**，而视野还停在旧位置
+    suppress.current = true
     const st = SLIDER_STATE.get(stateKey)
     const wantSize = Math.min(st?.size ?? minGrade, total)
     const span = Math.max(0, total - wantSize)
@@ -172,9 +176,23 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     setSize(wantSize)
     setStart(wantStart)
     if (st?.scale) setScale(st.scale)
+
+    // ⚠️ 关键：**把视野也滚到那一格**。`clamp()` 在每次滚动/布局后都会把 start
+    // 拉进可视区（这是既有交互：拖动视野 = 移动窗口）。只恢复 start 不恢复滚动，
+    // 下一帧 clamp 就把 start 拽回左边界 —— 这才是来回切换"漂移"的第二条路径。
+    const el = scrollRef.current
+    if (el) {
+      const stp = Math.max(3, (BAR + GAP) * (st?.scale ?? scale))
+      const center = PAD + wantStart * stp + (wantSize * stp) / 2
+      el.scrollLeft = Math.max(0, center - el.clientWidth / 2)
+    }
     // 等本轮渲染与 clamp 跑完再放开回写
-    requestAnimationFrame(() => { restoring.current = false })
-  }, [stateKey, dataOwner, owned, total, minGrade])
+    requestAnimationFrame(() => {
+      suppress.current = false
+      syncView()
+      restoring.current = false
+    })
+  }, [stateKey, dataOwner, owned, total, minGrade, scale, syncView])
 
   /* 任何变动都写回缓存（位置存**相对比例**，切走再回来原样恢复） */
   useEffect(() => {
@@ -195,9 +213,17 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size])
 
-  /* 手选日期后：窗口覆盖整段（size = 全部场次，起点归零） */
+  /* 手选日期后：窗口覆盖整段（size = 全部场次，起点归零）
+   *
+   * ⚠️ 只认**coverTick 本身的变化**（2026-10-25 漂移真因）：
+   * 原依赖是 `[coverTick, total]`，于是**每次 total 变化（切 V / 重新取数）都会重跑** ——
+   * 只要用户曾经手选过一次日期（coverTick>0），切到任何 V 都会被强制成
+   * `size=total, start=0`（整段、贴左），再被回写进那个 V 的缓存 ⇒ 来回切几次就漂到最左。
+   * 用 `lastCover` 记住已执行的 tick，切 V 不再触发。 */
+  const lastCover = useRef(0)
   useEffect(() => {
-    if (!coverTick || total < 1) return
+    if (!coverTick || coverTick === lastCover.current || total < 1) return
+    lastCover.current = coverTick
     setSize(total)
     setStart(0)
     const el = scrollRef.current

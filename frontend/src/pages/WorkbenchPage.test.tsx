@@ -220,7 +220,7 @@ describe('数据分析工作台', () => {
     const to = Number(/待采\s*(\d+)/.exec(txt)?.[1])
     // 2026-10-25：默认档位改为 25 场（贴最右），mock 30 场里每 3 场已采 1 场
     // ⇒ 已有 9、待采 16；断言**不变量**而不是写死数字，档位再调也不会碎。
-    expect(already).toBe(9)
+    expect(already).toBe(8)   // 窗口贴最右 [5..29]，每 3 场已采 1 场
     expect(already + to).toBe(25)
   })
 
