@@ -1944,13 +1944,23 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 /* ── 出席明细图（2026-10-25 定稿）──────────────────────────────────── */
 .wb-bits { position: relative; display: inline-block; }
 
-/* 固定 20 列 × 14px + 6px 间距；不换行、不压缩 —— 场次少就右侧留白 */
+/* 默认区的方块**随列宽等比收缩**（最大 14px），这样明细列可以做成弹性列，
+   不会因为总宽超出而出现横向滚动条（2026-10-25 用户反馈：滚动条挤列宽）。
+   浮层里保持固定 14px，尺寸只由"一行 20 格"决定。 */
 .wb-bits-grid {
   display: grid;
-  grid-template-columns: repeat(20, 14px);
-  grid-auto-rows: 14px;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
   gap: 6px;
+  max-width: 394px;
 }
+
+.wb-bits-grid > .wb-bit { aspect-ratio: 1 / 1; height: auto; }
+
+.wb-bits-pop .wb-bits-grid.is-pop {
+  grid-template-columns: repeat(20, 14px);
+}
+
+.wb-bits-pop .wb-bits-grid.is-pop > .wb-bit { height: 14px; }
 
 .wb-bit {
   width: 14px;
@@ -1993,3 +2003,7 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-skipped-more summary { cursor: pointer; color: var(--c-primary-deep); }
 .wb-skipped-more ul { margin: 4px 0 0; padding-left: 16px; }
 .wb-skipped-more li { font-size: 12px; color: var(--c-text-sub); }
+
+
+/* 名单表格：宽度只在**表格内部**滚动，页面宽度不受影响（2026-10-25） */
+.wb-table-wrap { scrollbar-gutter: stable; }

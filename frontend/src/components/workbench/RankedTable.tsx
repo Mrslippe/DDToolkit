@@ -122,21 +122,25 @@ export default function RankedTable({
         <div className="wb-table-wrap">
           <table className="wb-table wb-table-ranked is-fixed" data-testid="ranked-table">
             <colgroup>
+              {/* 前四列**所有页签一致**（序号 / 头像 / 昵称 / 强度）；
+                  最后一列吃掉剩余宽度 —— 否则各页总宽不同，会触发横向滚动条挤列宽
+                  （2026-10-25 用户反馈） */}
               <col style={{ width: '44px' }} />
               <col style={{ width: '52px' }} />
               <col style={{ width: '190px' }} />
               <col style={{ width: '78px' }} />
               {tab === 'overview' && <>
-                <col style={{ width: '88px' }} /><col style={{ width: '88px' }} /><col style={{ width: '88px' }} />
-                <col />
+                <col style={{ width: '88px' }} /><col style={{ width: '88px' }} />
+                <col style={{ width: '88px' }} /><col />
               </>}
               {tab === 'attendance' && <>
                 <col style={{ width: '92px' }} /><col style={{ width: '80px' }} />
-                <col style={{ width: '96px' }} /><col style={{ width: '412px' }} />
+                <col style={{ width: '96px' }} /><col />
               </>}
               {tab === 'interaction' && <>
                 <col style={{ width: '92px' }} /><col style={{ width: '120px' }} />
                 <col style={{ width: '90px' }} /><col style={{ width: '100px' }} />
+                <col />
               </>}
               {tab === 'payment' && <>
                 <col style={{ width: '92px' }} /><col style={{ width: '110px' }} />
@@ -155,7 +159,7 @@ export default function RankedTable({
                 </>}
                 {tab === 'interaction' && <>
                   <th className="wb-th-key">互动分位</th><th>去重/总弹幕</th>
-                  <th>场均弹幕</th><th>独轮车</th>
+                  <th>场均弹幕</th><th>独轮车</th><th />
                 </>}
                 {tab === 'payment' && <>
                   <th className="wb-th-key">付费分位</th><th>总付费</th>
@@ -195,6 +199,7 @@ export default function RankedTable({
                     <td>{(r.msg_unique ?? 0).toLocaleString()} / {r.msg_total.toLocaleString()}</td>
                     <td>{(r.msg_per_session ?? 0).toFixed(1)}</td>
                     <td>{spamLabel(r.spam_level)}</td>
+                    <td />
                   </>}
                   {tab === 'payment' && <>
                     <td className="wb-th-key-val">{pct(r.axis_percentiles.payment ?? 0)}</td>
