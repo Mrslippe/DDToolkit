@@ -531,30 +531,49 @@ export default function WorkbenchPage() {
                   </div>
                 )}
               </div>
-              {/* 被跳过的场次：让"静默丢样本"可见（记录过少 / 无入场事件 / 缺 raw） */}
-              {(ranked.warnings?.length ?? 0) > 0 && (
-                <div className="wb-skipped" data-testid="ranked-warnings">
-                  <b>有 {ranked.warnings!.length} 场没进样本：</b>
-                  {ranked.warnings!.slice(0, 3).map((w, i) => (
-                    <span className="wb-skipped-item" key={i}>{w}</span>
-                  ))}
-                  {ranked.warnings!.length > 3 && (
-                    <span className="wb-skipped-item">…另有 {ranked.warnings!.length - 3} 条</span>
-                  )}
-                </div>
-              )}
+              {/* 被跳过的场次：显示**时间 + 标题**（不再暴露 live_id）；超过 2 条收进下拉（2026-10-25） */}
+            {(ranked.skipped?.length ?? ranked.warnings?.length ?? 0) > 0 && (
+              <div className="wb-skipped" data-testid="ranked-warnings">
+                <b>有 {ranked.skipped?.length ?? ranked.warnings!.length} 场没进样本：</b>
+                {(ranked.skipped ?? []).slice(0, 2).map((x) => (
+                  <span className="wb-skipped-item" key={x.live_id}>
+                    {x.start_at || '（时间未知）'}{x.title ? ` · ${x.title}` : ''}
+                  </span>
+                ))}
+                {!ranked.skipped?.length && (
+                  <span className="wb-skipped-item">{ranked.warnings![0]}</span>
+                )}
+                {(ranked.skipped?.length ?? 0) > 2 && (
+                  <details className="wb-skipped-more">
+                    <summary>另 {ranked.skipped!.length - 2} 条</summary>
+                    <ul>
+                      {ranked.skipped!.slice(2).map((x) => (
+                        <li key={x.live_id}>
+                          {x.start_at || '（时间未知）'}{x.title ? ` · ${x.title}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
               <ResultTabs value={tab} onChange={onTab} />
               <div
                 className={`wb-tabpanel${busy ? ' is-loading' : ''}`}
                 data-testid="result-panel"
               >
-                <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab} />
+                <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
+                              attBins={ranked.att_bins} />
                 <RankedTable
                   vtuber={picked}
                   since={since}
                   until={until}
                   ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}
                   onOpenMember={setMemberUid}
+                  sessionMeta={slice.map((s) => ({
+                    at: String((s as { at?: string }).at ?? ''),
+                    title: String((s as { title?: string }).title ?? ''),
+                  }))}
                   tagOptions={tagOptions}
                   tagLoading={tagLoading}
                   tagError={tagError}

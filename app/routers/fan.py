@@ -227,6 +227,18 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     # 占比是量级，二者差 75 倍（0.03% vs 2.2%）。
     _pool_pay = sum(win.users[u].pay for u in table.uids)
     payload["pay_total_pool"] = _pool_pay
+    # 出席位图（2026-10-25）：窗口内逐场是否出现（以"有入场事件"为准）
+    _session_ids = [sr.live_id for sr in win.sessions]
+    _pos = {lid: i for i, lid in enumerate(_session_ids)}
+    payload["att_bits"] = {}
+    for _uid in table.uids:
+        bits = [0] * len(_session_ids)
+        for sl in win.slices.get(_uid, []):
+            i = _pos.get(sl[0])
+            if i is not None and sl[4]:      # sl[4] = 该场入场次数 e
+                bits[i] = 1
+        payload["att_bits"][_uid] = bits
+
     payload["pay_share"] = {
         u: (win.users[u].pay / _pool_pay if _pool_pay > 0 else 0.0) for u in table.uids
     }
@@ -545,6 +557,15 @@ def ranked(
             "att_sessions": u.att_n if u else 0,
             "att_rate": round(u.att_n / max(1, win.n), 6) if u else 0.0,
             "pay_total": round(table.tie[uid]["pay"], 2),
+            # ── 各页签专用（2026-10-25）──
+            #: 出席明细：窗口内逐场是否出席（1=出席，顺序同 win.sessions）
+            "att_bits": payload["att_bits"].get(uid, []),
+            "mean_lag_minutes": (round(u.mean_lag, 2) if u and u.mean_lag is not None else None),
+            "msg_per_session": round(u.m / max(1, u.att_n), 2) if u else 0.0,
+            "msg_unique": int(u.uniq) if u else 0,
+            "gift_amt": round(u.gift_amt, 2) if u else 0.0,
+            "guard_amt": round(u.guard_amt, 2) if u else 0.0,
+            "sc_amt": round(u.sc_amt, 2) if u else 0.0,
             #: 收入贡献占比（该用户付费 / 池内总收入）
             "pay_share": round(payload["pay_share"].get(uid, 0.0), 8),
             #: 池内付费名次（1 = 最高）
@@ -603,6 +624,39 @@ def ranked(
     for _lab in payload["labels"].values():
         _type_counts[_lab] = _type_counts.get(_lab, 0) + 1
 
+    # 出席场次数分布（2026-10-25）：分位天生均匀，直方图看不出东西；
+    # 改成分「来了几场」的人数分布，才能看到满勤/低频的形态。
+    _att_bins = [0] * (win.n + 1)
+    for _u in table.uids:
+        _att_bins[min(win.n, max(0, win.users[_u].att_n))] += 1
+
+    # 没进样本的场次：给出**时间与标题**（不再显示 live_id）
+    _skipped: list[dict[str, Any]] = []
+    for _w in win.warnings:
+        _lid = _w.split("live_id=")[-1].split("：")[0].split("；")[0].strip() if "live_id=" in _w else ""
+        if not _lid:
+            continue
+        # 时间取 stats 的 start_at（UTC → 东八区）；标题取库里的 live_sessions
+        _st_at = ""
+        try:
+            _raw = json.loads((resolve_data_dir() / win.vtuber.subdir / "stats"
+                               / f"{_lid}.json").read_text(encoding="utf-8"))
+            _st_at = cn_text(str(_raw.get("start_at") or ""))
+        except (OSError, ValueError):
+            pass
+        _title = ""
+        try:
+            from sqlalchemy import text as _sql_text
+            _db = _LAST_DB.get("db")
+            if _db is not None:
+                _row = _db.execute(
+                    _sql_text("select title from live_sessions where live_id = :lid"),
+                    {"lid": _lid}).first()
+                _title = str(_row[0] or "") if _row else ""
+        except Exception:  # noqa: BLE001 —— 标题取不到不影响提示本身
+            _title = ""
+        _skipped.append({"live_id": _lid, "start_at": _st_at, "title": _title})
+
     _lo = min(_vals) if _vals else 0.0
     _hi = max(_vals) if _vals else 1.0
     _span = (_hi - _lo) or 1.0
@@ -621,6 +675,10 @@ def ranked(
         "requested_sessions": len(wanted) if wanted else window,
         #: `load_window` 跳过了哪些场、为什么 —— 之前只写进日志，界面上看不到
         "warnings": list(win.warnings),
+        #: 没进样本的场次（时间 + 标题；标题取不到的留空）
+        "skipped": _skipped,
+        #: 出席场次数分布（下标 = 出席场次，值 = 人数）
+        "att_bins": {"max": win.n, "counts": _att_bins},
         "since": since, "until": until, "by": by,
         "purity_threshold": PURITY_THRESHOLD,
         "total_in_pool": len(table), "count": len(rows),

@@ -28,17 +28,17 @@ function PayBreakdown({ totals }: { totals: FanMemberDetail['totals'] }) {
     { name: '醒目留言', v: totals.sc_amt, color: '#fc7079' },
     { name: '礼物', v: totals.gift_amt, color: '#7c93b5' },
   ]
-  const sum = rows.reduce((s, r) => s + r.v, 0) || 1
+  const sum = rows.reduce((s, r) => s + (r.v ?? 0), 0) || 1
   return (
     <div className="wb-pay">
       {rows.map((r) => (
         <div className="wb-pay-row" key={r.name}>
           <span className="wb-pay-name">{r.name}</span>
           <span className="wb-pay-bar">
-            <i style={{ width: `${(r.v / sum) * 100}%`, background: r.color }} />
+            <i style={{ width: `${((r.v ?? 0) / sum) * 100}%`, background: r.color }} />
           </span>
-          <span className="wb-pay-val">¥{r.v.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-          <span className="wb-pay-pct">{((r.v / sum) * 100).toFixed(1)}%</span>
+          <span className="wb-pay-val">¥{(r.v ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          <span className="wb-pay-pct">{(((r.v ?? 0) / sum) * 100).toFixed(1)}%</span>
         </div>
       ))}
     </div>
@@ -191,7 +191,7 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
             <h4 className="wb-drawer-sec">行为</h4>
             <dl className="wb-kv">
               <div><dt>出席场次</dt><dd>{data.totals.att_sessions} / {data.totals.window_sessions}</dd></div>
-              <div><dt>场均弹幕</dt><dd>{data.totals.msg_per_session.toFixed(1)}</dd></div>
+              <div><dt>场均弹幕</dt><dd>{(data.totals.msg_per_session ?? 0).toFixed(1)}</dd></div>
               <div><dt>场均入场时滞</dt>
                 <dd>{data.totals.mean_lag_minutes == null ? '—' : `${data.totals.mean_lag_minutes.toFixed(1)} 分`}</dd></div>
               <div><dt>总弹幕 / 去重</dt>

@@ -1610,6 +1610,15 @@ export interface FanRankedRow {
   tags: string[]
   /** 独轮车规则名（repeat / low_variety / …）；null 表示不是 */
   spam?: string | null
+  /** 出席明细位图（1=出席，顺序同窗口场次） */
+  att_bits?: number[]
+  mean_lag_minutes?: number | null
+  msg_per_session?: number
+  msg_unique?: number
+  gift_amt?: number
+  guard_amt?: number
+  sc_amt?: number
+  spam_level?: 'none' | 'suspected' | 'confirmed'
 }
 
 export interface FanRanked {
@@ -1645,6 +1654,10 @@ export interface FanRanked {
   spam_in_pool?: number
   /** 过滤后的名单总数（标签筛选时的分页分母） */
   list_total?: number
+  /** 出席场次数分布（下标 = 出席场次，值 = 人数） */
+  att_bins?: { max: number; counts: number[] }
+  /** 没进样本的场次（时间 + 标题） */
+  skipped?: { live_id: string; start_at: string; title: string }[]
   /** 标签目录（池内占比），随名单一起返回 */
   tag_catalog?: { name: string; prevalence: number }[]
 }

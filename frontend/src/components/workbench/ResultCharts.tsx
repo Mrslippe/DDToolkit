@@ -49,6 +49,9 @@ export interface PoolStats {
 }
 
 interface Props {
+  /** 出席场次数分布（2026-10-25）：下标 = 出席场次，值 = 人数 */
+  attBins?: { max: number; counts: number[] }
+
   /** 名单（后端已按当前排序口径降序）—— 仅在**没有** pool 时兜底使用 */
   items: Item[]
   /** 全池聚合：有它就以它为准，图覆盖全池而不是名单 */
@@ -86,7 +89,8 @@ function ensureChart(
   return api.current
 }
 
-export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
+export default function ResultCharts({
+  attBins, items, pool, tab = 'overview' }: Props) {
   const pieRef = useRef<HTMLDivElement>(null)
   const lineRef = useRef<HTMLDivElement>(null)
   const axisRef = useRef<HTMLDivElement>(null)
@@ -95,6 +99,18 @@ export default function ResultCharts({ items, pool, tab = 'overview' }: Props) {
   const axisApi = useRef<ReturnType<typeof echarts.init> | null>(null)
 
   const model = useMemo(() => {
+    if (tab === 'attendance' && attBins && attBins.counts.length > 1) {
+      // 2026-10-25：分位天生均匀，直方图看不出形态 —— 改画"来了几场"的人数分布
+      const max = attBins.max || attBins.counts.length - 1
+      return {
+        kind: 'axis' as const,
+        x: Array.from({ length: max }, (_, i) => `${i + 1}`),
+        y: attBins.counts.slice(1, max + 1),
+        total: attBins.counts.reduce((acc: number, v: number) => acc + v, 0),
+        xName: '出席场次',
+      }
+    }
+
     if (tab !== 'overview') {
       const a = pool?.axes?.[tab]
       if (a) {

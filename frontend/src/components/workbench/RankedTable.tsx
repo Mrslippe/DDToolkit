@@ -5,6 +5,7 @@ import type { ResultTab } from './ResultCharts'
 import MemberSearch from './MemberSearch'
 import TagFilter from './TagFilter'
 import TagPills from './TagPills'
+import AttendanceBits from './AttendanceBits'
 
 interface Props {
   rows: FanRankedRow[]
@@ -28,6 +29,8 @@ interface Props {
   tagError?: string | null
   tagFilter: string[]
   onTagFilter: (next: string[]) => void
+  /** 窗口内各场次的时间/标题（出席明细浮层用），顺序与行的 att_bits 一致 */
+  sessionMeta: { at: string; title?: string }[]
 }
 
 /** 头像失败时退回昵称/uid 首字 */
@@ -53,6 +56,19 @@ function Avatar({ row }: { row: FanRankedRow }) {
 
 const pct = (v: number) => v.toFixed(3)
 
+/** 独轮车三档（2026-10-25 用户口径：名单里只要档位） */
+function spamLabel(level?: string): string {
+  return level === 'confirmed' ? '确定' : level === 'suspected' ? '疑似' : '—'
+}
+
+/** 付费构成：舰长类 / SC / 礼物 各占该用户付费额的比例 */
+function payMix(r: FanRankedRow) {
+  const total = (r.gift_amt ?? 0) + (r.guard_amt ?? 0) + (r.sc_amt ?? 0)
+  if (!total) return '—'
+  const f = (v: number) => `${((v / total) * 100).toFixed(0)}%`
+  return `${f(r.guard_amt ?? 0)} / ${f(r.sc_amt ?? 0)} / ${f(r.gift_amt ?? 0)}`
+}
+
 /**
  * 结果名单（2026-10-24 改懒加载）。
  *
@@ -64,7 +80,7 @@ const pct = (v: number) => v.toFixed(3)
 export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview',
   vtuber, since, until, ids, onOpenMember,
-  tagOptions, tagLoading, tagError, tagFilter, onTagFilter,
+  tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta,
 }: Props) {
   const sentinel = useRef<HTMLDivElement | null>(null)
 
@@ -80,36 +96,6 @@ export default function RankedTable({
     io.observe(el)
     return () => io.disconnect()
   }, [hasMore, loading, onLoadMore])
-
-  const detailHead = tab === 'attendance' ? '出席细节'
-    : tab === 'interaction' ? '弹幕细节'
-      : tab === 'payment' ? '付费细节'
-        : ''
-
-  const detail = (r: FanRankedRow) => {
-    if (tab === 'attendance') return `${r.att_sessions} 场（${(r.att_rate * 100).toFixed(0)}%）`
-    if (tab === 'interaction') {
-      return (
-        <>
-          {r.msg_total.toLocaleString()} 条
-          {r.spam && (
-            <span className="wb-badge-spam" title="不同文本率 ≤20%，判为独轮车">独轮车</span>
-          )}
-        </>
-      )
-    }
-    if (tab === 'payment') {
-      if (r.pay_total <= 0) return '—'
-      // 金额 + 收入占比：分位在尾部挤成一条线，占比才是量级（¥300≈0.03%，¥2万≈2.2%）
-      return (
-        <>
-          ¥{r.pay_total.toLocaleString()}
-          {r.pay_share ? <span className="wb-pay-share"> · {(r.pay_share * 100).toFixed(2)}%</span> : null}
-        </>
-      )
-    }
-    return null
-  }
 
   return (
     <section className="wb-card wb-table-card" data-testid="ranked-table-card">
@@ -136,22 +122,45 @@ export default function RankedTable({
         <div className="wb-table-wrap">
           <table className="wb-table wb-table-ranked is-fixed" data-testid="ranked-table">
             <colgroup>
-              <col style={{ width: '44px' }} />   {/* # */}
-              <col style={{ width: '52px' }} />   {/* 头像 */}
-              <col style={{ width: '210px' }} />  {/* 昵称 */}
-              <col style={{ width: '84px' }} />   {/* 强度 */}
-              <col style={{ width: '92px' }} />   {/* 出席分位 */}
-              <col style={{ width: '92px' }} />   {/* 弹幕分位 */}
-              <col style={{ width: '92px' }} />   {/* 付费分位 */}
-              {detailHead && <col style={{ width: '150px' }} />}
-              <col />                              {/* 标签：吃掉剩余 */}
+              <col style={{ width: '44px' }} />
+              <col style={{ width: '52px' }} />
+              <col style={{ width: '190px' }} />
+              <col style={{ width: '78px' }} />
+              {tab === 'overview' && <>
+                <col style={{ width: '88px' }} /><col style={{ width: '88px' }} /><col style={{ width: '88px' }} />
+                <col />
+              </>}
+              {tab === 'attendance' && <>
+                <col style={{ width: '92px' }} /><col style={{ width: '80px' }} />
+                <col style={{ width: '96px' }} /><col style={{ width: '260px' }} />
+              </>}
+              {tab === 'interaction' && <>
+                <col style={{ width: '92px' }} /><col style={{ width: '120px' }} />
+                <col style={{ width: '90px' }} /><col style={{ width: '100px' }} />
+              </>}
+              {tab === 'payment' && <>
+                <col style={{ width: '92px' }} /><col style={{ width: '110px' }} />
+                <col style={{ width: '84px' }} /><col />
+              </>}
             </colgroup>
             <thead>
               <tr>
-                <th>#</th><th>用户</th><th>昵称</th>
-                <th>强度</th><th>出席分位</th><th>弹幕分位</th><th>付费分位</th>
-                {detailHead && <th>{detailHead}</th>}
-                <th>标签</th>
+                <th>#</th><th>用户</th><th>昵称</th><th>强度</th>
+                {tab === 'overview' && <>
+                  <th>出席分位</th><th>弹幕分位</th><th>付费分位</th><th>标签</th>
+                </>}
+                {tab === 'attendance' && <>
+                  <th className="wb-th-key">出席分位</th><th>出席率</th>
+                  <th>平均时滞</th><th>出席明细</th>
+                </>}
+                {tab === 'interaction' && <>
+                  <th className="wb-th-key">互动分位</th><th>去重/总弹幕</th>
+                  <th>场均弹幕</th><th>独轮车</th>
+                </>}
+                {tab === 'payment' && <>
+                  <th className="wb-th-key">付费分位</th><th>总付费</th>
+                  <th>贡献占比</th><th>构成（舰/SC/礼）</th>
+                </>}
               </tr>
             </thead>
             <tbody>
@@ -166,11 +175,33 @@ export default function RankedTable({
                     <span className="wb-table-uid-sub">{r.uid}</span>
                   </td>
                   <td className="wb-table-strength">{r.strength.toFixed(3)}</td>
-                  <td>{pct(r.axis_percentiles.attendance ?? 0)}</td>
-                  <td>{pct(r.axis_percentiles.interaction ?? 0)}</td>
-                  <td>{pct(r.axis_percentiles.payment ?? 0)}</td>
-                  {detailHead && <td>{detail(r)}</td>}
-                  <td className="wb-table-tags"><TagPills tags={r.tags} /></td>
+                  {tab === 'overview' && <>
+                    <td>{pct(r.axis_percentiles.attendance ?? 0)}</td>
+                    <td>{pct(r.axis_percentiles.interaction ?? 0)}</td>
+                    <td>{pct(r.axis_percentiles.payment ?? 0)}</td>
+                    <td className="wb-table-tags"><TagPills tags={r.tags} /></td>
+                  </>}
+                  {tab === 'attendance' && <>
+                    <td className="wb-th-key-val">{pct(r.axis_percentiles.attendance ?? 0)}</td>
+                    <td>{pct(r.att_rate)}</td>
+                    <td>{r.mean_lag_minutes == null ? '—' : `${r.mean_lag_minutes.toFixed(1)} 分`}</td>
+                    <td>
+                      <AttendanceBits bits={r.att_bits ?? []} sessions={sessionMeta}
+                                      att={r.att_sessions} total={sessionMeta.length} />
+                    </td>
+                  </>}
+                  {tab === 'interaction' && <>
+                    <td className="wb-th-key-val">{pct(r.axis_percentiles.interaction ?? 0)}</td>
+                    <td>{(r.msg_unique ?? 0).toLocaleString()} / {r.msg_total.toLocaleString()}</td>
+                    <td>{(r.msg_per_session ?? 0).toFixed(1)}</td>
+                    <td>{spamLabel(r.spam_level)}</td>
+                  </>}
+                  {tab === 'payment' && <>
+                    <td className="wb-th-key-val">{pct(r.axis_percentiles.payment ?? 0)}</td>
+                    <td>{r.pay_total > 0 ? `¥${r.pay_total.toLocaleString()}` : '—'}</td>
+                    <td>{r.pay_share ? `${(r.pay_share * 100).toFixed(2)}%` : '—'}</td>
+                    <td className="wb-pay-mix">{payMix(r)}</td>
+                  </>}
                 </tr>
               ))}
             </tbody>
