@@ -21,8 +21,9 @@ interface Props {
   sessions: RecentSession[]
   /** 窗口档位，默认 25 / 50 / 75 / 150 */
   grades?: number[]
-  /** 初始窗口（切换 V 时恢复上次的位置与档位；缺省 = 贴最右 + 最小档） */
-  initial?: { start: number; size: number } | null
+  /** 状态归属键（一般是主播名）：同名之间共享滑轨状态（位置/档位/缩放），
+   *  **不要**用 `key` 重挂载组件 —— 重挂载会重置缩放、且触发整块重排闪动（2026-10-25） */
+  stateKey?: string
   /** 值变化时把窗口**覆盖整段**（手选日期后自动收敛到该范围，2026-10-19 用户口径） */
   coverTick?: number
   onChange: (range: WindowRange) => void
@@ -56,16 +57,20 @@ function clampNum(v: number, lo: number, hi: number): number {
  * - **跟手系数**：带子行程 `trackW - bandW` 对应可滚范围 `innerW - clientW`
  *   ⇒ 恰好等于 `innerW / trackW`。早先用 `range / trackW` 小了一个数量级，所以「鼠标比带子快」。
  */
+/** stateKey → 滑轨状态（内存态，随页面存活） */
+const SLIDER_STATE = new Map<string, { start: number; size: number; scale: number }>()
+
 export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
-                                        initial, coverTick, onChange }: Props) {
+                                        stateKey, coverTick, onChange }: Props) {
   const total = sessions.length
   // 默认档位取**最小档**（25），位置贴**最右**（用户 2026-10-25 口径）
   const minGrade = grades[0]
   const maxGrade = grades[grades.length - 1]
-  const [size, setSize] = useState(initial?.size ?? Math.min(minGrade, total || minGrade))
+  const saved = stateKey ? SLIDER_STATE.get(stateKey) : undefined
+  const [size, setSize] = useState(saved?.size ?? Math.min(minGrade, total || minGrade))
   const [start, setStart] = useState(
-    initial?.start ?? Math.max(0, total - Math.min(minGrade, total)))
-  const [scale, setScale] = useState(1)
+    saved?.start ?? Math.max(0, total - Math.min(minGrade, total)))
+  const [scale, setScale] = useState(saved?.scale ?? 1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
@@ -134,17 +139,24 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     return () => el.removeEventListener('scroll', onScroll)
   }, [clamp])
 
-  /* 场次是异步到达的：挂载时 total 可能还是 0，此时把初始窗口"补"上去
-     （2026-10-25：否则切 V 后滑轨会退回默认位置，用户调好的窗口白丢） */
-  const appliedInitial = useRef(false)
+  /* 场次异步到达 / 换 V：按 stateKey 归位（缩放也一起恢复） */
+  const restoredKey = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (appliedInitial.current || total < 1) return
-    appliedInitial.current = true
-    const wantSize = Math.min(initial?.size ?? minGrade, total)
-    const wantStart = Math.max(0, Math.min(initial?.start ?? total - wantSize, total - wantSize))
+    if (total < 1 || !stateKey || restoredKey.current === stateKey) return
+    restoredKey.current = stateKey
+    const st = SLIDER_STATE.get(stateKey)
+    const wantSize = Math.min(st?.size ?? minGrade, total)
+    const wantStart = Math.max(0, Math.min(st?.start ?? total - wantSize, total - wantSize))
     setSize(wantSize)
     setStart(wantStart)
-  }, [initial, total, minGrade])
+    if (st?.scale) setScale(st.scale)
+  }, [stateKey, total, minGrade])
+
+  /* 任何变动都写回缓存（切走再回来原样恢复） */
+  useEffect(() => {
+    if (!stateKey || total < 1) return
+    SLIDER_STATE.set(stateKey, { start, size, scale })
+  }, [stateKey, start, size, scale, total])
 
   /* 换档时把窗口居中 */
   useEffect(() => {

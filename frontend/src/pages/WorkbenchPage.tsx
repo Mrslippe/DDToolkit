@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronUp } from 'lucide-react'
 import { api } from '../api/api'
@@ -35,9 +35,6 @@ import '../styles/workbench.css'
  * 只存内存：重启应用即清空 —— 数据更新后不会残留过期结果。
  */
 interface VPageState {
-  /** 窗口在滑轨里的**下标**（不是日期）：日期由各自 V 的场次决定，跨 V 存日期必然错位 */
-  start: number
-  size: number
   tab: ResultTab
   ranked: FanRanked | null
   rows: FanRankedRow[]
@@ -163,15 +160,13 @@ export default function WorkbenchPage() {
   // 2) 换主播 ⇒ 重新取热力图与滑杆数据（模块没开时一个 /fan 端点都不许打）
   /* 切 V：先把上一个 V 的状态存起来，再恢复目标 V 的（2026-10-25） */
   const prevPicked = useRef<string | null>(null)
-  useEffect(() => {
+  // 用 layoutEffect：状态在**绘制前**就位，避免"先空一帧再填回来"的闪动
+  useLayoutEffect(() => {
     if (!picked) return
     const prev = prevPicked.current
     if (prev && prev !== picked) {
       // 存下标：日期区间依赖各 V 自己的场次列表，跨 V 互相套会错位
-      V_STATE.set(prev, {
-        start: win?.start ?? 0, size: win?.size ?? 25,
-        tab, ranked, rows, hasMore, tagFilter,
-      })
+      V_STATE.set(prev, { tab, ranked, rows, hasMore, tagFilter })
     }
     prevPicked.current = picked
     LAST_PICKED = picked
@@ -420,7 +415,7 @@ export default function WorkbenchPage() {
                            setPickedRange(null)
                          }} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow}
-                              key={picked} initial={V_STATE.get(picked) ? { start: V_STATE.get(picked)!.start, size: V_STATE.get(picked)!.size } : null} coverTick={coverTick} />
+                              stateKey={picked} coverTick={coverTick} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">

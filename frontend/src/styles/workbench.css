@@ -1937,3 +1937,6 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 收入占比（付费细节列的辅助信息） */
 .wb-pay-share { color: var(--c-primary-deep); font-size: 11.5px; }
+
+/* 结果区出现/消失会切换滚动条，导致整页宽度跳动 —— 预留滚动条槽位（2026-10-25） */
+.wb-page { scrollbar-gutter: stable; }
