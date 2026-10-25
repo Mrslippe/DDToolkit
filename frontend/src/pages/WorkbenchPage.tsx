@@ -27,6 +27,23 @@ import WindowSlider, { type WindowRange } from '../components/workbench/WindowSl
 import { withNetRetry } from '../utils/netRetry'
 import '../styles/workbench.css'
 
+/**
+ * 每个主播的页面状态缓存（2026-10-25，内存态）。
+ *
+ * 为什么要它：切到别的 V 再切回来，窗口位置/档位、页签、已加载名单都会被重置，
+ * 用户得重新摆一遍。这里按 V 记下来，切回来原地恢复。
+ * 只存内存：重启应用即清空 —— 数据更新后不会残留过期结果。
+ */
+interface VPageState {
+  win: WindowRange | null
+  tab: ResultTab
+  ranked: FanRanked | null
+  rows: FanRankedRow[]
+  hasMore: boolean
+  tagFilter: string[]
+}
+const V_STATE = new Map<string, VPageState>()
+
 /** 名单每页条数（图看全池，名单分页 —— 2026-10-23） */
 const PAGE = 20
 /** 页签 → 后端排序口径 */
@@ -128,6 +145,26 @@ export default function WorkbenchPage() {
   }, [])
 
   // 2) 换主播 ⇒ 重新取热力图与滑杆数据（模块没开时一个 /fan 端点都不许打）
+  /* 切 V：先把上一个 V 的状态存起来，再恢复目标 V 的（2026-10-25） */
+  const prevPicked = useRef<string | null>(null)
+  useEffect(() => {
+    const prev = prevPicked.current
+    if (prev && prev !== picked) {
+      V_STATE.set(prev, { win, tab, ranked, rows, hasMore, tagFilter })
+    }
+    prevPicked.current = picked
+    const saved = picked ? V_STATE.get(picked) : undefined
+    if (saved) {
+      setWin(saved.win)
+      setTab(saved.tab)
+      setRanked(saved.ranked)
+      setRows(saved.rows)
+      setHasMore(saved.hasMore)
+      setTagFilter(saved.tagFilter)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked])
+
   useEffect(() => {
     if (enabled !== true || !picked) return
     let alive = true
@@ -355,7 +392,7 @@ export default function WorkbenchPage() {
                            setPickedRange(null)
                          }} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow}
-                              coverTick={coverTick} />
+                              key={picked} initial={V_STATE.get(picked)?.win ?? null} coverTick={coverTick} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">

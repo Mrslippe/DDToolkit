@@ -19,8 +19,10 @@ export interface WindowRange {
 
 interface Props {
   sessions: RecentSession[]
-  /** 窗口档位，默认 25 / 50 / 75 */
+  /** 窗口档位，默认 25 / 50 / 75 / 150 */
   grades?: number[]
+  /** 初始窗口（切换 V 时恢复上次的位置与档位；缺省 = 贴最右 + 最小档） */
+  initial?: { start: number; size: number } | null
   /** 值变化时把窗口**覆盖整段**（手选日期后自动收敛到该范围，2026-10-19 用户口径） */
   coverTick?: number
   onChange: (range: WindowRange) => void
@@ -54,12 +56,15 @@ function clampNum(v: number, lo: number, hi: number): number {
  * - **跟手系数**：带子行程 `trackW - bandW` 对应可滚范围 `innerW - clientW`
  *   ⇒ 恰好等于 `innerW / trackW`。早先用 `range / trackW` 小了一个数量级，所以「鼠标比带子快」。
  */
-export default function WindowSlider({ sessions, grades = [25, 50, 75],
-                                        coverTick, onChange }: Props) {
+export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
+                                        initial, coverTick, onChange }: Props) {
   const total = sessions.length
+  // 默认档位取**最小档**（25），位置贴**最右**（用户 2026-10-25 口径）
+  const minGrade = grades[0]
   const maxGrade = grades[grades.length - 1]
-  const [size, setSize] = useState(Math.min(maxGrade, total))
-  const [start, setStart] = useState(Math.max(0, total - Math.min(maxGrade, total)))
+  const [size, setSize] = useState(initial?.size ?? Math.min(minGrade, total || minGrade))
+  const [start, setStart] = useState(
+    initial?.start ?? Math.max(0, total - Math.min(minGrade, total)))
   const [scale, setScale] = useState(1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)

@@ -104,10 +104,10 @@ SORT_BY = (SORT_BY_STRENGTH,) + SORT_BY_AXES + CRITERIA
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 5000
 MIN_WINDOW = 5
-MAX_WINDOW = 200
+MAX_WINDOW = 5000   # 用户 2026-10-25：取消场次上限，可到全部历史
 DEFAULT_WINDOW = 75
 #: 滑杆取最近多少场（用户口径：总量上限 400 场，2026-10-18）
-ACTIVITY_LIMIT = 400
+ACTIVITY_LIMIT = 2000  # 滑轨可取到的历史场次上限（配合“不设限”）
 #: L6 滑动窗的默认参数（与 `timeline` 模块的常量同源）
 TIMELINE_SIZE = 25
 TIMELINE_STEP = 10
@@ -152,7 +152,13 @@ def require_module(db: Session = Depends(get_db)) -> None:
 
 
 def _resolve(vtuber_name: str, db: Session | None = None):
-    """按名字/简称/mid 取 V。清单是**动态的**（来自库里的 B 站账号），不是硬编码三个样本。"""
+    """按名字/简称/mid 取 V。清单是**动态的**（来自库里的 B 站账号），不是硬编码三个样本。
+
+    ⚠️ `db` 缺省时必须回落到**当前请求**的会话（`require_module` 写进 `_LAST_DB`）：
+    否则 `get_vtuber` 只看三个开发样本，症状是「未知的主播：'七海Nana7mi'；
+    可用：['弥月Mizuki','明前奶绿','星瞳_Official']」—— 库里有这个 V 却报不认识。
+    """
+    db = db or _LAST_DB.get("db")
     try:
         return get_vtuber(vtuber_name, db)
     except FanDataError as exc:
@@ -953,7 +959,7 @@ def _as_utc(v: object) -> datetime | None:
 @router.get("/fan/{vtuber}/activity")
 def fan_activity(
     vtuber: str,
-    limit: int = Query(ACTIVITY_LIMIT, ge=25, le=500,
+    limit: int = Query(ACTIVITY_LIMIT, ge=25, le=5000,
                        description="滑杆取最近多少场（用户口径上限 150）"),
     since: str | None = Query(None, description="滑轨区间的起点 YYYY-MM-DD（含）"),
     until: str | None = Query(None, description="滑轨区间的终点 YYYY-MM-DD（含）"),
