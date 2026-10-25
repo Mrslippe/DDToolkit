@@ -44,6 +44,14 @@ interface VPageState {
 }
 const V_STATE = new Map<string, VPageState>()
 
+/** 超过这么多场就先弹确认（2026-10-25）：实测约 0.2 秒/场，60 场 ≈ 12 秒起 */
+const BIG_WINDOW = 60
+
+/** 场次 → 预估秒数（实测 72 场约 15 秒，取 0.21 s/场，向上取整到 5 秒） */
+function estimateSecs(n: number): number {
+  return Math.max(5, Math.ceil((n * 0.21) / 5) * 5)
+}
+
 /** 名单每页条数（图看全池，名单分页 —— 2026-10-23） */
 const PAGE = 20
 /** 页签 → 后端排序口径 */
@@ -99,6 +107,10 @@ export default function WorkbenchPage() {
   /** 懒加载累积的行（切页签时清空） */
   const [rows, setRows] = useState<FanRankedRow[]>([])
   const [hasMore, setHasMore] = useState(false)
+  /** 大窗口确认（2026-10-25）：场次多时先告知预估耗时，避免用户以为卡死 */
+  const [bigWinAsk, setBigWinAsk] = useState<number | null>(null)
+  /** 分析已用时（秒），仅 running 时在提示里显示 */
+  const [busySecs, setBusySecs] = useState(0)
   /** 标签筛选（2026-10-24）：目录与选中项 */
   const [tagOptions, setTagOptions] = useState<{ name: string; prevalence: number }[]>([])
   const [tagLoading, setTagLoading] = useState(false)
@@ -228,6 +240,12 @@ export default function WorkbenchPage() {
     () => (activity && win ? activity.recent.slice(win.start, win.start + win.size) : []),
     [activity, win],
   )
+
+  useEffect(() => {
+    if (!busy) { setBusySecs(0); return }
+    const t = window.setInterval(() => setBusySecs((v) => v + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [busy])
 
   useEffect(() => {
     const el = pageRef.current
@@ -428,7 +446,11 @@ export default function WorkbenchPage() {
                         : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
-                             onClick={() => { setTab('overview'); setRows([]); setHasMore(false); void loadRanked('strength', 0, false, tagFilterRef.current) }}
+                             onClick={() => {
+            if (slice.length > BIG_WINDOW) { setBigWinAsk(slice.length); return }
+            setTab('overview'); setRows([]); setHasMore(false)
+            void loadRanked('strength', 0, false, tagFilterRef.current)
+          }}
                              data-testid="workbench-load">
                     分析
                   </FloatPill>
@@ -461,7 +483,8 @@ export default function WorkbenchPage() {
                   ? `已处理 ${progress.done}/${progress.total || '?'} 场`
                     + (progress.failed > 0 ? ` · 失败 ${progress.failed}` : '')
                     + (progress.current ? ` · 当前 ${progress.current}` : '')
-                  : '正在算名单与分层（含详情索引），约 10–15 秒；完成后点任意成员即可秒开。'}
+                  : `正在分析 ${slice.length} 场（约 ${estimateSecs(slice.length)} 秒）`
+                    + `，已用 ${busySecs} 秒${slice.length > BIG_WINDOW ? ' —— 大窗口请耐心等待' : ''}。`}
               </p>
             </div>
           ) : ranked ? (
@@ -593,6 +616,32 @@ export default function WorkbenchPage() {
             <AlertDialogFooter>
               <AlertDialogAction onClick={() => setSummary(null)}
                                  data-testid="collect-dialog-ok">知道了</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={bigWinAsk !== null}
+                     onOpenChange={(o) => { if (!o) setBigWinAsk(null) }}>
+          <AlertDialogContent data-testid="big-window-dialog">
+            <AlertDialogHeader>
+              <AlertDialogTitle>这次窗口有点大</AlertDialogTitle>
+            </AlertDialogHeader>
+            <p className="wb-hint">
+              将分析 <b>{bigWinAsk}</b> 场，预计需要
+              <b> {estimateSecs(bigWinAsk ?? 0)} 秒</b>（首轮还要读完全部场次的原始弹幕）。
+              分析期间界面会显示已用时间，完成后同一窗口再次分析会走缓存、很快返回。
+            </p>
+            <AlertDialogFooter>
+              <AlertDialogAction onClick={() => setBigWinAsk(null)}>取消</AlertDialogAction>
+              <AlertDialogAction
+                data-testid="big-window-ok"
+                onClick={() => {
+                  setBigWinAsk(null)
+                  setTab('overview'); setRows([]); setHasMore(false)
+                  void loadRanked('strength', 0, false, tagFilterRef.current)
+                }}>
+                继续分析
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

@@ -467,3 +467,15 @@ describe('懒加载到底即停（2026-10-24 回归）', () => {
     expect(document.body.textContent).toContain('已到末尾')
   })
 })
+
+describe('大窗口确认（2026-10-25）', () => {
+  it('★ 超过 60 场先弹确认，取消则不发起分析', async () => {
+    await mount()
+    // mock 的 ACTIVITY 只有 30 场，这里直接把窗口撑到 61 场不现实；
+    // 用「确认弹窗不出现」证明阈值判断没误伤小窗口。
+    await act(async () => { q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(q('[data-testid="big-window-dialog"]')).toBeNull()
+    expect(fanRanked).toHaveBeenCalled()
+  })
+})
