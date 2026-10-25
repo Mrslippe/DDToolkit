@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 interface Props {
   /** 窗口内逐场是否出席（1=出席），顺序与窗口场次一致 */
@@ -28,12 +29,24 @@ const HIDE_DELAY = 120
  */
 export default function AttendanceBits({ bits, sessions, att, total }: Props) {
   const [open, setOpen] = useState(false)
+  /** 浮层用 portal 渲染到 body：表格单元格是 `overflow: hidden`（还有横向滚动容器），
+   *  就地绝对定位一定会被裁掉 —— 表现为"hover 什么都不出现"（2026-10-25 用户报）。 */
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const grid = useRef<HTMLSpanElement | null>(null)
   const timer = useRef<number | null>(null)
 
   const cancel = () => {
     if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null }
   }
-  const show = () => { cancel(); setOpen(true) }
+  const show = () => {
+    cancel()
+    const el = grid.current
+    if (el) {
+      const r = el.getBoundingClientRect()
+      setPos({ x: r.left, y: r.bottom + 8 })
+    }
+    setOpen(true)
+  }
   const hide = () => { cancel(); timer.current = window.setTimeout(() => setOpen(false), HIDE_DELAY) }
 
   useEffect(() => cancel, [])
@@ -52,17 +65,20 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
 
   return (
     <span className="wb-bits" onMouseEnter={show} onMouseLeave={hide}>
-      <span className="wb-bits-grid" aria-label={`出席 ${att}/${total} 场`}>
+      <span className="wb-bits-grid" ref={grid} aria-label={`出席 ${att}/${total} 场`}>
         {head.map(cell)}
       </span>
 
-      {open && (
-        <span className="wb-bits-pop" role="tooltip">
+      {open && pos && createPortal(
+        <span className="wb-bits-pop" role="tooltip"
+              style={{ left: pos.x, top: pos.y }}
+              onMouseEnter={cancel} onMouseLeave={hide}>
           <span className="wb-bits-pop-head">出席 {att}/{total} 场</span>
           <span className="wb-bits-grid is-pop">
             {bits.map(cell)}
           </span>
-        </span>
+        </span>,
+        document.body,
       )}
     </span>
   )

@@ -2007,3 +2007,10 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 名单表格：宽度只在**表格内部**滚动，页面宽度不受影响（2026-10-25） */
 .wb-table-wrap { scrollbar-gutter: stable; }
+
+/* 浮层用 portal 挂到 body，定位改 fixed（脱离表格的 overflow 裁剪） */
+.wb-bits-pop {
+  position: fixed;
+  margin-top: 0;
+  z-index: 70;
+}
