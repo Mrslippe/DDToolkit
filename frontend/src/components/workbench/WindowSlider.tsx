@@ -134,6 +134,18 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     return () => el.removeEventListener('scroll', onScroll)
   }, [clamp])
 
+  /* 场次是异步到达的：挂载时 total 可能还是 0，此时把初始窗口"补"上去
+     （2026-10-25：否则切 V 后滑轨会退回默认位置，用户调好的窗口白丢） */
+  const appliedInitial = useRef(false)
+  useEffect(() => {
+    if (appliedInitial.current || total < 1) return
+    appliedInitial.current = true
+    const wantSize = Math.min(initial?.size ?? minGrade, total)
+    const wantStart = Math.max(0, Math.min(initial?.start ?? total - wantSize, total - wantSize))
+    setSize(wantSize)
+    setStart(wantStart)
+  }, [initial, total, minGrade])
+
   /* 换档时把窗口居中 */
   useEffect(() => {
     const el = scrollRef.current

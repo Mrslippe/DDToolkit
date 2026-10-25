@@ -35,7 +35,9 @@ import '../styles/workbench.css'
  * 只存内存：重启应用即清空 —— 数据更新后不会残留过期结果。
  */
 interface VPageState {
-  win: WindowRange | null
+  /** 窗口在滑轨里的**下标**（不是日期）：日期由各自 V 的场次决定，跨 V 存日期必然错位 */
+  start: number
+  size: number
   tab: ResultTab
   ranked: FanRanked | null
   rows: FanRankedRow[]
@@ -43,6 +45,8 @@ interface VPageState {
   tagFilter: string[]
 }
 const V_STATE = new Map<string, VPageState>()
+/** 上次查看的主播：切到别的页面再回来，应回到同一个 V（2026-10-25） */
+let LAST_PICKED = ''
 
 /** 超过这么多场就先弹确认（2026-10-25）：实测约 0.2 秒/场，60 场 ≈ 12 秒起 */
 const BIG_WINDOW = 60
@@ -97,7 +101,7 @@ function friendly(e: Error): string {
 export default function WorkbenchPage() {
   const [enabled, setEnabled] = useState<boolean | null>(null)
   const [vtubers, setVtubers] = useState<FanVtuber[]>([])
-  const [picked, setPicked] = useState<string>('')
+  const [picked, setPicked] = useState<string>(LAST_PICKED)
   const [activity, setActivity] = useState<FanActivity | null>(null)
   const [win, setWin] = useState<WindowRange | null>(null)
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
@@ -160,20 +164,26 @@ export default function WorkbenchPage() {
   /* 切 V：先把上一个 V 的状态存起来，再恢复目标 V 的（2026-10-25） */
   const prevPicked = useRef<string | null>(null)
   useEffect(() => {
+    if (!picked) return
     const prev = prevPicked.current
     if (prev && prev !== picked) {
-      V_STATE.set(prev, { win, tab, ranked, rows, hasMore, tagFilter })
+      // 存下标：日期区间依赖各 V 自己的场次列表，跨 V 互相套会错位
+      V_STATE.set(prev, {
+        start: win?.start ?? 0, size: win?.size ?? 25,
+        tab, ranked, rows, hasMore, tagFilter,
+      })
     }
     prevPicked.current = picked
-    const saved = picked ? V_STATE.get(picked) : undefined
-    if (saved) {
-      setWin(saved.win)
-      setTab(saved.tab)
-      setRanked(saved.ranked)
-      setRows(saved.rows)
-      setHasMore(saved.hasMore)
-      setTagFilter(saved.tagFilter)
-    }
+    LAST_PICKED = picked
+
+    const saved = V_STATE.get(picked)
+    // 没分析过就**空置**：不能把上一个 V 的结果留在屏幕上（2026-10-25 用户口径）
+    setTab(saved?.tab ?? 'overview')
+    setRanked(saved?.ranked ?? null)
+    setRows(saved?.rows ?? [])
+    setHasMore(saved?.hasMore ?? false)
+    setTagFilter(saved?.tagFilter ?? [])
+    setWin(null)          // 交给滑轨按 saved.start/size 重新 emit 正确日期
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked])
 
@@ -410,7 +420,7 @@ export default function WorkbenchPage() {
                            setPickedRange(null)
                          }} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow}
-                              key={picked} initial={V_STATE.get(picked)?.win ?? null} coverTick={coverTick} />
+                              key={picked} initial={V_STATE.get(picked) ? { start: V_STATE.get(picked)!.start, size: V_STATE.get(picked)!.size } : null} coverTick={coverTick} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">
