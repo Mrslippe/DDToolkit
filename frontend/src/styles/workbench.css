@@ -1965,24 +1965,7 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 .wb-bits-empty { color: var(--c-text-sub); }
 
-.wb-bits-pop {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 40;
-  margin-top: 8px;
-  padding: 10px 12px;
-  background: #fff;
-  border-radius: var(--pcard-radius-inner);
-  box-shadow: var(--pcard-shadow);
-}
-
-.wb-bits-pop-head {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: var(--c-text-sub);
-}
+/* 浮层（唯一一份定义；见下方 `position: fixed` 的那条，这里只留外观） */
 
 /* 高亮当前页签的关键指标列 */
 .wb-th-key { color: var(--c-primary-deep); }
@@ -2003,6 +1986,25 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 /* 浮层用 portal 挂到 body，定位改 fixed（脱离表格的 overflow 裁剪） */
 .wb-bits-pop {
   position: fixed;
-  margin-top: 0;
+  margin: 0;
+  padding: 8px;              /* 必须是 8：定位按 -8px 补偿，格子才能严格重合 */
+  box-sizing: border-box;
+  background: #fff;
+  border-radius: var(--pcard-radius-inner);
+  box-shadow: var(--pcard-shadow);
   z-index: 70;
+  transform-origin: top left;
+  animation: wb-bits-in 140ms ease-out both;
+}
+
+.wb-bits-pop.is-closing { animation: wb-bits-out 120ms ease-in both; }
+
+@keyframes wb-bits-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes wb-bits-out {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.96); }
 }

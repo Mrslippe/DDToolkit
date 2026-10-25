@@ -17,6 +17,10 @@ const COLS = 20
 const ROWS = 2
 /** 鼠标离开后的收起延迟（斜向移入浮层时不要闪掉） */
 const HIDE_DELAY = 120
+/** 退场动画时长（与 CSS 的 `wb-bits-out` 一致） */
+const EXIT_MS = 120
+/** 浮层内边距：定位时按它做补偿，CSS 里必须同为 8px（严格逐格对齐的前提） */
+const PAD = 8
 
 /**
  * 出席明细图（2026-10-25 定稿）。
@@ -29,6 +33,8 @@ const HIDE_DELAY = 120
  */
 export default function AttendanceBits({ bits, sessions, att, total }: Props) {
   const [open, setOpen] = useState(false)
+  /** 正在播退场动画：先保留挂载，动画结束再卸载 */
+  const [closing, setClosing] = useState(false)
   /** 浮层用 portal 渲染到 body：表格单元格是 `overflow: hidden`（还有横向滚动容器），
    *  就地绝对定位一定会被裁掉 —— 表现为"hover 什么都不出现"（2026-10-25 用户报）。 */
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
@@ -40,17 +46,24 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
   }
   const show = () => {
     cancel()
+    setClosing(false)
     const el = grid.current
     if (el) {
       const r = el.getBoundingClientRect()
       // 浮层与方块区**同原点**：20 列 × 14px + 6px 间距两边完全一致，
       // 于是浮层里的第 N 格恰好压在表里的第 N 格上（"放大镜"式一一重叠，2026-10-25 用户定）。
       // 浮层自身有 8px 内边距，所以整体左上各减 8，让格子而不是卡片边缘对齐。
-      setPos({ x: r.left - 8, y: r.top - 8 })
+      setPos({ x: r.left - PAD, y: r.top - PAD })
     }
     setOpen(true)
   }
-  const hide = () => { cancel(); timer.current = window.setTimeout(() => setOpen(false), HIDE_DELAY) }
+  const hide = () => {
+    cancel()
+    timer.current = window.setTimeout(() => {
+      setClosing(true)
+      timer.current = window.setTimeout(() => { setOpen(false); setClosing(false) }, EXIT_MS)
+    }, HIDE_DELAY)
+  }
 
   useEffect(() => cancel, [])
 
@@ -73,7 +86,7 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
       </span>
 
       {open && pos && createPortal(
-        <span className="wb-bits-pop" role="tooltip"
+        <span className={`wb-bits-pop${closing ? ' is-closing' : ''}`} role="tooltip"
               style={{ left: pos.x, top: pos.y }}
               onMouseEnter={cancel} onMouseLeave={hide}>
           <span className="wb-bits-grid is-pop">
