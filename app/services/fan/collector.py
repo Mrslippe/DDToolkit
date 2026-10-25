@@ -374,6 +374,33 @@ def aggregate(records: list[dict], *,
 
     #: 系统消息（uId <= 0）：只留 type + 时间戳，用于判定下播时刻（最多 200 条）
     sys_events: list[dict] = []
+    # ── 有效窗口（2026-10-26）────────────────────────────────────────────
+    # `live_id` 会被多场直播复用、平台 `start_at` 也可能早于真实开播。
+    # 以后采集时**先算窗口再过滤记录**：优先 sys 的"直播开始/结束"，其次平台跨度，
+    # 最后才回退到事件跨度。这样 raw/stats 天生就只含这一场的内容。
+    sys_start = sys_end = None
+    for rec in records:
+        if str(rec.get("type")) in ("11", "12"):
+            _ts = rec.get("ts") or rec.get("timestamp")
+            if isinstance(_ts, (int, float)):
+                if str(rec.get("type")) == "11":
+                    sys_start = _ts if sys_start is None else min(sys_start, _ts)
+                else:
+                    sys_end = _ts if sys_end is None else max(sys_end, _ts)
+    if sys_start and sys_end:
+        eff_lo, eff_hi = sys_start, sys_end
+    elif span_ms:
+        eff_lo, eff_hi = span_ms[0], span_ms[1]
+    else:
+        eff_lo, eff_hi = None, None
+    if eff_lo is not None and eff_hi is not None and eff_hi > eff_lo:
+        pad = 60_000
+        kept = [r for r in records
+                if isinstance(r.get("ts"), (int, float))
+                and eff_lo - pad <= r["ts"] <= eff_hi + pad]
+        if kept:
+            records = kept
+
     for rec in records:
         t = rec.get("type")
         type_hist[str(t)] = type_hist.get(str(t), 0) + 1
@@ -483,6 +510,10 @@ def aggregate(records: list[dict], *,
     _uniq_total = sum(int(u["uniq"]) for u in raw.values())
     stats = {
         "start_at": start_iso,
+        #: sys 事件（type 11/12）标定的真实开播/结束（毫秒）；没有则为 None。
+        #: 以后排查"start_at 记早了"直接看它，不用再翻 raw。
+        "sys_start_ms": sys_start,
+        "sys_end_ms": sys_end,
         "end_at": end_iso,
         "records": len(records),
         "distinct_uids": len(raw),

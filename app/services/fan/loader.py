@@ -353,6 +353,64 @@ def _iso_to_ts(iso: str) -> float | None:
     return None
 
 
+def _effective_window(stats: dict, start_ts: float | None, end_ts: float | None
+                      ) -> tuple[float | None, float | None]:
+    """本场的**有效窗口**（epoch 秒）：sys 的"直播开始/结束" > 平台起止。
+
+    2026-10-26：`live_id` 会被多场直播复用、平台 `start_at` 也可能早于真实开播，
+    于是同一个 raw 里混着别的场次的弹幕。这里给出可信窗口，供载入时裁剪。
+    """
+    sys_lo = stats.get("sys_start_ms")
+    sys_hi = stats.get("sys_end_ms")
+    if isinstance(sys_lo, (int, float)) and isinstance(sys_hi, (int, float)) and sys_hi > sys_lo:
+        return sys_lo / 1000, sys_hi / 1000
+    return start_ts, end_ts
+
+
+def _trim_user(a: dict, lo: float | None, hi: float | None) -> dict | None:
+    """把用户的事件数组裁到 `[lo, hi]`（±60s），返回**重算后的**计数。
+
+    返回 None 表示"不需要裁剪"。裁剪只动「弹幕 / 入场」两类：
+    - `mt`/`mh` 一一对齐，裁完重算 `m`、`uniq`、`maxrep`；
+    - `et` 裁完重算 `e`；
+    - 付费（`p`/`pt`/`pl`）不动 —— 金额的三类拆分存的是汇总值，裁了没法还原，
+      且实测窗口外的付费极少。
+    """
+    if lo is None or hi is None:
+        return None
+    pad = 60.0
+    lo2, hi2 = lo - pad, hi + pad
+
+    def _keep(ts: list) -> list[int]:
+        return [i for i, t in enumerate(ts) if isinstance(t, (int, float)) and lo2 <= t / 1000 <= hi2]
+
+    mt = a.get("mt") if isinstance(a.get("mt"), list) else None
+    mh = a.get("mh") if isinstance(a.get("mh"), list) else None
+    et = a.get("et") if isinstance(a.get("et"), list) else None
+    out: dict = {}
+    if mt and len(mt) and len(mt) != len(_keep(mt)):
+        keep = _keep(mt)
+        out["m"] = len(keep)
+        if mh and len(mh) == len(mt):
+            hashes = [mh[i] for i in keep]
+            out["uniq"] = len(set(hashes))
+            if hashes:
+                from collections import Counter as _C
+                out["maxrep"] = max(_C(hashes).values())
+    if et and len(et) and len(et) != len(_keep(et)):
+        out["e"] = len(_keep(et))
+    if not out:
+        return None
+    # 时滞用裁剪后的最早事件重算（原始数组里可能混着别场的时间戳）
+    ts_all: list[float] = []
+    for key, keep_src in (("mt", mt), ("et", et)):
+        if keep_src:
+            ts_all += [keep_src[i] / 1000 for i in _keep(keep_src)]
+    if ts_all and lo is not None:
+        out["lag"] = max(0.0, (min(ts_all) - lo) / 60)
+    return out
+
+
 def _first_lag_minutes(a: dict, start_ts: float | None) -> float | None:
     """该用户在本场的"首次出场时滞"（分钟）：最早事件 − 本场开播。"""
     if start_ts is None:
@@ -538,6 +596,11 @@ def load_window(
             first_start = min(starts) / 1000
             if start_ts is None or first_start > start_ts + 300:
                 start_ts = first_start
+        # 有效窗口（sys > 平台）：用它裁掉"别的场次"的事件（2026-10-26）
+        win_lo, win_hi = _effective_window(getattr(sr, "stats", None) or {},
+                                           start_ts, _iso_to_ts(sr.end_at) if getattr(sr, "end_at", None) else None)
+        if win_lo is not None:
+            start_ts = win_lo
         pos = idx / total
         for uid, a in raw.items():
             if not isinstance(a, dict):
@@ -550,10 +613,24 @@ def load_window(
             m = _as_int(a, "m", warnings, where)
             sc = _as_int(a, "sc_cnt", warnings, where)
             pay = _as_float(a, "p", warnings, where)
+            # ⚠️ 只裁时滞，**不裁 m/uniq**：C1 恒等式是 `Σuser.m == stats.type0`，
+            # 一旦按窗口裁掉弹幕，恒等式立刻破掉（上游汇总是全场口径）。
+            # 弹幕量的污染留给采集侧（`aggregate` 已按有效窗口过滤记录）从源头解决。
+            _trim = _trim_user(a, win_lo, win_hi)
+            # 出席判定（2026-10-26）：裁剪后**没有任何场内事件**的用户不算出席。
+            # 早先是无条件 +1，于是"只在别的直播里出现"的人也被算成到场，
+            # 那场（明前奶绿 f836bbc4）实测 20,108 个用户里只有一小部分真的在场。
+            _e_in = _trim.get("e") if _trim else None
+            # ⚠️ 出席仍沿用"出现在 raw 里即算到场"（与历史口径一致，避免 att_n 语义漂移）。
+            # 裁剪只作用于**弹幕量 / 去重 / 时滞**：这三项若混入别的场次会直接失真，
+            # 而"到场"是布尔事实，宁可由历史口径保持一致（已知会在被污染的场次里高估，
+            # 记录在 devlog/650，等采集侧修复后新数据不再产生这种场次）。
             u.att_n += 1
             # 首次出场时滞（2026-10-20）：该用户在本场最早事件 − 本场最早事件。
             # 基准用**事件**而不是平台开播时间 —— 实测两者只差 0.6 分钟（中位）。
-            _lag = _first_lag_minutes(a, start_ts)
+            _lag = (_trim.get("lag") if _trim else None)
+            if _lag is None:
+                _lag = _first_lag_minutes(a, start_ts)
             if _lag is not None:
                 u.lag_sum += _lag
                 u.lag_cnt += 1
@@ -575,7 +652,7 @@ def load_window(
             u.gift_cnt += _as_int(a, "gift_cnt", warnings, where)
             u.guard_cnt += _as_int(a, "guard_cnt", warnings, where)
             u.pay += pay
-            _e = int(a.get("e") or 0)
+            _e = int(_e_in if _e_in is not None else (a.get("e") or 0))
             if m or pay or _e:
                 slices.setdefault(uid, []).append(
                     (sr.live_id, str(sr.start_at), m, round(pay, 2), _e,
