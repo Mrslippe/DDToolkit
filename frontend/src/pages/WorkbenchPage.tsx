@@ -100,6 +100,8 @@ export default function WorkbenchPage() {
   const [vtubers, setVtubers] = useState<FanVtuber[]>([])
   const [picked, setPicked] = useState<string>(LAST_PICKED)
   const [activity, setActivity] = useState<FanActivity | null>(null)
+  /** `activity` 属于哪个 V：切换 V 的过渡帧里滑轨不能按新 key 读写缓存 */
+  const [activityOwner, setActivityOwner] = useState<string>('')
   const [win, setWin] = useState<WindowRange | null>(null)
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
   const [progress, setProgress] = useState<FanCollectProgress | null>(null)
@@ -194,7 +196,7 @@ export default function WorkbenchPage() {
     setProgress(null)
     setRankedStale(true)          // 旧结果保留，但标注"基于旧区间"
     withNetRetry(() => api.fanActivity(picked, 400, { since: range.from, until: range.to }))
-      .then((r) => { if (alive) setActivity(r) })
+      .then((r) => { if (alive) { setActivity(r); setActivityOwner(picked) } })
       .catch((e: Error) => { if (alive) setErr(friendly(e)) })
     return () => { alive = false }
   }, [enabled, picked, range.from, range.to])
@@ -415,7 +417,7 @@ export default function WorkbenchPage() {
                            setPickedRange(null)
                          }} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow}
-                              stateKey={picked} coverTick={coverTick} />
+                              stateKey={picked} dataOwner={activityOwner} coverTick={coverTick} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">

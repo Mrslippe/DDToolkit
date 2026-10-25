@@ -24,6 +24,10 @@ interface Props {
   /** 状态归属键（一般是主播名）：同名之间共享滑轨状态（位置/档位/缩放），
    *  **不要**用 `key` 重挂载组件 —— 重挂载会重置缩放、且触发整块重排闪动（2026-10-25） */
   stateKey?: string
+  /** 当前 `sessions` 属于哪个 V（由父级在**取数成功时**写入）。
+   *  切换 V 的过渡帧里，滑轨仍是旧数据但 stateKey 已经换了 —— 必须靠它挡住，
+   *  否则会把这个"错配位置"写进新 V 的缓存（2026-10-25 菜菜子那类少场次 V 触发） */
+  dataOwner?: string
   /** 值变化时把窗口**覆盖整段**（手选日期后自动收敛到该范围，2026-10-19 用户口径） */
   coverTick?: number
   onChange: (range: WindowRange) => void
@@ -68,7 +72,9 @@ function clampNum(v: number, lo: number, hi: number): number {
 const SLIDER_STATE = new Map<string, { pos: number; size: number; scale: number }>()
 
 export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
-                                        stateKey, coverTick, onChange }: Props) {
+                                        stateKey, dataOwner, coverTick, onChange }: Props) {
+  /** 数据与 key 是否配套（不配套时既不恢复也不回写） */
+  const owned = !stateKey || !dataOwner || dataOwner === stateKey
   const total = sessions.length
   // 默认档位取**最小档**（25），位置贴**最右**（用户 2026-10-25 口径）
   const minGrade = grades[0]
@@ -154,7 +160,7 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
   /* 场次异步到达 / 换 V：按 stateKey 归位（缩放也一起恢复） */
   const restoredKey = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (total < 1 || !stateKey || restoredKey.current === stateKey) return
+    if (total < 1 || !stateKey || !owned || restoredKey.current === stateKey) return
     restoredKey.current = stateKey
     restoring.current = true
     const st = SLIDER_STATE.get(stateKey)
@@ -168,14 +174,16 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     if (st?.scale) setScale(st.scale)
     // 等本轮渲染与 clamp 跑完再放开回写
     requestAnimationFrame(() => { restoring.current = false })
-  }, [stateKey, total, minGrade])
+  }, [stateKey, dataOwner, owned, total, minGrade])
 
   /* 任何变动都写回缓存（位置存**相对比例**，切走再回来原样恢复） */
   useEffect(() => {
-    if (!stateKey || total < 1 || restoring.current) return
-    const span = Math.max(1, total - size)
-    SLIDER_STATE.set(stateKey, { pos: Math.min(1, Math.max(0, start / span)), size, scale })
-  }, [stateKey, start, size, scale, total])
+    if (!stateKey || !owned || total < 1 || restoring.current) return
+    const span = total - size
+    // 窗口比总场次还大（少场次 V）：位置无意义，固定记 1（贴右），避免污染
+    const pos = span <= 0 ? 1 : Math.min(1, Math.max(0, start / span))
+    SLIDER_STATE.set(stateKey, { pos, size, scale })
+  }, [stateKey, dataOwner, owned, start, size, scale, total])
 
   /* 换档时把窗口居中 */
   useEffect(() => {
