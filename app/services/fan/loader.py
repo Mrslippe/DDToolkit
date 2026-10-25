@@ -526,6 +526,18 @@ def load_window(
             continue
         ok.append(sr)
         start_ts = _iso_to_ts(sr.start_at)
+        # `stats.start_at` 并不总是**本场真实开播**（2026-10-25：七海 10-02 那场
+        # start_at 记的是 13:59Z，但第一条弹幕与第一条"直播开始"(sys type=11) 都在
+        # +148.6 分 —— 真实开播被记早了 2.5 小时）。若 sys type=11 晚于 start_at
+        # 5 分钟以上，就以它为准，避免"对着空气播两小时"这种假象进入时滞。
+        sys_events = (getattr(sr, "stats", None) or {}).get("sys_events") or []
+        starts = [e.get("ts") for e in sys_events
+                  if isinstance(e, dict) and e.get("type") == 11
+                  and isinstance(e.get("ts"), (int, float))]
+        if starts:
+            first_start = min(starts) / 1000
+            if start_ts is None or first_start > start_ts + 300:
+                start_ts = first_start
         pos = idx / total
         for uid, a in raw.items():
             if not isinstance(a, dict):
