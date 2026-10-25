@@ -102,10 +102,13 @@ export default function ResultCharts({
     if (tab === 'attendance' && attBins && attBins.counts.length > 1) {
       // 2026-10-25：分位天生均匀，直方图看不出形态 —— 改画"来了几场"的人数分布
       const max = attBins.max || attBins.counts.length - 1
+      // 去掉 y=0 的空柱（2026-10-25 用户口径）：没人达到的场次数不该占一根柱子
+      const pairs = Array.from({ length: max }, (_, i) => [i + 1, attBins.counts[i + 1] ?? 0] as const)
+        .filter(([, c]) => c > 0)
       return {
         kind: 'axis' as const,
-        x: Array.from({ length: max }, (_, i) => `${i + 1}`),
-        y: attBins.counts.slice(1, max + 1),
+        x: pairs.map(([n]) => `${n}`),
+        y: pairs.map(([, c]) => c),
         total: attBins.counts.reduce((acc: number, v: number) => acc + v, 0),
         xName: '出席场次',
       }

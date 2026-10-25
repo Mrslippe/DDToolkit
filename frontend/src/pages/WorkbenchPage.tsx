@@ -455,7 +455,9 @@ export default function WorkbenchPage() {
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
                              onClick={() => {
             if (slice.length > BIG_WINDOW) { setBigWinAsk(slice.length); return }
-            setTab('overview'); setRows([]); setHasMore(false)
+            // 立刻回到"分析态"（2026-10-25 用户口径）：否则新窗口算完之前，
+            // 屏幕上一直是**旧窗口**的结果，看起来像"点了没反应"
+            setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
             void loadRanked('strength', 0, false, tagFilterRef.current)
           }}
                              data-testid="workbench-load">
@@ -663,7 +665,7 @@ export default function WorkbenchPage() {
                 data-testid="big-window-ok"
                 onClick={() => {
                   setBigWinAsk(null)
-                  setTab('overview'); setRows([]); setHasMore(false)
+                  setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
                   void loadRanked('strength', 0, false, tagFilterRef.current)
                 }}>
                 继续分析

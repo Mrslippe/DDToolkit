@@ -235,7 +235,10 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         bits = [0] * len(_session_ids)
         for sl in win.slices.get(_uid, []):
             i = _pos.get(sl[0])
-            if i is not None and sl[4]:      # sl[4] = 该场入场次数 e
+            # ⚠️ 口径必须与 `att_n` 一致：loader 里**只要出现在 raw 就算出席**
+            #（不看有没有入场事件 e）。早先要求 e>0，于是"满勤但没进过场"的用户
+            # 画出全灰的明细图（2026-10-25 用户报里斯マラ）。
+            if i is not None:
                 bits[i] = 1
         payload["att_bits"][_uid] = bits
 
