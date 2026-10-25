@@ -244,6 +244,21 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
             lags[i] = float(lag) if lag is not None else 0.0
         payload["att_bits"][_uid] = lags
 
+    # 每场的时滞参照（p90）：颜色要**按场归一**，否则长场次里所有人都是"最淡"。
+    # 实测七海这个 V 的场次中位时长 6 小时（最长 11.6h），时滞中位数 137 分钟；
+    # 用固定 30 分钟做上限，整列会被裁成同一个浅色（2026-10-25 用户报"9-22 那场大家都差很多"）。
+    _lag_by_session: list[list[float]] = [[] for _ in _session_ids]
+    for _uid in table.uids:
+        for sl in win.slices.get(_uid, []):
+            i = _pos.get(sl[0])
+            lag = sl[6] if len(sl) > 6 else None
+            if i is not None and lag is not None:
+                _lag_by_session[i].append(float(lag))
+    payload["att_lag_ref"] = [
+        (sorted(v)[min(len(v) - 1, int(len(v) * 0.9))] if v else 0.0)
+        for v in _lag_by_session
+    ]
+
     payload["pay_share"] = {
         u: (win.users[u].pay / _pool_pay if _pool_pay > 0 else 0.0) for u in table.uids
     }
@@ -684,6 +699,8 @@ def ranked(
         "skipped": _skipped,
         #: 出席场次数分布（下标 = 出席场次，值 = 人数）
         "att_bins": {"max": win.n, "counts": _att_bins},
+        #: 每场的时滞参照（p90，分钟）：前端按它归一上色，跨场次可比
+        "att_lag_ref": payload["att_lag_ref"],
         "since": since, "until": until, "by": by,
         "purity_threshold": PURITY_THRESHOLD,
         "total_in_pool": len(table), "count": len(rows),
@@ -788,7 +805,10 @@ def member_detail(
     series = [{
         "live_id": lid, "start_at": cn_text(start_at),
         "m": m, "p": p_, "e": e, "uniq": uq,
-    } for lid, start_at, m, p_, e, uq in idx.get(uid, [])]
+    } for row in idx.get(uid, [])
+        # ⚠️ 切片已经多了一列时滞（第 7 位），这里必须按下标取前 6 个 ——
+        # 直接 6 元解包会 ValueError，表现为"点开用户详情报错"（2026-10-25）
+        for lid, start_at, m, p_, e, uq in (row[:6],)]
 
     return {
         "uid": uid,

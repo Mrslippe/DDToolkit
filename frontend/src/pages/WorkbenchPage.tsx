@@ -576,6 +576,7 @@ export default function WorkbenchPage() {
                     at: String((s as { at?: string }).at ?? ''),
                     title: String((s as { title?: string }).title ?? ''),
                   }))}
+                  lagRef={ranked.att_lag_ref}
                   tagOptions={tagOptions}
                   tagLoading={tagLoading}
                   tagError={tagError}

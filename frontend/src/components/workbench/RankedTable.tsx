@@ -31,6 +31,8 @@ interface Props {
   onTagFilter: (next: string[]) => void
   /** 窗口内各场次的时间/标题（出席明细浮层用），顺序与行的 att_bits 一致 */
   sessionMeta: { at: string; title?: string }[]
+  /** 每场的时滞参照（p90） */
+  lagRef?: number[]
 }
 
 /** 头像失败时退回昵称/uid 首字 */
@@ -80,7 +82,7 @@ function payMix(r: FanRankedRow) {
 export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview',
   vtuber, since, until, ids, onOpenMember,
-  tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta,
+  tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta, lagRef,
 }: Props) {
   const sentinel = useRef<HTMLDivElement | null>(null)
 
@@ -191,7 +193,8 @@ export default function RankedTable({
                     <td>{r.mean_lag_minutes == null ? '—' : `${r.mean_lag_minutes.toFixed(1)} 分`}</td>
                     <td>
                       <AttendanceBits bits={r.att_bits ?? []} sessions={sessionMeta}
-                                      att={r.att_sessions} total={sessionMeta.length} />
+                                      att={r.att_sessions} total={sessionMeta.length}
+                                      lagRef={lagRef} />
                     </td>
                   </>}
                   {tab === 'interaction' && <>

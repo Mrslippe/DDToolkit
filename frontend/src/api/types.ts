@@ -1656,6 +1656,8 @@ export interface FanRanked {
   list_total?: number
   /** 出席场次数分布（下标 = 出席场次，值 = 人数） */
   att_bins?: { max: number; counts: number[] }
+  /** 每场的时滞参照（p90，分钟）：上色按场归一 */
+  att_lag_ref?: number[]
   /** 没进样本的场次（时间 + 标题） */
   skipped?: { live_id: string; start_at: string; title: string }[]
   /** 标签目录（池内占比），随名单一起返回 */

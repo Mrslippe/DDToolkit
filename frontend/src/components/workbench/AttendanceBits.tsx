@@ -9,18 +9,23 @@ interface Props {
   /** 出席场次数（分子）与总场次 */
   att: number
   total: number
+  /** 每场的时滞参照（p90，分钟）：颜色按它归一，长场次不会被压成一片浅色 */
+  lagRef?: number[]
 }
 
-/** 时滞超过这个分钟数就算"最淡"（按池内实测 95 分位附近取值） */
+/** 没有参照时的兜底上限（分钟） */
 const LAG_CAP = 30
 
 /**
  * 时滞 → 颜色深浅（2026-10-25 用户口径）：**时滞越长颜色越淡**。
  * 0 分钟用品牌绿 `#4CC85A`，`LAG_CAP` 分钟以上用浅绿 `#D8F3DC`，中间线性插值。
  */
-function lagColor(lag: number | null): string {
+function lagColor(lag: number | null, ref: number): string {
   if (lag === null) return '#ececec'          // 没出席
-  const t = Math.max(0, Math.min(1, lag / LAG_CAP))
+  // 按**该场**的 p90 归一：长场次（七海有 11 小时场）里时滞天然更大，
+  // 用固定分钟数会把整列裁成同一个浅色（2026-10-25）
+  const cap = ref > 0 ? ref : LAG_CAP
+  const t = Math.max(0, Math.min(1, lag / cap))
   const from = [0x4c, 0xc8, 0x5a]
   const to = [0xd8, 0xf3, 0xdc]
   const ch = from.map((c0, i) => Math.round(c0 + (to[i] - c0) * t))
@@ -47,7 +52,7 @@ const PAD = 8
  *   不横向滚动、不放文字列表；每格的「时间 · 标题」走原生 tooltip；
  * - 鼠标离开后 120ms 收起。
  */
-export default function AttendanceBits({ bits, sessions, att, total }: Props) {
+export default function AttendanceBits({ bits, sessions, att, total, lagRef }: Props) {
   const [open, setOpen] = useState(false)
   /** 正在播退场动画：先保留挂载，动画结束再卸载 */
   const [closing, setClosing] = useState(false)
@@ -91,7 +96,7 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
     <i
       key={i}
       className={b === null ? 'wb-bit' : 'wb-bit on'}
-      style={b === null ? undefined : { background: lagColor(b) }}
+      style={b === null ? undefined : { background: lagColor(b, lagRef?.[i] ?? 0) }}
       title={`${(sessions[i]?.at ?? '').slice(5, 16)}${sessions[i]?.title ? ` · ${sessions[i]!.title}` : ''}`
         + `${b === null ? ' · 未出席' : ` · 时滞 ${b.toFixed(1)} 分`}`}
     />
