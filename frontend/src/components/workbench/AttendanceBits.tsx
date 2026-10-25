@@ -76,7 +76,6 @@ export default function AttendanceBits({ bits, sessions, att, total }: Props) {
         <span className="wb-bits-pop" role="tooltip"
               style={{ left: pos.x, top: pos.y }}
               onMouseEnter={cancel} onMouseLeave={hide}>
-          <span className="wb-bits-pop-head">出席 {att}/{total} 场</span>
           <span className="wb-bits-grid is-pop">
             {bits.map(cell)}
           </span>
