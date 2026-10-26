@@ -2017,8 +2017,10 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-charts-viewport {
   overflow: hidden;
   width: 100%;
-  padding: 16px 22px;
-  margin: -16px -22px;
+  /* 左右不留白：留白放在 `.wb-charts-page` 自己的 padding 里。
+     否则"视口 padding + 负 margin"的组合会让下一页从边界外一点点开始，
+     永远透出一条边（2026-10-26 反复出现的"粘连/露边"）。 */
+  padding: 16px 0 14px;
 }
 
 .wb-charts-pages {
@@ -2033,9 +2035,8 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  /* 每页自己留出右侧余量：否则卡片阴影贴着 viewport 边缘，
-     下一张卡的边缘会透出一条（2026-10-26 的"粘连"） */
-  padding-right: 12px;
+  /* 左右余量放在页内：卡片阴影有空间，且下一页从视口边界**正开始**，不会透边 */
+  padding: 0 24px;
   box-sizing: border-box;
 }
 
