@@ -33,6 +33,9 @@ interface Props {
     lag_hist?: { labels: string[]; counts: number[] }
     msg_hist?: { labels: string[]; counts: number[] }
     spam_split?: Record<string, number>
+    pay_split_top?: { labels: string[]; values: number[] }
+    msg_split_top?: { labels: string[]; values: number[] }
+    msg_pct?: { pcts: number[]; means: number[] }
   }
 }
 
@@ -74,11 +77,17 @@ function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
     } catch { /* 图表失败不影响其余内容 */ }
   }, [option, run])
 
-  // 容器尺寸变化要 resize：卡片在轮播里可能先以窄宽度初始化（2026-10-26）
+  // 容器尺寸变化要 resize，但**不能在新建实例的同一帧**做：
+  // 新建后立刻 resize 会让 ECharts 重启动画，表现为"切页签动画播两遍"（2026-10-26 真因）。
+  // 这里等一帧再挂 observer，且首次回调跳过。
   useEffect(() => {
     const host = box.current
     if (!host || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => api.current?.resize())
+    let first = true
+    const ro = new ResizeObserver(() => {
+      if (first) { first = false; return }
+      api.current?.resize()
+    })
     ro.observe(host)
     return () => ro.disconnect()
   }, [])
@@ -220,33 +229,65 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
     }
 
     if (tab === 'interaction') {
-      const sp = charts?.spam_split
-      if (sp) {
+      // ① 弹幕量贡献（Top 8 + 其他）：把"互动鲸鱼"单独展示
+      const mc = charts?.msg_split_top
+      if (mc?.values?.length) {
         out.push({
-          key: 'spam', title: '独轮车占比', note: '池内三档判定',
+          key: 'msgshare', title: '弹幕量贡献', note: 'Top 8 + 其他',
           option: {
             ...ANIM,
-            tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
+            tooltip: { trigger: 'item', formatter: '{b}: {c} 条（{d}%）' },
             legend: { bottom: 0, textStyle: { fontSize: 11 } },
             series: [{
               type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
-              data: [
-                { name: '确定', value: sp.confirmed ?? 0, itemStyle: { color: '#c9406f' } },
-                { name: '疑似', value: sp.suspected ?? 0, itemStyle: { color: '#e8b04b' } },
-                { name: '未命中', value: sp.none ?? 0, itemStyle: { color: '#d9d9d9' } },
-              ],
-              label: { fontSize: 11 },
+              data: mc.labels.map((name, i) => ({
+                name, value: mc.values[i], itemStyle: { color: PINK[i % PINK.length] },
+              })),
+              label: { fontSize: 10 },
             }],
           },
         })
       }
-      const mh = charts?.msg_hist
-      if (mh) {
+      // ② 场均弹幕 vs 分位（折线）
+      const mp = charts?.msg_pct
+      if (mp?.means?.length) {
         out.push({
-          key: 'msg', title: '场均弹幕分布', note: '横轴场均弹幕 · 纵轴人数',
-          option: axisBase(mh.labels, mh.counts, '人数'),
+          key: 'msgpct', title: '场均弹幕分布', note: '横轴分位 · 纵轴场均弹幕',
+          option: {
+            ...ANIM,
+            grid: { left: 52, right: 16, top: 18, bottom: 32 },
+            tooltip: { trigger: 'axis' },
+            xAxis: {
+              type: 'category', data: mp.pcts.map((v) => v.toFixed(2)),
+              axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 2 },
+            },
+            yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
+            series: [{
+              type: 'line', data: mp.means, smooth: true, symbol: 'none',
+              lineStyle: { color: PINK[0] }, areaStyle: { color: 'rgba(255,162,180,0.18)' },
+            }],
+          },
         })
       }
+    }
+
+    if (tab === 'payment' && charts?.pay_split_top?.values?.length) {
+      const pc = charts.pay_split_top
+      out.push({
+        key: 'payshare', title: '付费贡献', note: 'Top 8 + 其他（鲸鱼单列）',
+        option: {
+          ...ANIM,
+          tooltip: { trigger: 'item', formatter: '{b}: ¥{c}（{d}%）' },
+          legend: { bottom: 0, textStyle: { fontSize: 11 } },
+          series: [{
+            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
+            data: pc.labels.map((name, i) => ({
+              name, value: pc.values[i], itemStyle: { color: PINK[i % PINK.length] },
+            })),
+            label: { fontSize: 10 },
+          }],
+        },
+      })
     }
 
     if (tab === 'payment' && pool?.pay_split) {

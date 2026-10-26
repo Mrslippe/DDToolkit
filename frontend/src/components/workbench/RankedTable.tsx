@@ -74,7 +74,19 @@ function payMixBar(r: FanRankedRow) {
   const sc = r.sc_amt ?? 0
   const gift = r.gift_amt ?? 0
   const total = guard + sc + gift
-  if (!total) return '—'
+  if (!total) {
+    // 分类金额缺失（老数据没有 g/gd/sc 三项）时，退化成"总额单色条"，
+    // 至少能看出这人花了多少，不会整列空白（2026-10-26 用户报"三色轴不见了"）
+    return r.pay_total > 0
+      ? (
+        <span className="wb-mix">
+          <span className="wb-mix-bar"><i style={{ width: '100%', background: '#c9406f' }}
+                                         title="缺分类金额（老数据）" /></span>
+          <span className="wb-mix-text">¥{r.pay_total.toLocaleString()}</span>
+        </span>
+      )
+      : '—'
+  }
   const seg = (v: number, color: string, label: string) => {
     const w = (v / total) * 100
     if (w <= 0) return null

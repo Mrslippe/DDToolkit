@@ -1662,6 +1662,12 @@ export interface FanRanked {
     lag_hist?: { labels: string[]; counts: number[] }
     msg_hist?: { labels: string[]; counts: number[] }
     spam_split?: { confirmed?: number; suspected?: number; none?: number }
+    /** 付费贡献榜（Top 8 + 其他） */
+    pay_split_top?: { labels: string[]; values: number[] }
+    /** 弹幕量贡献榜（Top 8 + 其他） */
+    msg_split_top?: { labels: string[]; values: number[] }
+    /** 场均弹幕 vs 分位（折线） */
+    msg_pct?: { pcts: number[]; means: number[] }
   }
   /** 每场的时滞参照（p90，分钟）：上色按场归一 */
   att_lag_ref?: number[]

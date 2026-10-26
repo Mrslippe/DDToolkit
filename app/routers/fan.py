@@ -279,8 +279,41 @@ def _chart_data(win, table, payload: dict) -> dict[str, Any]:
         lv = win.spam_levels.get(uid, "none")
         spam[lv if lv in spam else "none"] += 1
 
+    # ── 贡献榜（2026-10-26 用户口径：把"鲸鱼"单独展示，其余合并）──────────
+    def _top_split(vals: dict[str, float], top: int = 8) -> dict[str, Any]:
+        items = [(uid, v) for uid, v in vals.items() if v > 0]
+        items.sort(key=lambda x: -x[1])
+        head = items[:top]
+        tail = sum(v for _, v in items[top:])
+        labels = [f"{(users[u].name or u)[:8]}" for u, _ in head]
+        values = [round(v, 2) for _, v in head]
+        if tail > 0:
+            labels.append(f"其他 {len(items) - top} 人")
+            values.append(round(tail, 2))
+        return {"labels": labels, "values": values}
+
+    pay_split_top = _top_split({uid: float(users[uid].pay) for uid in pool_set})
+    msg_split_top = _top_split({uid: float(users[uid].m) for uid in pool_set})
+
+    # 场均弹幕 vs 分位（折线）：20 个分位桶，取桶内均值
+    msgs_sorted = sorted(users[uid].m / max(1, users[uid].att_n) for uid in pool_set)
+    bins = 20
+    means: list[float] = []
+    pcts: list[float] = []
+    for i in range(bins):
+        lo = int(len(msgs_sorted) * i / bins)
+        hi = max(lo + 1, int(len(msgs_sorted) * (i + 1) / bins))
+        chunk = msgs_sorted[lo:hi]
+        if not chunk:
+            continue
+        pcts.append(round((i + 0.5) / bins, 3))
+        means.append(round(sum(chunk) / len(chunk), 1))
+
     return {
         "pool_trend": trend,
+        "pay_split_top": pay_split_top,
+        "msg_split_top": msg_split_top,
+        "msg_pct": {"pcts": pcts, "means": means},
         "lag_hist": _hist([float(x) for x in lag_vals], [5, 10, 20, 30, 45, 60, 90, 120, 180]),
         "msg_hist": _hist([float(x) for x in msg_vals], [5, 10, 20, 50, 100, 200, 500, 1000]),
         "spam_split": spam,

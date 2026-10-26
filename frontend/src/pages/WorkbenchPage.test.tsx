@@ -148,6 +148,9 @@ beforeEach(() => {
       lag_hist: { labels: ['<5', '5–10'], counts: [10, 5] },
       msg_hist: { labels: ['<5', '5–10'], counts: [20, 8] },
       spam_split: { confirmed: 3, suspected: 5, none: 100 },
+      pay_split_top: { labels: ['鲸鱼A', '鲸鱼B', '其他 10 人'], values: [20000, 9000, 3000] },
+      msg_split_top: { labels: ['话痨A', '话痨B', '其他 10 人'], values: [5000, 3000, 900] },
+      msg_pct: { pcts: [0.05, 0.15, 0.25], means: [3.2, 12.5, 48.0] },
     },
   })
   fanSearch.mockReset().mockResolvedValue({ items: [], total_match: 0 })
@@ -502,5 +505,19 @@ describe('图表轮播（2026-10-26）', () => {
     expect(document.querySelector('.wb-charts-pages')!.getAttribute('data-page')).toBe('0')
     await act(async () => { next!.click() })
     expect(document.querySelector('.wb-charts-pages')!.getAttribute('data-page')).toBe('1')
+  })
+})
+
+describe('付费页三色轴（2026-10-26 回归）', () => {
+  it('★ 付费页名单最后一列渲染三色条', async () => {
+    await mount()
+    await act(async () => { q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const payTab = Array.from(document.querySelectorAll('button'))
+      .find((b) => b.textContent?.trim() === '付费') as HTMLButtonElement | undefined
+    expect(payTab).toBeTruthy()
+    await act(async () => { payTab!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(document.querySelector('.wb-mix-bar')).not.toBeNull()
   })
 })
