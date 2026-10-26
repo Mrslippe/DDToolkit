@@ -69,7 +69,7 @@ function clampNum(v: number, lo: number, hi: number): number {
  * 并行的 clamp 改写一次，来回切换几次就"漂移"（2026-10-25 用户实测）。
  * 相对位置对场次数不变，且默认 1 正好是"贴最右"。
  */
-const SLIDER_STATE = new Map<string, { pos: number; size: number; scale: number }>()
+const SLIDER_STATE = new Map<string, { pos: number; size: number; scale: number; scroll?: number }>()
 
 export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
                                         stateKey, dataOwner, coverTick, onChange }: Props) {
@@ -154,7 +154,14 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const onScroll = () => clamp()
+    const onScroll = () => {
+      clamp()
+      // 记住**视野**位置：数据刷新后若只按"窗口居中"还原，窗口会跳到轨道中间
+      if (stateKey) {
+        const cur = SLIDER_STATE.get(stateKey) ?? { pos: 0, size, scale }
+        SLIDER_STATE.set(stateKey, { ...cur, scroll: el.scrollLeft })
+      }
+    }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [clamp])
@@ -184,7 +191,14 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     if (el) {
       const stp = Math.max(3, (BAR + GAP) * (st?.scale ?? scale))
       const center = PAD + wantStart * stp + (wantSize * stp) / 2
-      el.scrollLeft = Math.max(0, center - el.clientWidth / 2)
+      const maxScroll = Math.max(0, (el.scrollWidth || 0) - el.clientWidth)
+      // ① 有记住的视野位置就用它（用户手拖过视野就该保持）
+      // ② 否则只在**需要**时居中：默认贴最右（wantStart === span）时不要居中，
+      //    否则看起来就是"窗口自己跑到轨道中间"（2026-10-27 用户报的就是这个）
+      const target = st?.scroll !== undefined
+        ? st.scroll
+        : (wantStart >= span ? maxScroll : center - el.clientWidth / 2)
+      el.scrollLeft = Math.max(0, Math.min(maxScroll, target))
     }
     // 等本轮渲染与 clamp 跑完再放开回写
     requestAnimationFrame(() => {
