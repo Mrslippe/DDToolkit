@@ -46,7 +46,7 @@ interface Card {
 }
 
 /** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
-function EChart({ option }: { option: EChartsCoreOption }) {
+function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
   const box = useRef<HTMLDivElement | null>(null)
   const api = useRef<ReturnType<typeof echarts.init> | null>(null)
 
@@ -60,10 +60,13 @@ function EChart({ option }: { option: EChartsCoreOption }) {
         api.current = null
       }
       api.current ??= echarts.init(host)
+      // run 变化（切页签 / 翻页）时先 clear，ECharts 会把整段动画**从头重放**：
+      // 柱状图重新长出来、饼图重新旋转填充（2026-10-26 用户口径）
+      api.current.clear()
       api.current.setOption(option, true)
       api.current.resize()
     } catch { /* 图表失败不影响其余内容 */ }
-  }, [option])
+  }, [option, run])
 
   // 容器尺寸变化要 resize：卡片在轮播里可能先以窄宽度初始化（2026-10-26）
   useEffect(() => {
@@ -78,7 +81,11 @@ function EChart({ option }: { option: EChartsCoreOption }) {
   return <div ref={box} className="wb-chart" />
 }
 
+/** 统一的动画时长：柱子生长 / 折线描边 / 饼图旋转都用这一档 */
+const ANIM = { animation: true, animationDuration: 700, animationEasing: 'cubicOut' as const }
+
 const axisBase = (labels: string[], values: number[], name: string): EChartsCoreOption => ({
+  ...ANIM,
   grid: { left: 48, right: 16, top: 18, bottom: 36 },
   tooltip: { trigger: 'axis' },
   xAxis: {
@@ -118,6 +125,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
           </p>
         ),
         option: {
+          ...ANIM,
           tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
           legend: { bottom: 0, textStyle: { fontSize: 11 } },
           series: [{
@@ -136,6 +144,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         title: '核心度分布',
         note: '横轴核心度 · 纵轴人数',
         option: {
+          ...ANIM,
           grid: { left: 48, right: 16, top: 18, bottom: 30 },
           tooltip: { trigger: 'axis' },
           xAxis: {
@@ -159,6 +168,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
           title: '核心观众池变化',
           note: '每 5 场一格 · 新进 / 出池 / 未变动',
           option: {
+            ...ANIM,
             grid: { left: 48, right: 16, top: 26, bottom: 30 },
             tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
             legend: { top: 0, textStyle: { fontSize: 11 } },
@@ -209,6 +219,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         out.push({
           key: 'spam', title: '独轮车占比', note: '池内三档判定',
           option: {
+            ...ANIM,
             tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
             legend: { bottom: 0, textStyle: { fontSize: 11 } },
             series: [{
@@ -237,6 +248,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       out.push({
         key: 'pay', title: '付费构成', note: '全池合计',
         option: {
+          ...ANIM,
           tooltip: { trigger: 'item', formatter: '{b}: ¥{c}（{d}%）' },
           legend: { bottom: 0, textStyle: { fontSize: 11 } },
           series: [{
@@ -289,10 +301,13 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   /** 切页签时的重排动画（翻页用 translate 过渡，两者互不影响） */
   const [anim, setAnim] = useState(0)
 
+  const [run, setRun] = useState(0)
+
   useEffect(() => {
     setPage(0)
     setFlash(true)
     setAnim((v) => v + 1)
+    setRun((v) => v + 1)
     const t = window.setTimeout(() => setFlash(false), 1600)
     return () => window.clearTimeout(t)
   }, [tab])
@@ -312,7 +327,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         <button
           type="button" className="wb-charts-arrow" aria-label="上一页"
           data-testid="charts-prev" disabled={cur === 0}
-          onClick={() => setPage(Math.max(0, cur - 1))}
+          onClick={() => { setPage(Math.max(0, cur - 1)); setRun((v) => v + 1) }}
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -338,7 +353,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
                     {c.title}
                     {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
                   </h3>
-                  <EChart option={c.option} />
+                  <EChart option={c.option} run={run} />
                   {c.footer}
                 </section>
               ))}
@@ -353,7 +368,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         <button
           type="button" className="wb-charts-arrow" aria-label="下一页"
           data-testid="charts-next" disabled={cur >= maxPage}
-          onClick={() => setPage(Math.min(maxPage, cur + 1))}
+          onClick={() => { setPage(Math.min(maxPage, cur + 1)); setRun((v) => v + 1) }}
         >
           <ChevronRight className="size-4" />
         </button>
