@@ -2228,3 +2228,15 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 图表数据未跟上页签时的占位：保持高度，避免内容跳动 */
 .wb-charts-pending { height: 300px; }
+
+/* 图例昵称允许换行（截断是按**像素宽度**导致的：拉丁字符比汉字宽，
+   "AoineKo青" 9 个字符比 "好想rua土豆啊" 7 个字符更宽 —— 2026-10-27） */
+.wb-pie-legend li { align-items: flex-start; }
+
+.wb-pie-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}

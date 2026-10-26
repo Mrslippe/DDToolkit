@@ -247,15 +247,24 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
           key: 'lag', title: '入场时滞分布', note: '横轴场均时滞（分钟）· 纵轴人数',
           option: {
             ...axisBase(lh.labels, lh.counts, '人数'),
-            series: [{
-              type: 'line', data: lh.counts, smooth: true, symbol: 'circle', symbolSize: 6,
-              lineStyle: { color: PINK[0] }, itemStyle: { color: PINK[0] },
-              areaStyle: { color: 'rgba(255,162,180,0.18)' },
-              // 坐标点也要有动画：折线本身靠 animationDuration 描边，
-              // 数据点则需要**逐点延迟**才会依次弹出（默认它们随线一起瞬间出现）
-              animationDuration: 700,
-              animationDelay: (idx: number) => 120 + idx * 70,
-            }],
+            series: [
+              {
+                // 线：只负责描边（不画点，避免点和线抢同一套动画时序）
+                type: 'line', data: lh.counts, smooth: true, showSymbol: false,
+                lineStyle: { color: PINK[0] },
+                areaStyle: { color: 'rgba(255,162,180,0.18)' },
+                animationDuration: 700,
+              },
+              {
+                // 点：单独一个 scatter 系列，逐点延迟弹出（折线自带的 symbol
+                // 只跟线一起出现，`animationDelay` 在 line 上不生效 —— 2026-10-27 实测）
+                type: 'scatter', data: lh.counts, symbolSize: 7,
+                itemStyle: { color: PINK[0] },
+                animationDuration: 500,
+                animationEasing: 'cubicOut',
+                animationDelay: (idx: number) => 700 + idx * 80,
+              },
+            ],
           },
         })
       }
