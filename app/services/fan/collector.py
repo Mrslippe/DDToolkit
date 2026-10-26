@@ -950,6 +950,25 @@ async def collect(
             p.finished_at = time.time()
             return p
 
+        # ── 任务级补采（2026-10-27）：对失败的场次再试一轮 ──────────────────
+        # 上游 504 多是瞬时的；整轮跑完后统一补采，比"当场重试 3 次就放弃"更能救回长尾。
+        if not (should_stop and should_stop()):
+            retry_sessions = [s for s in sessions
+                              if any(d.get("live_id") == s.live_id and d.get("state") == "failed"
+                                     for d in p.sessions_detail)]
+            if retry_sessions:
+                logger.info("fan 采集：补采 %d 场", len(retry_sessions))
+                p.message = f"补采 {len(retry_sessions)} 场"
+                for s in retry_sessions:
+                    # 回滚计数：这次重试要么变成功、要么再失败一次，不能重复计数
+                    p.failed = max(0, p.failed - 1)
+                    p.failures = [f for f in p.failures if f.get("live_id") != s.live_id]
+                    _mark(p, s.live_id, "running", 0, "")
+                try:
+                    await asyncio.gather(*(one(s) for s in retry_sessions))
+                except Exception:  # noqa: BLE001 —— 补采失败不影响已完成的部分
+                    logger.exception("fan 补采异常")
+
     p.current = ""
     if should_stop and should_stop():
         p.state, p.message = STATE_CANCELLED, "已取消"

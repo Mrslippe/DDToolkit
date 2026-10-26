@@ -385,3 +385,33 @@ def test_adaptive_timeout_scales_with_records() -> None:
     assert adaptive_timeout_s(5_000) == 120.0          # 保底
     assert adaptive_timeout_s(150_000) > 120.0         # 大场次放宽
     assert adaptive_timeout_s(10_000_000) == 600.0     # 有上限
+
+
+def test_collect_retries_failed_sessions_once(tmp_path: Path,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """任务级补采：首轮失败、补采成功的场次最终应算成功（2026-10-27）。"""
+    from app.services.fan import collector as col
+
+    recs = [_rec(0, 1, ms=1_790_000_000_000), _rec(4, 1, ms=1_790_000_003_000)]
+    recs += [_rec(0, 1, ms=1_790_000_100_000 + i) for i in range(120)]
+    calls = {"n": 0}
+
+    async def flaky(client, path, params, **kw):
+        if path != "/api/v2/live":
+            return None
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None                      # 首轮失败
+        return {"data": {"data": {"danmakus": recs}}}
+
+    monkeypatch.setattr(col, "_get_json", flaky)
+    v = __import__("app.services.fan.loader", fromlist=["VtuberRef"]).VtuberRef(
+        "测试V", SUB, "123", "测试")
+    prog = col.CollectProgress("测试V", "2026-09-01", "2026-09-30")
+    got = asyncio.run(col.collect(v, "2026-09-01", "2026-09-30", root=tmp_path / "d",
+                                  progress=prog,
+                                  sessions=[col.SessionPlan(
+                                      "bbbb-cccc-dddd-eeee-ffffffffffff",
+                                      "2026-09-16 20:00:00")]))
+    assert got.done == 1 and got.failed == 0, f"补采后应成功：{got.as_dict()}"
+    assert calls["n"] >= 2, "应该真的重试了一次"
