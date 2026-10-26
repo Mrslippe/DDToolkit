@@ -1025,10 +1025,11 @@
 }
 
 /* 结果小卡片：饼图 + 分布曲线并排 */
+/* ⚠️ 2026-10-26：这条旧规则把容器设成两列网格 —— 轮播改造后它的子元素只有
+   `.wb-charts-viewport` 一个（箭头/页码是绝对定位），于是 viewport 只占第一列
+   （0.9fr），卡片看起来只有半屏宽。改成普通块级，宽度交给 `.wb-charts-page` 的网格。 */
 .wb-charts {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 12px;
+  display: block;
 }
 
 @media (max-width: 980px) {
