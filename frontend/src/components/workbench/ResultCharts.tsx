@@ -95,76 +95,45 @@ function emptyData(opt: EChartsCoreOption): EChartsCoreOption {
 }
 
 /**
- * 单张图（2026-10-27 重写，方案 A）。
+ * 单张图（2026-10-27 方案 A 第二版）。
  *
- * 只做三件事，全部围绕「**可见时才初始化**」：
- * 1. `IntersectionObserver` 观察自身是否真的在可视区（被 `overflow: hidden` 裁掉的
- *    相邻轮播页**不算可见** —— 这正是之前"在 0 宽容器里 init"的根因）；
- * 2. 变可见 → `init()` + `setOption(option)`：走 ECharts **原生** initial animation；
- * 3. 变不可见 → `dispose()`，切回来时重新 init，于是**每次看到都会重播一次原生动画**；
- * 4. 可见期间数据更新（同一页签重新分析）→ 只 `setOption` 不重建，且关掉动画，不会重播。
+ * ⚠️ 不再用 IntersectionObserver 做门控：轮播的 `translateX` 过渡期间，
+ * 观察者会在"还在移动、宽度不稳"的时刻回调，导致部分卡片 init 时宽度为 0，
+ * 初始动画被跳过（现象：切页签后只有第一张图有动画）。
+ *
+ * 现在改为：**只渲染当前页**（见 `ResultCharts`），于是卡片挂载时必然可见、已布局。
+ * 初始化流程：等 `offsetWidth > 0` → init → 先喂空数据 → 下一帧喂真数据（原生入场动画）。
  */
 function EChart({ option }: { option: EChartsCoreOption }) {
   const box = useRef<HTMLDivElement | null>(null)
   const api = useRef<ReturnType<typeof echarts.init> | null>(null)
   const lastOpt = useRef<EChartsCoreOption | null>(null)
-  const [visible, setVisible] = useState(false)
 
   useEffect(() => {
     const host = box.current
     if (!host) return
-    if (typeof IntersectionObserver === 'undefined') {
-      setVisible(true)
-      return
-    }
-    const io = new IntersectionObserver(
-      (entries) => setVisible(entries.some((e) => e.isIntersecting)),
-      { threshold: 0 },
-    )
-    io.observe(host)
-    return () => io.disconnect()
-  }, [])
-
-  useEffect(() => {
-    const host = box.current
-
-    // 不可见：销毁实例（切回来时重新 init，原生动画自然重播）
-    if (!host || !visible) {
-      api.current?.dispose()
-      api.current = null
-      lastOpt.current = null
-      return
-    }
-
-    // 实例已存在：只是数据变了 → 更新但不播动画
-    if (api.current) {
-      if (lastOpt.current !== option) {
-        lastOpt.current = option
-        api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
-      }
-      return
-    }
-
-    // 首次可见：等一帧让布局完成（宽度 > 0），再 init —— 否则初始动画会被跳过
     let raf = 0
     let tries = 0
     const boot = () => {
       if (!host.isConnected) return
-      if (!host.offsetWidth && tries < 8) { tries += 1; raf = requestAnimationFrame(boot); return }
+      if (!host.offsetWidth && tries < 20) { tries += 1; raf = requestAnimationFrame(boot); return }
       if (!document.createElement('canvas').getContext('2d')) return   // jsdom
       api.current = echarts.init(host)
-      // 先给"空数据"，下一帧再给真数据 —— ECharts 会按**原生**方式做入场动画
-      // （饼图 expansion / 折线描边 / 柱状生长）。直接一次给真数据时，
-      // 若容器刚布局完或数据在首帧就位，ECharts 会跳过初始动画（实测）。
+      // 先空 → 再真：ECharts 才会走原生入场动画（饼图 expansion / 折线描边 / 柱状生长）
       api.current.setOption(emptyData(option), true)
       lastOpt.current = option
-      requestAnimationFrame(() => {
-        api.current?.setOption(option, false)
-      })
+      requestAnimationFrame(() => { api.current?.setOption(option, false) })
     }
     raf = requestAnimationFrame(boot)
     return () => cancelAnimationFrame(raf)
-  }, [visible, option])
+  }, [])
+
+  // 数据更新（同一页签重新分析）：只更新，不重播动画
+  useEffect(() => {
+    if (!api.current || lastOpt.current === option) return
+    lastOpt.current = option
+    api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
+  }, [option])
 
   useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
   return <div ref={box} className="wb-chart" />
@@ -455,48 +424,42 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       </div>}
 
       <div className="wb-charts-viewport">
-        <div
-          className="wb-charts-pages"
-          style={{ transform: `translateX(-${cur * 100}%)` }}
-          data-page={cur}
-        >
-          {pages.map((group, pi) => (
-            <div className="wb-charts-page" key={pi}>
-              {group.map((c) => (
-                <section
-                  className="wb-card wb-chart-card" key={c.key}
-                  data-testid={c.key === 'tiers' ? 'chart-pie-card'
-                    : c.key === 'strength' ? 'chart-line-card'
-                      : `chart-${c.key}`}
-                >
-                  <h3 className="wb-card-title">
-                    {c.title}
-                    {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
-                  </h3>
-                  {c.legend ? (
-                    <div className="wb-pie">
-                      <EChart option={c.option} />
-                      <ul className="wb-pie-legend">
-                        {c.legend.map((d, i) => (
-                          <li key={d.name}>
-                            <i style={{ background: PINK[i % PINK.length] }} />
-                            <span className="wb-pie-name" title={d.name}>{d.name}</span>
-                            <span className="wb-pie-val">
-                              {c.money ? `¥${Math.round(d.value).toLocaleString()}`
-                                : Math.round(d.value).toLocaleString()}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : (
+        <div className="wb-charts-pages" data-page={cur}>
+          <div className="wb-charts-page" key={`${tab}-${cur}`}>
+            {pages[cur]?.map((c) => (
+              <section
+                className="wb-card wb-chart-card" key={c.key}
+                data-testid={c.key === 'tiers' ? 'chart-pie-card'
+                  : c.key === 'strength' ? 'chart-line-card'
+                    : `chart-${c.key}`}
+              >
+                <h3 className="wb-card-title">
+                  {c.title}
+                  {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
+                </h3>
+                {c.legend ? (
+                  <div className="wb-pie">
                     <EChart option={c.option} />
-                  )}
-                  {c.footer}
-                </section>
-              ))}
-            </div>
-          ))}
+                    <ul className="wb-pie-legend">
+                      {c.legend.map((d, i) => (
+                        <li key={d.name}>
+                          <i style={{ background: PINK[i % PINK.length] }} />
+                          <span className="wb-pie-name" title={d.name}>{d.name}</span>
+                          <span className="wb-pie-val">
+                            {c.money ? `¥${Math.round(d.value).toLocaleString()}`
+                              : Math.round(d.value).toLocaleString()}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <EChart option={c.option} />
+                )}
+                {c.footer}
+              </section>
+            ))}
+          </div>
         </div>
       </div>
 
