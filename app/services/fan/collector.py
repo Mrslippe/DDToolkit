@@ -67,8 +67,10 @@ COLLECT_PAGE_SIZE_BIG = 100_000
 COLLECT_MAX_PAGES = 60
 #: 单页返回空但 total>0 时最多重试几次（并发限流导致，重试通常就出来了）
 FETCH_EMPTY_ATTEMPTS = 3
-#: 并发上限。**不要调大** —— 上游对突发请求敏感，实测 3 路稳定
-COLLECT_CONCURRENCY = 3
+#: 并发度：**固定 1**。
+#: 2026-10-27 用户确认：danmakus 对同一 IP 的并发请求会**串行排队** —— 并发 3 并不会更快，
+#: 只会让进度里的"当前场次"来回跳、并把瞬时 504 叠成一片。串行反而更稳、更好观测。
+COLLECT_CONCURRENCY = 1
 #: 单场超时。实测最慢 18 秒，给 120 秒余量
 COLLECT_TIMEOUT_S = 120.0
 #: 单场重试次数（含首次）
