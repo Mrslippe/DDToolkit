@@ -305,6 +305,9 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   /** 切页签后短暂显示一次箭头，提示"这里可以翻" */
   const [flash, setFlash] = useState(false)
   const [run, setRun] = useState(0)
+  /** 翻页瞬间（约 300ms）：给视口加一层"边缘→中心"的径向淡出，
+   *  让从外侧进来的下一页看起来是**渐显**而不是硬切（2026-10-26 用户口径） */
+  const [flipping, setFlipping] = useState(false)
 
   useEffect(() => {
     setPage(0)
@@ -318,6 +321,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   const cur = Math.min(page, maxPage)
   const cls = [
     'wb-charts',
+    flipping ? 'is-flipping' : '',
     flash ? 'is-flash' : '',
     hoverEdge === 'left' ? 'is-left' : '',
     hoverEdge === 'right' ? 'is-right' : '',
@@ -335,7 +339,10 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         <button
           type="button" className="wb-charts-arrow" aria-label="上一页"
           data-testid="charts-prev" disabled={cur === 0}
-          onClick={() => { setPage(Math.max(0, cur - 1)); setRun((v) => v + 1) }}
+          onClick={() => {
+            setPage(Math.max(0, cur - 1)); setRun((v) => v + 1)
+            setFlipping(true); window.setTimeout(() => setFlipping(false), 340)
+          }}
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -375,7 +382,10 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         <button
           type="button" className="wb-charts-arrow" aria-label="下一页"
           data-testid="charts-next" disabled={cur >= maxPage}
-          onClick={() => { setPage(Math.min(maxPage, cur + 1)); setRun((v) => v + 1) }}
+          onClick={() => {
+            setPage(Math.min(maxPage, cur + 1)); setRun((v) => v + 1)
+            setFlipping(true); window.setTimeout(() => setFlipping(false), 340)
+          }}
         >
           <ChevronRight className="size-4" />
         </button>
