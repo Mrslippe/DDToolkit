@@ -1570,6 +1570,14 @@ export interface FanCollectFailure {
   reason: string
 }
 
+export interface FanCollectSessionDetail {
+  live_id: string
+  start_at: string
+  state: 'running' | 'ok' | 'failed' | 'skipped' | string
+  records: number
+  reason: string
+}
+
 export interface FanCollectProgress {
   vtuber: string
   since: string
@@ -1584,6 +1592,15 @@ export interface FanCollectProgress {
   elapsed: number
   /** 逐场失败原因（后端 2026-10-19 起提供） */
   failures?: FanCollectFailure[]
+  /** 当前阶段：enumerate / fetch / aggregate / write / verify（2026-10-27） */
+  phase?: string
+  page?: number
+  pages?: number
+  /** 本次任务累计拉到的记录数 */
+  records?: number
+  throughput?: { records_per_s: number; sessions_per_min: number }
+  eta_s?: number | null
+  sessions_detail?: FanCollectSessionDetail[]
 }
 
 export type FanSortBy =

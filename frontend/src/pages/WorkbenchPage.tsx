@@ -496,10 +496,44 @@ export default function WorkbenchPage() {
                 {running && progress
                   ? `已处理 ${progress.done}/${progress.total || '?'} 场`
                     + (progress.failed > 0 ? ` · 失败 ${progress.failed}` : '')
+                    + (progress.skipped > 0 ? ` · 跳过 ${progress.skipped}` : '')
                     + (progress.current ? ` · 当前 ${progress.current}` : '')
                   : `正在分析 ${slice.length} 场（约 ${estimateSecs(slice.length)} 秒）`
                     + `，已用 ${busySecs} 秒${slice.length > BIG_WINDOW ? ' —— 大窗口请耐心等待' : ''}。`}
               </p>
+
+              {/* 采集细粒度进度（2026-10-27）：阶段 / 翻页 / 吞吐 / ETA / 逐场状态 */}
+              {running && progress && (
+                <>
+                  <p className="wb-hint wb-hint-detail" data-testid="collect-detail">
+                    {progress.phase ? `阶段：${{ fetch: '拉取', aggregate: '解析', write: '落盘', verify: '校验', enumerate: '列场次' }[progress.phase] ?? progress.phase}` : '准备中'}
+                    {progress.phase === 'fetch' && (progress.pages ?? 0) > 0
+                      ? ` · 第 ${progress.page || 1}/${progress.pages} 页` : ''}
+                    {progress.records ? ` · 已拉 ${progress.records.toLocaleString()} 条` : ''}
+                    {progress.throughput?.records_per_s
+                      ? ` · ${progress.throughput.records_per_s.toLocaleString()} 条/秒` : ''}
+                    {progress.eta_s != null ? ` · 预计剩余 ${Math.round(progress.eta_s)} 秒` : ''}
+                  </p>
+
+                  {(progress.sessions_detail?.length ?? 0) > 0 && (
+                    <ul className="wb-sess" data-testid="collect-sessions">
+                      {progress.sessions_detail!.slice(-8).map((x) => (
+                        <li key={x.live_id} className={`wb-sess-item is-${x.state}`}>
+                          <span className="wb-sess-dot" />
+                          <span className="wb-sess-when">{x.start_at || x.live_id.slice(0, 8)}</span>
+                          <span className="wb-sess-state">
+                            {x.state === 'ok' ? '完成' : x.state === 'failed' ? '失败' : '进行中'}
+                          </span>
+                          <span className="wb-sess-rec">
+                            {x.records ? `${x.records.toLocaleString()} 条` : ''}
+                          </span>
+                          {x.reason && <span className="wb-sess-reason">{x.reason}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
             </div>
           ) : ranked ? (
             <>

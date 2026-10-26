@@ -129,8 +129,33 @@ class CollectProgress:
     failures: list[dict[str, Any]] = field(default_factory=list)
     current: str = ""
     message: str = ""
+    #: 当前场次的阶段：enumerate / fetch / aggregate / write / verify（2026-10-27）
+    phase: str = ""
+    #: 当前翻页进度（仅 fetch 阶段有意义）
+    page: int = 0
+    pages: int = 0
+    #: 本次任务累计拉到的记录数与耗时（用于算吞吐 / ETA）
+    records: int = 0
+    #: 逐场状态：`[{live_id, start_at, state, records, reason}]`（前端列表用它）
+    sessions_detail: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+
+    @property
+    def throughput(self) -> dict[str, float]:
+        """记录/秒与场次/秒（前端显示“正在以多快速度拉”）。"""
+        sec = max(1e-6, self.elapsed)
+        return {"records_per_s": round(self.records / sec, 1),
+                "sessions_per_min": round((self.done + self.failed + self.skipped) / sec * 60, 2)}
+
+    @property
+    def eta_s(self) -> float | None:
+        """按“已处理场次的平均耗时”估剩余秒数；样本不足 1 场时返回 None。"""
+        fin = self.done + self.failed + self.skipped
+        if fin <= 0:
+            return None
+        left = max(0, self.total - fin)
+        return round(self.elapsed / fin * left, 1)
 
     @property
     def elapsed(self) -> float:
@@ -152,6 +177,15 @@ class CollectProgress:
             "elapsed": round(self.elapsed, 1),
         }
 
+
+def _mark(p: CollectProgress, live_id: str, state: str, records: int, reason: str) -> None:
+    """更新逐场状态（同一个 live_id 只保留一条）。"""
+    for item in p.sessions_detail:
+        if item.get("live_id") == live_id:
+            item.update({"state": state, "records": records, "reason": reason})
+            return
+    p.sessions_detail.append({"live_id": live_id, "start_at": "", "state": state,
+                              "records": records, "reason": reason})
 
 class CollectError(Exception):
     """采集失败（可展示给用户）。"""
@@ -842,6 +876,10 @@ async def collect(
                     p.skipped += 1
                     return
                 p.current = s.start_at
+                p.phase = "fetch"
+                p.page = p.pages = 0
+                p.sessions_detail.append({"live_id": s.live_id, "start_at": s.start_at,
+                                          "state": "running", "records": 0, "reason": ""})
                 _got = await fetch_records(client, s.live_id, with_extra=True)
                 if _got is None:
                     recs, _extra = None, {}
@@ -849,11 +887,14 @@ async def collect(
                     recs, _extra = _got
                 if recs is None:
                     p.failed += 1
+                    _mark(p, s.live_id, "failed", 0, "上游没有返回该场的弹幕")
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": "上游没有返回该场的弹幕（可能已下架或接口无数据）"})
                     return
                 if len(recs) < MIN_RECORDS:
                     p.failed += 1
+                    _mark(p, s.live_id, "failed", len(recs),
+                          f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）")
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）"})
                     return
@@ -867,6 +908,8 @@ async def collect(
                                        .replace(tzinfo=timezone.utc).timestamp() * 1000))
                     except ValueError:
                         span_ms = None
+                p.records += len(recs)
+                p.phase = "aggregate"
                 raw, stats = aggregate(recs, span_ms=span_ms)
                 # 上游偶尔把前段弹幕重录到末尾（实测 9/227 场）；按内容比对裁掉，
                 # 否则场次会显得长得多，重复内容还会污染按场次/按小时的统计。
@@ -894,8 +937,10 @@ async def collect(
                 stats["acv_points"] = _pts
                 stats["peak_online"] = _peak
                 stats["live_id"] = s.live_id
+                p.phase = "write"
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1
+                _mark(p, s.live_id, "ok", len(recs), "")
 
         try:
             await asyncio.gather(*(one(s) for s in sessions))
