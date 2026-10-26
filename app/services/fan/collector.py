@@ -176,6 +176,15 @@ class CollectProgress:
             "failures": self.failures,
             "current": self.current,
             "message": self.message,
+            # ↓ 2026-10-27：细粒度进度。之前 `as_dict()` 漏了这几项，
+            #   前端拿不到 phase 就一直显示"准备中"、也没有逐场列表。
+            "phase": self.phase,
+            "page": self.page,
+            "pages": self.pages,
+            "records": self.records,
+            "throughput": self.throughput,
+            "eta_s": self.eta_s,
+            "sessions_detail": self.sessions_detail,
             "elapsed": round(self.elapsed, 1),
         }
 
