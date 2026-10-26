@@ -1666,7 +1666,7 @@ export interface FanRanked {
   /** 每场的时滞参照（p90，分钟）：上色按场归一 */
   att_lag_ref?: number[]
   /** 没进样本的场次（时间 + 标题） */
-  skipped?: { live_id: string; start_at: string; title: string }[]
+  skipped?: { live_id: string; start_at: string; title: string; reason?: string }[]
   /** 标签目录（池内占比），随名单一起返回 */
   tag_catalog?: { name: string; prevalence: number }[]
 }

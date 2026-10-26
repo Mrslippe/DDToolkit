@@ -540,6 +540,7 @@ export default function WorkbenchPage() {
                 {(ranked.skipped ?? []).slice(0, 2).map((x) => (
                   <span className="wb-skipped-item" key={x.live_id}>
                     {x.start_at || '（时间未知）'}{x.title ? ` · ${x.title}` : ''}
+                    {x.reason ? `（${x.reason}）` : ''}
                   </span>
                 ))}
                 {!ranked.skipped?.length && (
@@ -552,6 +553,7 @@ export default function WorkbenchPage() {
                       {ranked.skipped!.slice(2).map((x) => (
                         <li key={x.live_id}>
                           {x.start_at || '（时间未知）'}{x.title ? ` · ${x.title}` : ''}
+                          {x.reason ? `（${x.reason}）` : ''}
                         </li>
                       ))}
                     </ul>

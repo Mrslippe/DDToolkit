@@ -282,33 +282,46 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
     return out
   }, [cards])
 
-  /** 鼠标是否停在图表区（悬停才显示箭头） */
-  const [hover, setHover] = useState(false)
+  /** 左右两条窄带的悬停状态（箭头只在鼠标靠近边缘时出现，2026-10-26） */
+  const [hoverEdge, setHoverEdge] = useState<'left' | 'right' | null>(null)
   /** 切页签后短暂显示一次箭头，提示"这里可以翻" */
   const [flash, setFlash] = useState(false)
+  /** 切页签时的重排动画（翻页用 translate 过渡，两者互不影响） */
+  const [anim, setAnim] = useState(0)
 
   useEffect(() => {
     setPage(0)
     setFlash(true)
+    setAnim((v) => v + 1)
     const t = window.setTimeout(() => setFlash(false), 1600)
     return () => window.clearTimeout(t)
   }, [tab])
 
   const maxPage = Math.max(0, pages.length - 1)
   const cur = Math.min(page, maxPage)
+  const showArrows = flash || hoverEdge !== null
 
   if (!pages.length) return null
 
   return (
-    <div
-      className={`wb-charts${hover || flash ? ' is-visible' : ''}`}
-      data-testid="result-charts"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
+    <div className={`wb-charts${showArrows ? ' is-visible' : ''}`} data-testid="result-charts">
+      {/* 左右各一条窄带：只有鼠标进入这一小列才显示箭头 */}
+      <div className="wb-charts-edge is-left"
+           onMouseEnter={() => setHoverEdge('left')}
+           onMouseLeave={() => setHoverEdge(null)}>
+        <button
+          type="button" className="wb-charts-arrow" aria-label="上一页"
+          data-testid="charts-prev" disabled={cur === 0}
+          onClick={() => setPage(Math.max(0, cur - 1))}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+      </div>
+
       <div className="wb-charts-viewport">
         <div
-          className="wb-charts-pages"
+          className={`wb-charts-pages${anim ? ' is-anim' : ''}`}
+          key={anim}
           style={{ transform: `translateX(-${cur * 100}%)` }}
           data-page={cur}
         >
@@ -334,20 +347,17 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         </div>
       </div>
 
-      <button
-        type="button" className="wb-charts-arrow is-left" aria-label="上一页"
-        data-testid="charts-prev" disabled={cur === 0}
-        onClick={() => setPage(Math.max(0, cur - 1))}
-      >
-        <ChevronLeft className="size-4" />
-      </button>
-      <button
-        type="button" className="wb-charts-arrow is-right" aria-label="下一页"
-        data-testid="charts-next" disabled={cur >= maxPage}
-        onClick={() => setPage(Math.min(maxPage, cur + 1))}
-      >
-        <ChevronRight className="size-4" />
-      </button>
+      <div className="wb-charts-edge is-right"
+           onMouseEnter={() => setHoverEdge('right')}
+           onMouseLeave={() => setHoverEdge(null)}>
+        <button
+          type="button" className="wb-charts-arrow" aria-label="下一页"
+          data-testid="charts-next" disabled={cur >= maxPage}
+          onClick={() => setPage(Math.min(maxPage, cur + 1))}
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
 
       <span className="wb-charts-pos">{cur + 1} / {pages.length}</span>
     </div>

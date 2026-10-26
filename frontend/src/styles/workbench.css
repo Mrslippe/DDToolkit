@@ -2010,15 +2010,29 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   to   { opacity: 0; transform: scale(0.96); }
 }
 
-/* ── 图表轮播（2026-10-26 改版）：整页滑动 + 浮动箭头 ───────────────── */
-.wb-charts { position: relative; width: 100%; }
+/* ── 图表轮播（2026-10-26 三改）：窄带悬停 + 不裁阴影 + 重排动画 ──── */
+.wb-charts { position: relative; display: block; width: 100%; }
 
-.wb-charts-viewport { overflow: hidden; width: 100%; }
+/* 容器留出阴影空间：卡片阴影被 overflow:hidden 裁掉是上一版的问题 */
+.wb-charts-viewport {
+  overflow: hidden;
+  width: 100%;
+  padding: 14px 6px;      /* 上下给阴影留白 */
+  margin: -14px -6px;     /* 视觉上仍然对齐内容区 */
+}
 
 .wb-charts-pages {
   display: flex;
   width: 100%;
-  transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 切页签时的重排动画（翻页走 translate 过渡，两者互不干扰） */
+.wb-charts-pages.is-anim { animation: wb-charts-in 240ms ease both; }
+
+@keyframes wb-charts-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
 
 .wb-charts-page {
@@ -2027,18 +2041,26 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  padding: 0 2px;      /* 给卡片阴影留一点余量，避免被裁剪 */
 }
 
 .wb-chart-card { padding: 14px 16px 10px; }
 .wb-chart-card .wb-chart { height: 240px; }
 
-/* 箭头浮在卡片之上，不占宽度；默认透明，悬停/切页签时淡入 */
-.wb-charts-arrow {
+/* 左右两条**窄带**：只有鼠标进入这条 56px 的竖条，箭头才出现 */
+.wb-charts-edge {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 5;
+  top: 0;
+  bottom: 0;
+  width: 56px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wb-charts-edge.is-left { left: -14px; }
+.wb-charts-edge.is-right { right: -14px; }
+
+.wb-charts-arrow {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2046,7 +2068,7 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   height: 30px;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   color: var(--c-text-main);
   cursor: pointer;
@@ -2054,9 +2076,6 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   pointer-events: none;
   transition: opacity 160ms ease;
 }
-
-.wb-charts-arrow.is-left { left: -6px; }
-.wb-charts-arrow.is-right { right: -6px; }
 
 .wb-charts.is-visible .wb-charts-arrow { opacity: 1; pointer-events: auto; }
 .wb-charts-arrow:disabled { opacity: 0.3; cursor: default; }

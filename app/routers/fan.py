@@ -793,7 +793,10 @@ def ranked(
                 _title = str(_row[0] or "") if _row else ""
         except Exception:  # noqa: BLE001 —— 标题取不到不影响提示本身
             _title = ""
-        _skipped.append({"live_id": _lid, "start_at": _st_at, "title": _title})
+        # 原因就在警告文案里（"跳过 live_id=xxx：无入场事件，出勤不可测"），带上它
+        _reason = _w.split("：", 1)[1].strip() if "：" in _w else _w.strip()
+        _skipped.append({"live_id": _lid, "start_at": _st_at,
+                         "title": _title, "reason": _reason})
 
     _lo = min(_vals) if _vals else 0.0
     _hi = max(_vals) if _vals else 1.0
