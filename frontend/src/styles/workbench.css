@@ -2008,3 +2008,67 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   from { opacity: 1; transform: scale(1); }
   to   { opacity: 0; transform: scale(0.96); }
 }
+
+/* ── 图表轮播（2026-10-26）：一页两张，箭头翻一张 ─────────────────── */
+.wb-charts {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.wb-charts-track {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+
+.wb-chart-card { padding: 14px 16px 8px; }
+.wb-chart-card .wb-chart { height: 240px; }
+
+.wb-charts-arrow {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+.wb-charts-arrow:disabled { opacity: 0.35; cursor: default; }
+
+.wb-charts-pos {
+  position: absolute;
+  right: 44px;
+  top: -22px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+@media (max-width: 1100px) {
+  .wb-charts-track { grid-template-columns: 1fr; }
+}
+
+/* 付费构成三色轴（2026-10-26） */
+.wb-mix { display: inline-flex; align-items: center; gap: 8px; }
+
+.wb-mix-bar {
+  display: inline-flex;
+  width: 96px;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(210, 216, 222, 0.5);
+}
+
+.wb-mix-bar i { display: block; height: 100%; }
+.wb-mix-text { font-size: 11.5px; color: var(--c-text-sub); font-variant-numeric: tabular-nums; }
+
+.wb-charts-note { margin: 6px 0 0; font-size: 12px; color: var(--c-text-sub); }

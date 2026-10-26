@@ -1,329 +1,313 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts/core'
 import type { EChartsCoreOption } from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import type { FanRankedRow } from '../../api/types'
 
-echarts.use([PieChart, LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
-
-/** 沿用 `tokens.css` 的粉色阶：分层用同一色相的深浅，不引入新色 */
-const PINK = ['#c9406f', '#ef8ba5', '#f7b2c3']
-/** 三条轴各自的色：出席=深粉、互动=藏青、付费=珊瑚（都在 tokens 里） */
-const AXIS_COLOR: Record<string, string> = {
-  attendance: '#c9406f',
-  interaction: '#7c93b5',
-  payment: '#fc7079',
-}
-const TIERS_FALLBACK = ['核心', '次核心', '外层'] as const
-const BINS = 20
+echarts.use([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 export type ResultTab = 'overview' | 'attendance' | 'interaction' | 'payment'
 
-/** 能不能真画图。jsdom 没有 canvas（`getContext` 返回 null），此时不 init。 */
-function canRender(): boolean {
-  try {
-    return Boolean(document.createElement('canvas').getContext('2d'))
-  } catch {
-    return false
-  }
-}
-
-interface Item {
-  strength: number
-}
-
-/** 后端 `/ranked` 返回的全池聚合（过 10% 门槛后的所有人） */
-export interface PoolStats {
-  size: number
-  tiers: Record<string, number>
-  bins: { lo: number; hi: number; counts: number[] }
-  axes?: Record<string, { lo: number; hi: number; counts: number[] }>
-  pay_split?: { gift: number; guard: number; sc: number }
-  type_counts?: Record<string, number>
-  /** 平均同接（去头尾 10%）；缺数据时为 null */
-  acv?: number | null
-  /** 被门槛分流走的人数（未进池） */
-  excluded?: number
-  pool_rule?: string
-}
+const PINK = ['#c9406f', '#ffa2b4', '#fc7079', '#7c93b5', '#d9a5b3', '#a66c8a']
+const GREEN = '#52c41a'
 
 interface Props {
-  /** 出席场次数分布（2026-10-25）：下标 = 出席场次，值 = 人数 */
+  items: FanRankedRow[]
+  pool: {
+    size: number
+    tiers: Record<string, number>
+    bins: { lo: number; hi: number; counts: number[] }
+    pay_split?: { gift: number; guard: number; sc: number }
+    acv?: number | null
+    excluded?: number
+  } | null | undefined
+  tab: ResultTab
+  /** 出席场次数分布（下标 = 出席场次，值 = 人数） */
   attBins?: { max: number; counts: number[] }
-
-  /** 名单（后端已按当前排序口径降序）—— 仅在**没有** pool 时兜底使用 */
-  items: Item[]
-  /** 全池聚合：有它就以它为准，图覆盖全池而不是名单 */
-  pool?: PoolStats
-  /** 当前页签 */
-  tab?: ResultTab
-}
-
-const AXIS_TITLE: Record<Exclude<ResultTab, 'overview'>, string> = {
-  attendance: '出席分布',
-  interaction: '互动分布',
-  payment: '付费分布',
-}
-
-/**
- * 结果区的图表（2026-10-23 分页签改造）。
- *
- * - `overview`：核心度分层（环形）+ 核心度分布（曲线），用 `pool.tiers` / `pool.bins`；
- * - `attendance` / `interaction` / `payment`：该轴的分位分布（20 桶），用 `pool.axes[x]`。
- *
- * ⚠️ **口径**：图永远覆盖**全池**（过 10% 门槛的所有人），与下方名单（当前页 20 条）无关。
- */
-
-/** ECharts 实例与宿主 DOM 绑定：宿主被替换（切页签重挂载）时必须重建，否则画到已经脱离文档的节点上 —— 表现为"图不见了"。 */
-function ensureChart(
-  api: { current: ReturnType<typeof echarts.init> | null },
-  host: HTMLDivElement | null,
-) {
-  if (!host) return null
-  if (api.current && api.current.getDom() !== host) {
-    api.current.dispose()
-    api.current = null
+  /** 新图表数据（2026-10-26） */
+  charts?: {
+    pool_trend?: { end: number; size: number; new: number; left: number; same: number }[]
+    lag_hist?: { labels: string[]; counts: number[] }
+    msg_hist?: { labels: string[]; counts: number[] }
+    spam_split?: Record<string, number>
   }
-  api.current ??= echarts.init(host)
-  return api.current
 }
 
-export default function ResultCharts({
-  attBins, items, pool, tab = 'overview' }: Props) {
-  const pieRef = useRef<HTMLDivElement>(null)
-  const lineRef = useRef<HTMLDivElement>(null)
-  const axisRef = useRef<HTMLDivElement>(null)
-  const pieApi = useRef<ReturnType<typeof echarts.init> | null>(null)
-  const lineApi = useRef<ReturnType<typeof echarts.init> | null>(null)
-  const axisApi = useRef<ReturnType<typeof echarts.init> | null>(null)
+interface Card {
+  key: string
+  title: string
+  note?: string
+  option: EChartsCoreOption
+}
 
-  const model = useMemo(() => {
-    if (tab === 'attendance' && attBins && attBins.counts.length > 1) {
-      // 2026-10-25：分位天生均匀，直方图看不出形态 —— 改画"来了几场"的人数分布
-      const max = attBins.max || attBins.counts.length - 1
-      // 去掉 y=0 的空柱（2026-10-25 用户口径）：没人达到的场次数不该占一根柱子
-      const pairs = Array.from({ length: max }, (_, i) => [i + 1, attBins.counts[i + 1] ?? 0] as const)
-        .filter(([, c]) => c > 0)
-      return {
-        kind: 'axis' as const,
-        x: pairs.map(([n]) => `${n}`),
-        y: pairs.map(([, c]) => c),
-        total: attBins.counts.reduce((acc: number, v: number) => acc + v, 0),
-        xName: '出席场次',
-      }
-    }
+/** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
+function EChart({ option }: { option: EChartsCoreOption }) {
+  const box = useRef<HTMLDivElement | null>(null)
+  const api = useRef<ReturnType<typeof echarts.init> | null>(null)
 
-    if (tab !== 'overview') {
-      const a = pool?.axes?.[tab]
-      if (a) {
-        const span = a.hi - a.lo || 1
-        return {
-          kind: 'axis' as const,
-          x: Array.from({ length: BINS }, (_, i) => (a.lo + (span * (i + 0.5)) / BINS).toFixed(3)),
-          y: a.counts,
-          total: a.counts.reduce((s, v) => s + v, 0),
-        }
-      }
-      return { kind: 'axis' as const, x: [] as string[], y: [] as number[], total: 0 }
-    }
-
-    if (pool) {
-      const span = pool.bins.hi - pool.bins.lo || 1
-      return {
-        kind: 'overview' as const,
-        pie: Object.entries(pool.tiers).map(([name, value]) => ({ name, value })),
-        x: Array.from({ length: BINS }, (_, i) =>
-          (pool.bins.lo + (span * (i + 0.5)) / BINS).toFixed(3)),
-        y: pool.bins.counts,
-        total: pool.size,
-      }
-    }
-
-    // 兜底：没有 pool 时退回名单（旧响应）
-    const n = items.length
-    const coreEnd = Math.round(n * 0.2)
-    const midEnd = Math.round(n * 0.5)
-    const counts = [coreEnd, Math.max(0, midEnd - coreEnd), Math.max(0, n - midEnd)]
-    const lo = n ? Math.min(...items.map((x) => x.strength)) : 0
-    const hi = n ? Math.max(...items.map((x) => x.strength)) : 1
-    const span = hi - lo || 1
-    const bins = new Array<number>(BINS).fill(0)
-    for (const it of items) {
-      const i = Math.min(BINS - 1, Math.max(0, Math.floor(((it.strength - lo) / span) * BINS)))
-      bins[i] += 1
-    }
-    return {
-      kind: 'overview' as const,
-      pie: TIERS_FALLBACK.map((name, i) => ({ name, value: counts[i] })),
-      x: Array.from({ length: BINS }, (_, i) => (lo + (span * (i + 0.5)) / BINS).toFixed(3)),
-      y: bins,
-      total: n,
-    }
-  }, [items, pool, tab])
-
-  // 环形图（仅总览）
   useEffect(() => {
-    if (tab !== 'overview' || !pieRef.current || !canRender()) return
+    const host = box.current
+    if (!host) return
     try {
-      ensureChart(pieApi, pieRef.current)
-      const opt: EChartsCoreOption = {
-        tooltip: { trigger: 'item', formatter: '{b}：{c} 人（{d}%）' },
-        series: [{
-          type: 'pie',
-          radius: ['46%', '72%'],
-          center: ['50%', '52%'],
-          itemStyle: { borderColor: '#fff', borderWidth: 2 },
-          label: { formatter: '{b}\n{c} 人', fontSize: 11, lineHeight: 15 },
-          data: (model.kind === 'overview' ? model.pie : [])
-            .map((d, i) => ({ ...d, itemStyle: { color: PINK[i] } })),
-        }],
-      }
-      ensureChart(pieApi, pieRef.current)?.setOption(opt, true)
-    } catch { /* jsdom / 无 canvas：静默降级 */ }
-  }, [model, tab])
-
-  // 曲线（总览）
-  useEffect(() => {
-    if (tab !== 'overview' || !lineRef.current || !canRender()) return
-    try {
-      ensureChart(lineApi, lineRef.current)
-      const opt: EChartsCoreOption = {
-        grid: { left: 44, right: 12, top: 16, bottom: 28 },
-        tooltip: { trigger: 'axis' },
-        xAxis: {
-          type: 'category',
-          data: model.x,
-          axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 3 },
-          axisLine: { lineStyle: { color: 'rgba(210,216,222,0.9)' } },
-        },
-        yAxis: {
-          type: 'value',
-          axisLabel: { fontSize: 10, color: '#5b6c7e' },
-          splitLine: { lineStyle: { color: 'rgba(210,216,222,0.45)' } },
-        },
-        series: [{
-          type: 'line',
-          data: model.y,
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 4,
-          lineStyle: { width: 2, color: PINK[0] },
-          itemStyle: { color: PINK[0] },
-          areaStyle: { color: 'rgba(255,162,180,0.16)' },
-        }],
-      }
-      ensureChart(lineApi, lineRef.current)?.setOption(opt, true)
-    } catch { /* 同上 */ }
-  }, [model, tab])
-
-  // 单轴分布（柱状）
-  useEffect(() => {
-    if (tab === 'overview' || !axisRef.current || !canRender()) return
-    try {
-      ensureChart(axisApi, axisRef.current)
-      const color = AXIS_COLOR[tab] ?? PINK[0]
-      const opt: EChartsCoreOption = {
-        grid: { left: 44, right: 12, top: 16, bottom: 28 },
-        tooltip: { trigger: 'axis' },
-        xAxis: {
-          type: 'category',
-          data: model.x,
-          axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 3 },
-          axisLine: { lineStyle: { color: 'rgba(210,216,222,0.9)' } },
-        },
-        yAxis: {
-          type: 'value',
-          axisLabel: { fontSize: 10, color: '#5b6c7e' },
-          splitLine: { lineStyle: { color: 'rgba(210,216,222,0.45)' } },
-        },
-        series: [{
-          type: 'bar',
-          data: model.y,
-          barWidth: '62%',
-          itemStyle: { color, borderRadius: [3, 3, 0, 0] },
-        }],
-      }
-      ensureChart(axisApi, axisRef.current)?.setOption(opt, true)
-    } catch { /* 同上 */ }
-  }, [model, tab])
-
-  useEffect(() => {
-    const onResize = () => {
-      pieApi.current?.resize()
-      lineApi.current?.resize()
-      axisApi.current?.resize()
-    }
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      for (const api of [pieApi, lineApi, axisApi]) {
-        api.current?.dispose()
+      if (!document.createElement('canvas').getContext('2d')) return   // jsdom
+      if (api.current && api.current.getDom() !== host) {
+        api.current.dispose()
         api.current = null
       }
-    }
-  }, [])
+      api.current ??= echarts.init(host)
+      api.current.setOption(option, true)
+    } catch { /* 图表失败不影响其余内容 */ }
+  }, [option])
 
-  if (tab !== 'overview') {
-    const split = pool?.pay_split
-    const total = split ? split.gift + split.guard + split.sc : 0
-    return (
-      <div className="wb-charts">
-        <section className="wb-card wb-chart-card" data-testid="chart-axis-card">
-          <h3 className="wb-card-title">
-            {AXIS_TITLE[tab]}
-            <span className="wb-card-note" style={{ marginLeft: 8 }}>
-              全池 {model.total.toLocaleString()} 人 · 横轴分位 · 纵轴人数
-            </span>
-          </h3>
-          <div className="wb-chart" ref={axisRef} data-testid="chart-axis" />
-        </section>
-        {tab === 'payment' && split && (
-          <section className="wb-card wb-chart-card" data-testid="chart-paysplit-card">
-            <h3 className="wb-card-title">
-              付费构成
-              <span className="wb-card-note" style={{ marginLeft: 8 }}>全部场次合计</span>
-            </h3>
-            <dl className="wb-split">
-              {([['礼物', split.gift], ['舰长', split.guard], ['醒目留言', split.sc]] as const)
-                .map(([name, v]) => (
-                  <div className="wb-split-row" key={name}>
-                    <dt>{name}</dt>
-                    <dd>¥{v.toLocaleString(undefined, { maximumFractionDigits: 0 })}</dd>
-                    <dd className="wb-split-pct">{total ? `${((v / total) * 100).toFixed(1)}%` : '—'}</dd>
-                  </div>
-                ))}
-            </dl>
-          </section>
-        )}
-      </div>
-    )
-  }
+  useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
+  return <div ref={box} className="wb-chart" />
+}
+
+const axisBase = (labels: string[], values: number[], name: string): EChartsCoreOption => ({
+  grid: { left: 48, right: 16, top: 18, bottom: 36 },
+  tooltip: { trigger: 'axis' },
+  xAxis: {
+    type: 'category', data: labels,
+    axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 0, rotate: labels.length > 8 ? 30 : 0 },
+  },
+  yAxis: {
+    type: 'value', name,
+    nameTextStyle: { fontSize: 10, color: '#5b6c7e' },
+    axisLabel: { fontSize: 10, color: '#5b6c7e' },
+  },
+  series: [{ type: 'bar', data: values, barMaxWidth: 26, itemStyle: { color: PINK[0] } }],
+})
+
+/**
+ * 结果区图表（2026-10-26 改版）。
+ *
+ * - 一页最多 **2 张**卡片，左右箭头一次翻一张（用户口径）；
+ * - **饼图永远排第一**（用户口径）；
+ * - 每张图都是独立 `EChart`，宿主或 option 变化都会重建实例。
+ */
+export default function ResultCharts({ items, pool, tab, attBins, charts }: Props) {
+  const [page, setPage] = useState(0)
+
+  const cards = useMemo<Card[]>(() => {
+    const out: Card[] = []
+
+    if (tab === 'overview' && pool) {
+      out.push({
+        key: 'tiers',
+        title: '核心度分层',
+        note: `共 ${pool.size} 人`,
+        option: {
+          tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
+          legend: { bottom: 0, textStyle: { fontSize: 11 } },
+          series: [{
+            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
+            data: Object.entries(pool.tiers).map(([name, value], i) => ({
+              name, value, itemStyle: { color: PINK[i % PINK.length] },
+            })),
+            label: { fontSize: 11 },
+          }],
+        },
+      })
+
+      const span = pool.bins.hi - pool.bins.lo || 1
+      out.push({
+        key: 'strength',
+        title: '核心度分布',
+        note: '横轴核心度 · 纵轴人数',
+        option: {
+          grid: { left: 48, right: 16, top: 18, bottom: 30 },
+          tooltip: { trigger: 'axis' },
+          xAxis: {
+            type: 'category',
+            data: pool.bins.counts.map((_, i) =>
+              (pool.bins.lo + (span * (i + 0.5)) / pool.bins.counts.length).toFixed(3)),
+            axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 3 },
+          },
+          yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
+          series: [{
+            type: 'line', data: pool.bins.counts, smooth: true, symbol: 'none',
+            lineStyle: { color: PINK[0] }, areaStyle: { color: 'rgba(255,162,180,0.18)' },
+          }],
+        },
+      })
+
+      const tr = charts?.pool_trend ?? []
+      if (tr.length) {
+        out.push({
+          key: 'trend',
+          title: '核心观众池变化',
+          note: '每 5 场一格 · 新进 / 出池 / 未变动',
+          option: {
+            grid: { left: 48, right: 16, top: 26, bottom: 30 },
+            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+            legend: { top: 0, textStyle: { fontSize: 11 } },
+            xAxis: {
+              type: 'category', data: tr.map((x) => `前${x.end}场`),
+              axisLabel: { fontSize: 10, color: '#5b6c7e' },
+            },
+            yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
+            series: [
+              { name: '新进', type: 'bar', stack: 'p', data: tr.map((x) => x.new), itemStyle: { color: GREEN } },
+              { name: '出池', type: 'bar', stack: 'p', data: tr.map((x) => x.left), itemStyle: { color: '#fc7079' } },
+              { name: '未变动', type: 'bar', stack: 'p', data: tr.map((x) => x.same), itemStyle: { color: '#d9d9d9' } },
+            ],
+          },
+        })
+      }
+    }
+
+    if (tab === 'attendance') {
+      if (attBins && attBins.counts.length > 1) {
+        const max = attBins.max || attBins.counts.length - 1
+        const pairs = Array.from({ length: max }, (_, i) => [i + 1, attBins.counts[i + 1] ?? 0] as const)
+          .filter(([, c]) => c > 0)
+        out.push({
+          key: 'att', title: '出席分布', note: '横轴出席场次 · 纵轴人数',
+          option: axisBase(pairs.map(([n]) => String(n)), pairs.map(([, c]) => c), '人数'),
+        })
+      }
+      const lh = charts?.lag_hist
+      if (lh) {
+        out.push({
+          key: 'lag', title: '入场时滞分布', note: '横轴场均时滞（分钟）· 纵轴人数',
+          option: {
+            ...axisBase(lh.labels, lh.counts, '人数'),
+            series: [{
+              type: 'line', data: lh.counts, smooth: true, symbol: 'circle', symbolSize: 5,
+              lineStyle: { color: PINK[0] }, itemStyle: { color: PINK[0] },
+              areaStyle: { color: 'rgba(255,162,180,0.18)' },
+            }],
+          },
+        })
+      }
+    }
+
+    if (tab === 'interaction') {
+      const sp = charts?.spam_split
+      if (sp) {
+        out.push({
+          key: 'spam', title: '独轮车占比', note: '池内三档判定',
+          option: {
+            tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
+            legend: { bottom: 0, textStyle: { fontSize: 11 } },
+            series: [{
+              type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
+              data: [
+                { name: '确定', value: sp.confirmed ?? 0, itemStyle: { color: '#c9406f' } },
+                { name: '疑似', value: sp.suspected ?? 0, itemStyle: { color: '#e8b04b' } },
+                { name: '未命中', value: sp.none ?? 0, itemStyle: { color: '#d9d9d9' } },
+              ],
+              label: { fontSize: 11 },
+            }],
+          },
+        })
+      }
+      const mh = charts?.msg_hist
+      if (mh) {
+        out.push({
+          key: 'msg', title: '场均弹幕分布', note: '横轴场均弹幕 · 纵轴人数',
+          option: axisBase(mh.labels, mh.counts, '人数'),
+        })
+      }
+    }
+
+    if (tab === 'payment' && pool?.pay_split) {
+      const ps = pool.pay_split
+      out.push({
+        key: 'pay', title: '付费构成', note: '全池合计',
+        option: {
+          tooltip: { trigger: 'item', formatter: '{b}: ¥{c}（{d}%）' },
+          legend: { bottom: 0, textStyle: { fontSize: 11 } },
+          series: [{
+            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
+            data: [
+              { name: '舰长类', value: Math.round(ps.guard), itemStyle: { color: PINK[0] } },
+              { name: '醒目留言', value: Math.round(ps.sc), itemStyle: { color: PINK[2] } },
+              { name: '礼物', value: Math.round(ps.gift), itemStyle: { color: PINK[3] } },
+            ],
+            label: { fontSize: 11 },
+          }],
+        },
+      })
+    }
+
+    if (!out.length && items.length) {
+      const n = items.length
+      const a = Math.round(n * 0.2)
+      const b = Math.round(n * 0.5)
+      out.push({
+        key: 'fallback', title: '核心度分层', note: `${n} 人（旧响应）`,
+        option: {
+          tooltip: { trigger: 'item' },
+          legend: { bottom: 0, textStyle: { fontSize: 11 } },
+          series: [{
+            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
+            data: [
+              { name: '核心', value: a, itemStyle: { color: PINK[0] } },
+              { name: '次核心', value: Math.max(0, b - a), itemStyle: { color: PINK[1] } },
+              { name: '外层', value: Math.max(0, n - b), itemStyle: { color: PINK[2] } },
+            ],
+          }],
+        },
+      })
+    }
+    return out
+  }, [items, pool, tab, attBins, charts])
+
+  const PER_PAGE = 2
+  const maxPage = Math.max(0, cards.length - PER_PAGE)
+  useEffect(() => { setPage(0) }, [tab])
+  const start = Math.min(page, maxPage)
+  const shown = cards.slice(start, start + PER_PAGE)
+
+  if (!cards.length) return null
 
   return (
-    <div className="wb-charts">
-      <section className="wb-card wb-chart-card" data-testid="chart-pie-card">
-        <h3 className="wb-card-title">
-          核心度分层
-          <span className="wb-card-note" style={{ marginLeft: 8 }}>共 {model.total} 人</span>
-        </h3>
-        <div className="wb-chart" ref={pieRef} data-testid="chart-pie" />
-        {pool && (
-          <p className="wb-chart-note" data-testid="pool-rule">
-            {pool.acv
-              ? `池子按 3×平均同接（ACV ${Math.round(pool.acv).toLocaleString()}）划定 · `
-                + `另有 ${(pool.excluded ?? 0).toLocaleString()} 人分流走`
-              : '池子按出席率门槛划定（该窗口缺 ACV 数据）'}
-          </p>
-        )}
-      </section>
-      <section className="wb-card wb-chart-card" data-testid="chart-line-card">
-        <h3 className="wb-card-title">
-          核心度分布
-          <span className="wb-card-note" style={{ marginLeft: 8 }}>横轴核心度 · 纵轴人数</span>
-        </h3>
-        <div className="wb-chart" ref={lineRef} data-testid="chart-line" />
-      </section>
+    <div className="wb-charts" data-testid="result-charts">
+      <button
+        type="button" className="wb-charts-arrow" aria-label="上一张"
+        data-testid="charts-prev" disabled={start === 0}
+        onClick={() => setPage(Math.max(0, start - 1))}
+      >
+        <ChevronLeft className="size-4" />
+      </button>
+
+      <div className="wb-charts-track">
+        {shown.map((c) => (
+          <section className="wb-card wb-chart-card" key={c.key}
+                   data-testid={c.key === 'tiers' ? 'chart-pie-card'
+                     : c.key === 'strength' ? 'chart-line-card'
+                       : `chart-${c.key}`}>
+            <h3 className="wb-card-title">
+              {c.title}
+              {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
+            </h3>
+            <EChart option={c.option} />
+          </section>
+        ))}
+      </div>
+
+      <button
+        type="button" className="wb-charts-arrow" aria-label="下一张"
+        data-testid="charts-next" disabled={start >= maxPage}
+        onClick={() => setPage(Math.min(maxPage, start + 1))}
+      >
+        <ChevronRight className="size-4" />
+      </button>
+
+      {tab === 'overview' && pool && (
+        <p className="wb-charts-note" data-testid="pool-rule">
+          池子按 3×平均同接{pool.acv ? `（ACV ${Math.round(pool.acv).toLocaleString()}）` : ''}划定
+          {pool.excluded ? ` · 另有 ${pool.excluded.toLocaleString()} 人分流走` : ''}
+        </p>
+      )}
+
+      <span className="wb-charts-pos">
+        {start + 1}–{Math.min(start + PER_PAGE, cards.length)} / {cards.length}
+      </span>
     </div>
   )
 }

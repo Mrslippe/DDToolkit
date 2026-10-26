@@ -1656,6 +1656,13 @@ export interface FanRanked {
   list_total?: number
   /** 出席场次数分布（下标 = 出席场次，值 = 人数） */
   att_bins?: { max: number; counts: number[] }
+  /** 新图表数据（2026-10-26） */
+  charts?: {
+    pool_trend?: { end: number; size: number; new: number; left: number; same: number }[]
+    lag_hist?: { labels: string[]; counts: number[] }
+    msg_hist?: { labels: string[]; counts: number[] }
+    spam_split?: { confirmed?: number; suspected?: number; none?: number }
+  }
   /** 每场的时滞参照（p90，分钟）：上色按场归一 */
   att_lag_ref?: number[]
   /** 没进样本的场次（时间 + 标题） */

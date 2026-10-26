@@ -63,12 +63,36 @@ function spamLabel(level?: string): string {
   return level === 'confirmed' ? '确定' : level === 'suspected' ? '疑似' : '—'
 }
 
-/** 付费构成：舰长类 / SC / 礼物 各占该用户付费额的比例 */
-function payMix(r: FanRankedRow) {
-  const total = (r.gift_amt ?? 0) + (r.guard_amt ?? 0) + (r.sc_amt ?? 0)
+/**
+ * 付费构成（2026-10-26 改版）：**三色占比轴 + 文字**。
+ *
+ * 比原来的「49% / 51% / 0%」更直观 —— 一眼能看出谁几乎全是舰长、谁全靠 SC。
+ * 颜色与付费页饼图一致：舰长类=主粉、SC=珊瑚、礼物=藏青。
+ */
+function payMixBar(r: FanRankedRow) {
+  const guard = r.guard_amt ?? 0
+  const sc = r.sc_amt ?? 0
+  const gift = r.gift_amt ?? 0
+  const total = guard + sc + gift
   if (!total) return '—'
-  const f = (v: number) => `${((v / total) * 100).toFixed(0)}%`
-  return `${f(r.guard_amt ?? 0)} / ${f(r.sc_amt ?? 0)} / ${f(r.gift_amt ?? 0)}`
+  const seg = (v: number, color: string, label: string) => {
+    const w = (v / total) * 100
+    if (w <= 0) return null
+    return <i key={label} style={{ width: `${w}%`, background: color }} title={`${label} ${w.toFixed(0)}%`} />
+  }
+  const pct = (v: number) => `${((v / total) * 100).toFixed(0)}%`
+  return (
+    <span className="wb-mix">
+      <span className="wb-mix-bar">
+        {seg(guard, '#c9406f', '舰长类')}
+        {seg(sc, '#fc7079', '醒目留言')}
+        {seg(gift, '#7c93b5', '礼物')}
+      </span>
+      <span className="wb-mix-text">
+        {pct(guard)} / {pct(sc)} / {pct(gift)}
+      </span>
+    </span>
+  )
 }
 
 /**
@@ -208,7 +232,7 @@ export default function RankedTable({
                     <td className="wb-th-key-val">{pct(r.axis_percentiles.payment ?? 0)}</td>
                     <td>{r.pay_total > 0 ? `¥${r.pay_total.toLocaleString()}` : '—'}</td>
                     <td>{r.pay_share ? `${(r.pay_share * 100).toFixed(2)}%` : '—'}</td>
-                    <td className="wb-pay-mix">{payMix(r)}</td>
+                    <td className="wb-pay-mix">{payMixBar(r)}</td>
                   </>}
                 </tr>
               ))}

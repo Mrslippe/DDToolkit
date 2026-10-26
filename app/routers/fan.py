@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from datetime import UTC, date, datetime
 from typing import Any
@@ -78,7 +79,8 @@ from app.services.fan.avatars import fetch_avatar, prefetch
 from app.services.fan import member_index
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
-from app.services.fan.pool import core_size_for, pool_size_for, tier_sizes_for, window_acv
+from app.services.fan.pool import (POOL_MULT as POOL_SIZE_MULT, core_size_for,
+                                   pool_size_for, tier_sizes_for, window_acv)
 from app.services.fan.tags import explain as explain_tags
 from app.services.fan.timeline import (
     MAX_LAG,
@@ -173,6 +175,118 @@ def _range_or_none(since: str | None, until: str | None) -> tuple[str | None, st
 
 
 # ── 数据计算 ────────────────────────────────────────────────────────────────
+#: 滑动窗口：每 5 场一格
+POOL_TREND_STEP = 5
+
+
+def _chart_data(win, table, payload: dict) -> dict[str, Any]:
+    """三张新图表所需的数据（2026-10-26）。
+
+    - `pool_trend`：每 5 场为一个窗口，算该窗口的**入选池**（3×ACV），
+      与上一个窗口比较得到「新进 / 出池 / 未变」；
+    - `lag_hist`：每个用户「场均入场时滞」的分段人数；
+    - `msg_hist`：每个用户「场均弹幕」的分段人数；
+    - `spam_split`：池内 确定/疑似/未命中 独轮车的人数。
+
+    口径：滑动窗口的池用**同一套三维分位 + 3×ACV**规则，只是把统计范围换成那 5 场；
+    因此它和"整窗名单"不完全一致（会略小），图表要标注这一点。
+    """
+    ids = [sr.live_id for sr in win.sessions]
+    pos = {lid: i for i, lid in enumerate(ids)}
+    n = len(ids)
+    users = win.users
+
+    # 每个用户的逐场三元组：出席场次数 / 弹幕 / 付费
+    # 只统计**入选池**的人：图表讲的是池的变化，把 17 万观测用户都算进去
+    # 会慢 30 倍且没有意义（2026-10-26 实测 49s → 优化后个位数秒）。
+    per_user: dict[str, list[tuple[int, int, float]]] = {}
+    for uid in table.uids:
+        rows = win.slices.get(uid)
+        if not rows:
+            continue
+        arr = [(0, 0, 0.0)] * n
+        for sl in rows:
+            i = pos.get(sl[0])
+            if i is None:
+                continue
+            arr[i] = (1, int(sl[2]), float(sl[3]))
+        per_user[uid] = arr
+
+    trend: list[dict[str, Any]] = []
+    prev: set[str] | None = None
+    for start in range(0, n - POOL_TREND_STEP + 1, POOL_TREND_STEP):
+        blk = range(start, start + POOL_TREND_STEP)
+        stats = []
+        for uid, arr in per_user.items():
+            att = sum(arr[i][0] for i in blk)
+            if not att:
+                continue
+            msg = sum(arr[i][1] for i in blk)
+            pay = sum(arr[i][2] for i in blk)
+            stats.append((uid, att, msg, pay))
+        if not stats:
+            continue
+        # 三轴各自取分位，S = 均值；池大小按该窗口 ACV 的 3 倍（与主口径一致）
+        def _pct(vals: list[float]) -> list[float]:
+            order_ = sorted(range(len(vals)), key=lambda i: vals[i])
+            out = [0.0] * len(vals)
+            for rank, i in enumerate(order_):
+                out[i] = rank / max(1, len(vals) - 1)
+            return out
+
+        pa = _pct([float(x[1]) for x in stats])
+        pm = _pct([math.log1p(x[2]) for x in stats])
+        pp = _pct([math.log1p(x[3]) for x in stats])
+        scored = sorted(
+            ((0.5 * pa[i] + 0.3 * pm[i] + 0.2 * pp[i]), stats[i][0])
+            for i in range(len(stats))
+        )
+        acv_blk = [float((getattr(sr, "stats", None) or {}).get("acv") or 0)
+                   for sr in win.sessions[start:start + POOL_TREND_STEP]]
+        acv_blk = [a for a in acv_blk if a > 0]
+        size = int(sum(acv_blk) / len(acv_blk) * POOL_SIZE_MULT) if acv_blk else len(scored) // 3
+        cur = {uid for _, uid in scored[-size:]} if size > 0 else set()
+        if prev is None:
+            trend.append({"end": start + POOL_TREND_STEP, "size": len(cur),
+                          "new": len(cur), "left": 0, "same": 0})
+        else:
+            trend.append({"end": start + POOL_TREND_STEP, "size": len(cur),
+                          "new": len(cur - prev), "left": len(prev - cur),
+                          "same": len(cur & prev)})
+        prev = cur
+
+    def _hist(vals: list[float], edges: list[float]) -> dict[str, Any]:
+        counts = [0] * (len(edges) + 1)
+        for v in vals:
+            for i, e in enumerate(edges):
+                if v < e:
+                    counts[i] += 1
+                    break
+            else:
+                counts[-1] += 1
+        labels = [f"<{edges[0]:g}"] + [f"{edges[i]:g}–{edges[i+1]:g}"
+                                       for i in range(len(edges) - 1)] + [f"≥{edges[-1]:g}"]
+        return {"labels": labels, "counts": counts}
+
+    # ⚠️ `set(table.uids)` 必须提到推导式外：写在条件里会**每个用户重建一次集合**，
+    # 复杂度从 O(n) 变 O(n×池)，实测把 _compute 拖到 50 秒（2026-10-26）。
+    pool_set = set(table.uids)
+    lag_vals = [users[uid].mean_lag for uid in pool_set
+                if users[uid].mean_lag is not None]
+    msg_vals = [users[uid].m / max(1, users[uid].att_n) for uid in pool_set]
+    spam = {"confirmed": 0, "suspected": 0, "none": 0}
+    for uid in table.uids:
+        lv = win.spam_levels.get(uid, "none")
+        spam[lv if lv in spam else "none"] += 1
+
+    return {
+        "pool_trend": trend,
+        "lag_hist": _hist([float(x) for x in lag_vals], [5, 10, 20, 30, 45, 60, 90, 120, 180]),
+        "msg_hist": _hist([float(x) for x in msg_vals], [5, 10, 20, 50, 100, 200, 500, 1000]),
+        "spam_split": spam,
+    }
+
+
 def _compute(vtuber_name: str, window: int, since: str | None = None,
              until: str | None = None,
              live_ids: list[str] | None = None) -> dict[str, Any]:
@@ -243,6 +357,10 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
             lag = sl[6] if len(sl) > 6 else None
             lags[i] = float(lag) if lag is not None else 0.0
         payload["att_bits"][_uid] = lags
+
+    # ── 新增图表数据（2026-10-26）──────────────────────────────────────────
+    # 全部从 `win.slices` 推导，**不额外读文件**（否则 15 个滑动窗口要扫 15 遍 raw）。
+    payload["charts"] = _chart_data(win, table, payload)
 
     # 每场的时滞参照（p90）：颜色要**按场归一**，否则长场次里所有人都是"最淡"。
     # 实测七海这个 V 的场次中位时长 6 小时（最长 11.6h），时滞中位数 137 分钟；
@@ -711,6 +829,8 @@ def ranked(
         #: 全池（过门槛后的所有人）的分层与强度分布 —— 两张图用它，不用 items
         # 标签目录随名单一起返回（2026-10-25）：筛选器不必再发一次请求，
         # 也就没有"分析刚完成、点开筛选还在算"的十几秒等待。
+        #: 三张新图表的数据（滑动池趋势 / 时滞分布 / 场均弹幕分布 / 独轮车占比）
+        "charts": payload.get("charts") or {},
         "tag_catalog": [
             {"name": name, "prevalence": round(prev, 6)}
             for name, prev in sorted(payload["tag_prev"].items(),
