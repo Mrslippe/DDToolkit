@@ -60,7 +60,7 @@ DANMAKUS_BASE = "https://ukamnads.icu"
 #: 5000 在大场（155k）与小场（13k）上都能正常翻页。
 COLLECT_PAGE_SIZE = 5_000
 #: 首次（不带 pageNum）用的大页，够小场次一次取完
-COLLECT_PAGE_SIZE_BIG = 100_000
+COLLECT_PAGE_SIZE_BIG = 200_000
 #: 单场最多翻多少页（防上游异常时死循环；50k × 20 = 100 万条，远超任何真实场次）
 #: 单场最多翻多少页。5000/页 × 60 = 30 万条 —— 实测最长的一场 131,583 条需要 27 页，
 #: 原来的 20 页正好卡在 100,000，会被误判成「已取全」。
@@ -310,10 +310,44 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
         if page == 1 and not recs:
             return (first, extra) if with_extra else first   # 不认 pageNum，退回一次性结果
         out.extend(recs)
-        if not recs or not has_more:
+        # ⚠️ `hasMore` 会在**尾部提前变 false**（2026-10-27 实测：平台计数 128,623，
+        # 但第 25 页 hasMore=False，只拿到 123,623 —— 正好少一页 5,000 条）。
+        # 因此以 `total` 为准：只要没拉够就继续翻，`hasMore` 只作为辅助信号。
+        if not recs:
             break
-    result = out if len(out) >= len(first) else first
+        if total > 0 and len(out) < total and page < COLLECT_MAX_PAGES:
+            continue
+        if not has_more:
+            break
+    # ③ 合并去重：`first`（超大页）与翻页结果**互补** ——
+    #    - 实测 128,623 条的场次：超大页一次给全，翻页只到 123,623（`hasMore` 提前 false）；
+    #    - 有的场次反过来：超大页只给 17,685 或 0，翻页才是全的。
+    #    两边合起来按 (type,uId,sendDate,message) 去重，才能真的对齐 `total`。
+    merged = _merge_records(first, out)
+    result = merged if len(merged) >= len(first) else first
     return (result, extra) if with_extra else result
+
+
+def _merge_records(first: list[dict], pages: list[dict]) -> list[dict]:
+    """把"超大页"和"翻页"两份记录合并去重（保持时间顺序）。
+
+    上游记录没有唯一 id，用 `(type, uId, sendDate, message)` 作键；
+    非弹幕没有 `message`，用 `price` 兜底。同一用户同一毫秒发同样的内容，视为同一条。
+    """
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for rec in list(first) + list(pages):
+        key = (rec.get("type"), rec.get("uId"), rec.get("sendDate"),
+               rec.get("message"), rec.get("price"))
+        if all(k is None for k in key):
+            # 兜底：既没有时间也没有用户（测试夹具 / 未来字段变化）时，
+            # 用整条记录做键，否则所有记录都会塌成同一个 key 被误删
+            key = ("__rec__", repr(sorted(rec.items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rec)
+    return out
 
 
 async def list_sessions(client: httpx.AsyncClient, v: VtuberRef) -> list[SessionPlan]:
@@ -939,6 +973,18 @@ async def collect(
                 stats["acv_points"] = _pts
                 stats["peak_online"] = _peak
                 stats["live_id"] = s.live_id
+                # 上游"平台计数"与"实际能拿到的条数"经常对不上（有的场次接口直接返回
+                # total=0，有的只给一部分）。记录下来，别让数据缺口无声无息（2026-10-27）。
+                _plat = s.danmakus_count or 0
+                stats["coverage"] = {
+                    "platform": _plat,
+                    "fetched": len(recs),
+                    "ratio": round(len(recs) / _plat, 4) if _plat else None,
+                }
+                if _plat and len(recs) < _plat * 0.95:
+                    q = stats.setdefault("quality", {})
+                    q["status"] = q.get("status") or "partial"
+                    q["note"] = f"上游只给到 {len(recs)}/{_plat} 条"
                 p.phase = "write"
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
                 p.done += 1
