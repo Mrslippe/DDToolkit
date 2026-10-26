@@ -2014,13 +2014,18 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-charts { position: relative; display: block; width: 100%; }
 
 /* 上下左右都留出阴影空间：`overflow:hidden` 只为裁掉相邻页，不该裁卡片阴影 */
+/*
+ * 裁剪框比内容**左右各宽 24px、上下各宽 16px**：
+ * - 横向负 margin 让边框盒外扩，但 **padding 为 0** ⇒ 内容盒同样外扩；
+ * - 每页自带 `padding: 0 24px`，所以卡片**边框**正好落在面板左右边缘（与名单卡对齐）；
+ * - 卡片阴影落在裁剪框那 24px 的带子里 ⇒ **不被裁**；
+ * - 下一页从裁剪框右缘正开始 ⇒ 被一刀切掉，不会露边。
+ * ⚠️ 24px 必须 ≥ 卡片横向阴影溢出量（当前约 16–20px）。
+ */
 .wb-charts-viewport {
   overflow: hidden;
-  width: 100%;
-  /* 左右不留白：留白放在 `.wb-charts-page` 自己的 padding 里。
-     否则"视口 padding + 负 margin"的组合会让下一页从边界外一点点开始，
-     永远透出一条边（2026-10-26 反复出现的"粘连/露边"）。 */
-  padding: 16px 0 14px;
+  margin: -16px -24px;
+  padding: 16px 0;
 }
 
 .wb-charts-pages {
