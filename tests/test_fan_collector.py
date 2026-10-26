@@ -163,7 +163,11 @@ def test_collected_files_pass_loader_and_c1(tmp_path: Path,
     assert got.state == STATE_DONE and got.done == 1
 
     # 写盘顺序：raw 与 stats 都在
-    assert (root / SUB / "raw" / "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json").is_file()
+    # 2026-10-27 起 raw 写 `.json.gz`（压缩），老数据仍是 `.json`
+    raw_dir = root / SUB / "raw"
+    assert (raw_dir / "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json.gz").is_file() \
+        or (raw_dir / "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json").is_file()
+    print("DEBUG raw 目录:", [p.name for p in raw_dir.glob("*")])
     assert (root / SUB / "stats" / "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json").is_file()
 
     # loader 能读，且 C1 不判 dropped

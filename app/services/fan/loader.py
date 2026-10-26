@@ -36,6 +36,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -331,8 +332,18 @@ class Window:
 
 
 # ── 读取 ────────────────────────────────────────────────────────────────────
+def _raw_file(raw_dir: Path, live_id: str) -> Path:
+    """raw 文件：优先 `.json.gz`（2026-10-27 起），回落到老的 `.json`。"""
+    gz = raw_dir / f"{live_id}.json.gz"
+    return gz if gz.is_file() else raw_dir / f"{live_id}.json"
+
+
 def _read_json(path: Path, warnings: list[str], what: str) -> Any | None:
     try:
+        # raw 现在用 gzip 存（`*.json.gz`），老数据还是明文 `.json` —— 两种都认。
+        if path.name.endswith(".gz"):
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                return json.load(fh)
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         warnings.append(f"{what} 缺文件：{path.name}")
@@ -552,7 +563,7 @@ def load_window(
     #    若某场进了分母却没有 raw，所有人该场的出席都记不上，出席率会被系统性低估。
     usable: list[SessionRef] = []
     for sr in sessions:
-        if not (raw_dir / f"{sr.live_id}.json").is_file():
+        if not _raw_file(raw_dir, sr.live_id).is_file():
             warnings.append(f"跳过 live_id={sr.live_id}：raw 缺文件")
             continue
         usable.append(sr)
@@ -575,7 +586,7 @@ def load_window(
     total = max(1, len(sessions) - 1)
     ok: list[SessionRef] = []
     for idx, sr in enumerate(sessions):
-        raw = _read_json(raw_dir / f"{sr.live_id}.json", warnings, "raw")
+        raw = _read_json(_raw_file(raw_dir, sr.live_id), warnings, "raw")
         if raw is None:
             warnings.append(f"跳过 live_id={sr.live_id}：raw 无法解析")
             continue
