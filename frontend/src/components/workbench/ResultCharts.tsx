@@ -248,9 +248,13 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
           option: {
             ...axisBase(lh.labels, lh.counts, '人数'),
             series: [{
-              type: 'line', data: lh.counts, smooth: true, symbol: 'circle', symbolSize: 5,
+              type: 'line', data: lh.counts, smooth: true, symbol: 'circle', symbolSize: 6,
               lineStyle: { color: PINK[0] }, itemStyle: { color: PINK[0] },
               areaStyle: { color: 'rgba(255,162,180,0.18)' },
+              // 坐标点也要有动画：折线本身靠 animationDuration 描边，
+              // 数据点则需要**逐点延迟**才会依次弹出（默认它们随线一起瞬间出现）
+              animationDuration: 700,
+              animationDelay: (idx: number) => 120 + idx * 70,
             }],
           },
         })

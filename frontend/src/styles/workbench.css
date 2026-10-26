@@ -2225,3 +2225,6 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
+
+/* 图表数据未跟上页签时的占位：保持高度，避免内容跳动 */
+.wb-charts-pending { height: 300px; }

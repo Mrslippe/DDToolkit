@@ -106,6 +106,8 @@ export default function WorkbenchPage() {
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
   const [progress, setProgress] = useState<FanCollectProgress | null>(null)
   const [ranked, setRanked] = useState<FanRanked | null>(null)
+  /** 当前 `ranked` 数据属于哪个页签：切页签后数据未到时，图表区不渲染（避免挂载两次） */
+  const [rankedTab, setRankedTab] = useState<ResultTab>('overview')
   const [tab, setTab] = useState<ResultTab>('overview')
   /** 懒加载累积的行（切页签时清空） */
   const [rows, setRows] = useState<FanRankedRow[]>([])
@@ -279,6 +281,9 @@ export default function WorkbenchPage() {
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
         }))
       setRanked(data)
+      // `by` 是后端口径名（strength/attendance/...），反查回页签
+      const tabOf = (Object.keys(TAB_BY) as ResultTab[]).find((t) => TAB_BY[t] === by)
+      if (tabOf) setRankedTab(tabOf)
       setRows((prev) => (append ? [...prev, ...data.items] : data.items))
       const total = data.list_total ?? data.pool?.size ?? data.total_in_pool
       // 一页空 = 到底（否则 `off + 0 < total` 永远成立，观察者会无限触发、
@@ -566,9 +571,15 @@ export default function WorkbenchPage() {
                 className={`wb-tabpanel${busy ? ' is-loading' : ''}`}
                 data-testid="result-panel"
               >
-                <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
-                              attBins={ranked.att_bins} charts={ranked.charts}
-                              dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
+                {/* 数据还没跟上当前页签时**不渲染图表**：
+                    否则会先用旧数据挂载一次、新数据到了再重新挂载 —— 视觉上两次闪动（2026-10-27） */}
+                {rankedTab === tab ? (
+                  <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
+                                attBins={ranked.att_bins} charts={ranked.charts}
+                                dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
+                ) : (
+                  <div className="wb-charts-pending" aria-hidden />
+                )}
                 <RankedTable
                   vtuber={picked}
                   since={since}
