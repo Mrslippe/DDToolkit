@@ -49,18 +49,25 @@ interface Card {
 function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
   const box = useRef<HTMLDivElement | null>(null)
   const api = useRef<ReturnType<typeof echarts.init> | null>(null)
+  /** 上一次真正渲染时的 (run, option) 快照：同一个 run 只重建一次实例，
+   *  否则 StrictMode / 连续 render 会让动画播两遍（2026-10-26 用户报"一次翻页播两次"） */
+  const lastRun = useRef(-1)
+  const lastOpt = useRef<EChartsCoreOption | null>(null)
 
   useEffect(() => {
     const host = box.current
     if (!host) return
     try {
       if (!document.createElement('canvas').getContext('2d')) return   // jsdom
+      if (lastRun.current === run && lastOpt.current === option && api.current) return
       if (api.current && api.current.getDom() !== host) {
         api.current.dispose()
         api.current = null
       }
       // run 变化（切页签 / 翻页）= 销毁重建实例。`clear()` 不保证重播（实测无效），
       // 只有新建实例才会走"初始动画"这条路径：柱子从 0 生长、饼图重新旋转填充。
+      lastRun.current = run
+      lastOpt.current = option
       api.current?.dispose()
       api.current = echarts.init(host)
       api.current.setOption(option, true)

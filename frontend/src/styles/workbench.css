@@ -2033,6 +2033,10 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  /* 每页自己留出右侧余量：否则卡片阴影贴着 viewport 边缘，
+     下一张卡的边缘会透出一条（2026-10-26 的"粘连"） */
+  padding-right: 12px;
+  box-sizing: border-box;
 }
 
 .wb-chart-card { padding: 14px 16px 10px; }
@@ -2074,7 +2078,9 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-charts.is-right .wb-charts-edge.is-right .wb-charts-arrow,
 .wb-charts.is-flash .wb-charts-arrow { opacity: 1; pointer-events: auto; }
 
-.wb-charts-arrow:disabled { opacity: 0.3; cursor: default; }
+.wb-charts.is-left  .wb-charts-edge.is-left  .wb-charts-arrow:disabled,
+.wb-charts.is-right .wb-charts-edge.is-right .wb-charts-arrow:disabled,
+.wb-charts.is-flash .wb-charts-arrow:disabled { opacity: 0.3; cursor: default; }
 
 /* 页码放在图表行的右下角，避免压到页签下方的发丝线 */
 .wb-charts-pos {
