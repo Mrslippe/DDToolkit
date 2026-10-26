@@ -99,13 +99,56 @@ function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
 /** 统一的动画时长：柱子生长 / 折线描边 / 饼图旋转都用这一档 */
 const ANIM = { animation: true, animationDuration: 700, animationEasing: 'cubicOut' as const }
 
+
+/** 饼图图例：名称 + 数值（数量或金额），颜色点由 ECharts 自带 */
+function pieOption(
+  data: { name: string; value: number }[], money = false,
+): EChartsCoreOption {
+  const byName = new Map(data.map((d) => [d.name, d.value]))
+  const fmt = (n: string) => {
+    const v = byName.get(n) ?? 0
+    return money
+      ? `${n}  ¥${Math.round(v).toLocaleString()}`
+      : `${n}  ${Math.round(v).toLocaleString()}`
+  }
+  return {
+    ...ANIM,
+    tooltip: {
+      trigger: 'item',
+      formatter: money ? '{b}: ¥{c}（{d}%）' : '{b}: {c}（{d}%）',
+    },
+    legend: {
+      type: 'scroll',
+      orient: 'vertical',
+      left: 8,
+      top: 'middle',
+      itemGap: 8,
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { fontSize: 11 },
+      formatter: fmt,
+      pageTextStyle: { fontSize: 10 },
+    },
+    series: [{
+      type: 'pie',
+      radius: ['42%', '66%'],
+      center: ['64%', '50%'],
+      // 关掉外侧标签：名字交给图例，值也在图例里 —— 同时避免画布边缘把昵称裁掉一个字
+      label: { show: false },
+      labelLine: { show: false },
+      data: data.map((d, i) => ({ ...d, itemStyle: { color: PINK[i % PINK.length] } })),
+    }],
+  }
+}
+
 const axisBase = (labels: string[], values: number[], name: string): EChartsCoreOption => ({
   ...ANIM,
   grid: { left: 48, right: 16, top: 18, bottom: 36 },
   tooltip: { trigger: 'axis' },
   xAxis: {
     type: 'category', data: labels,
-    axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 0, rotate: labels.length > 8 ? 30 : 0 },
+    // 不强制每个刻度都画：场次多时自动抽稀，否则 70+ 个标签会糊成一片
+    axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 'auto', hideOverlap: true },
   },
   yAxis: {
     type: 'value', name,
@@ -133,24 +176,14 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         key: 'tiers',
         title: '核心度分层',
         note: `共 ${pool.size} 人`,
+        option: pieOption(
+          Object.entries(pool.tiers).map(([name, value]) => ({ name, value }))),
         footer: (
           <p className="wb-chart-foot" data-testid="pool-rule">
             池子按 3×平均同接{pool.acv ? `（ACV ${Math.round(pool.acv).toLocaleString()}）` : ''}划定
             {pool.excluded ? ` · 另有 ${pool.excluded.toLocaleString()} 人分流走` : ''}
           </p>
         ),
-        option: {
-          ...ANIM,
-          tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
-          legend: { bottom: 0, textStyle: { fontSize: 11 } },
-          series: [{
-            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
-            data: Object.entries(pool.tiers).map(([name, value], i) => ({
-              name, value, itemStyle: { color: PINK[i % PINK.length] },
-            })),
-            label: { fontSize: 11 },
-          }],
-        },
       })
 
       const span = pool.bins.hi - pool.bins.lo || 1
@@ -234,37 +267,48 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       if (mc?.values?.length) {
         out.push({
           key: 'msgshare', title: '弹幕量贡献', note: 'Top 8 + 其他',
-          option: {
-            ...ANIM,
-            tooltip: { trigger: 'item', formatter: '{b}: {c} 条（{d}%）' },
-            legend: { bottom: 0, textStyle: { fontSize: 11 } },
-            series: [{
-              type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
-              data: mc.labels.map((name, i) => ({
-                name, value: mc.values[i], itemStyle: { color: PINK[i % PINK.length] },
-              })),
-              label: { fontSize: 10 },
-            }],
-          },
+          option: pieOption(mc.labels.map((name, i) => ({ name, value: mc.values[i] }))),
         })
       }
-      // ② 场均弹幕 vs 分位（折线）
+      // ② 场均弹幕 vs 分位（折线，横轴取对数）
       const mp = charts?.msg_pct
       if (mp?.means?.length) {
+        // x = -log10(1-p)：等距分位会被压平，取对数才能把"最活跃的 1%"展开。
+        // p=1 时给一个有限上限（3.3 ≈ 99.95%）。
+        const pts = mp.pcts.map((pv, i) => {
+          const x = Math.min(3.3, -Math.log10(Math.max(1e-4, 1 - pv)))
+          return [Number(x.toFixed(3)), mp.means[i], pv] as [number, number, number]
+        })
         out.push({
-          key: 'msgpct', title: '场均弹幕分布', note: '横轴分位 · 纵轴场均弹幕',
+          key: 'msgpct', title: '场均弹幕分布', note: '横轴分位（对数）· 纵轴场均弹幕',
           option: {
             ...ANIM,
-            grid: { left: 52, right: 16, top: 18, bottom: 32 },
-            tooltip: { trigger: 'axis' },
+            grid: { left: 52, right: 20, top: 18, bottom: 34 },
+            tooltip: {
+              trigger: 'axis',
+              formatter: (ps: unknown) => {
+                const arr = ps as { value: [number, number, number] }[]
+                const v = arr?.[0]?.value
+                if (!v) return ''
+                return `分位 ${(v[2] * 100).toFixed(1)}%<br/>场均弹幕 ${v[1]} 条`
+              },
+            },
             xAxis: {
-              type: 'category', data: mp.pcts.map((v) => v.toFixed(2)),
-              axisLabel: { fontSize: 10, color: '#5b6c7e', interval: 2 },
+              type: 'value',
+              min: 0,
+              max: 3.3,
+              axisLabel: {
+                fontSize: 10, color: '#5b6c7e',
+                // 刻度值 x → 分位百分比
+                formatter: (x: number) => `${((1 - Math.pow(10, -x)) * 100).toFixed(0)}%`,
+              },
             },
             yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
             series: [{
-              type: 'line', data: mp.means, smooth: true, symbol: 'none',
-              lineStyle: { color: PINK[0] }, areaStyle: { color: 'rgba(255,162,180,0.18)' },
+              type: 'line', smooth: true, symbol: 'none',
+              data: pts.map((v) => [v[0], v[1]]),
+              lineStyle: { color: PINK[0] },
+              areaStyle: { color: 'rgba(255,162,180,0.18)' },
             }],
           },
         })
@@ -275,18 +319,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       const pc = charts.pay_split_top
       out.push({
         key: 'payshare', title: '付费贡献', note: 'Top 8 + 其他（鲸鱼单列）',
-        option: {
-          ...ANIM,
-          tooltip: { trigger: 'item', formatter: '{b}: ¥{c}（{d}%）' },
-          legend: { bottom: 0, textStyle: { fontSize: 11 } },
-          series: [{
-            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
-            data: pc.labels.map((name, i) => ({
-              name, value: pc.values[i], itemStyle: { color: PINK[i % PINK.length] },
-            })),
-            label: { fontSize: 10 },
-          }],
-        },
+        option: pieOption(pc.labels.map((name, i) => ({ name, value: pc.values[i] })), true),
       })
     }
 
@@ -294,20 +327,11 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       const ps = pool.pay_split
       out.push({
         key: 'pay', title: '付费构成', note: '全池合计',
-        option: {
-          ...ANIM,
-          tooltip: { trigger: 'item', formatter: '{b}: ¥{c}（{d}%）' },
-          legend: { bottom: 0, textStyle: { fontSize: 11 } },
-          series: [{
-            type: 'pie', radius: ['42%', '66%'], center: ['50%', '44%'],
-            data: [
-              { name: '舰长类', value: Math.round(ps.guard), itemStyle: { color: PINK[0] } },
-              { name: '醒目留言', value: Math.round(ps.sc), itemStyle: { color: PINK[2] } },
-              { name: '礼物', value: Math.round(ps.gift), itemStyle: { color: PINK[3] } },
-            ],
-            label: { fontSize: 11 },
-          }],
-        },
+        option: pieOption([
+          { name: '舰长类', value: Math.round(ps.guard) },
+          { name: '醒目留言', value: Math.round(ps.sc) },
+          { name: '礼物', value: Math.round(ps.gift) },
+        ], true),
       })
     }
 

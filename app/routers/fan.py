@@ -295,18 +295,26 @@ def _chart_data(win, table, payload: dict) -> dict[str, Any]:
     pay_split_top = _top_split({uid: float(users[uid].pay) for uid in pool_set})
     msg_split_top = _top_split({uid: float(users[uid].m) for uid in pool_set})
 
-    # 场均弹幕 vs 分位（折线）：20 个分位桶，取桶内均值
+    # 场均弹幕 vs 分位（折线）：**尾部加密**的分位点，配合前端 log 横轴，
+    # 才能把"最活跃的那 1%"展开（等距 20 桶时最右一档只有 70 条，看不出尾巴）。
     msgs_sorted = sorted(users[uid].m / max(1, users[uid].att_n) for uid in pool_set)
-    bins = 20
-    means: list[float] = []
-    pcts: list[float] = []
-    for i in range(bins):
-        lo = int(len(msgs_sorted) * i / bins)
-        hi = max(lo + 1, int(len(msgs_sorted) * (i + 1) / bins))
+    n_msg = len(msgs_sorted)
+    dense = [i / 20 for i in range(1, 20)]
+    dense += [0.95, 0.97, 0.98, 0.99, 0.995, 0.998, 0.999, 1.0]
+    means = []
+    pcts = []
+    for p in dense:
+        if n_msg == 0:
+            break
+        hi = max(1, min(n_msg, int(round(n_msg * p))))
+        # 窗口宽度按分位分段：常规区间取前 5%，**尾部取前 0.5%** ——
+        # 否则最右一档的均值被大量普通用户稀释（实测只有 36 条，而真正的头部是 200+）
+        w = 0.005 if p >= 0.95 else 0.05
+        lo = max(0, hi - max(1, int(round(n_msg * w))))
         chunk = msgs_sorted[lo:hi]
         if not chunk:
             continue
-        pcts.append(round((i + 0.5) / bins, 3))
+        pcts.append(round(p, 3))
         means.append(round(sum(chunk) / len(chunk), 1))
 
     return {
