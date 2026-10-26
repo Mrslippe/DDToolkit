@@ -567,7 +567,8 @@ export default function WorkbenchPage() {
                 data-testid="result-panel"
               >
                 <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
-                              attBins={ranked.att_bins} charts={ranked.charts} />
+                              attBins={ranked.att_bins} charts={ranked.charts}
+                              dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
                 <RankedTable
                   vtuber={picked}
                   since={since}

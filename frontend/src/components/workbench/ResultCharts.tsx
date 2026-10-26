@@ -27,6 +27,10 @@ interface Props {
   tab: ResultTab
   /** 出席场次数分布（下标 = 出席场次，值 = 人数） */
   attBins?: { max: number; counts: number[] }
+  /** 数据指纹（场次-池人数-口径）：变化时卡片重建，用**最终数据**播一次入场动画。
+   *  没有它的话，切页签会先拿旧数据渲染、动画刚起步就被新数据 setOption 打断 ——
+   *  看起来就是"切页签没有动画"（2026-10-27 定位）。 */
+  dataStamp?: string
   /** 新图表数据（2026-10-26） */
   charts?: {
     pool_trend?: { end: number; size: number; new: number; left: number; same: number }[]
@@ -128,13 +132,6 @@ function EChart({ option }: { option: EChartsCoreOption }) {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  // 数据更新（同一页签重新分析）：只更新，不重播动画
-  useEffect(() => {
-    if (!api.current || lastOpt.current === option) return
-    lastOpt.current = option
-    api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
-  }, [option])
-
   useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
   return <div ref={box} className="wb-chart" />
 }
@@ -163,7 +160,7 @@ const axisBase = (labels: string[], values: number[], name: string): EChartsCore
  * - **饼图永远排第一**（用户口径）；
  * - 每张图都是独立 `EChart`，宿主或 option 变化都会重建实例。
  */
-export default function ResultCharts({ items, pool, tab, attBins, charts }: Props) {
+export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp }: Props) {
   const [page, setPage] = useState(0)
 
   const cards = useMemo<Card[]>(() => {
@@ -425,7 +422,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
 
       <div className="wb-charts-viewport">
         <div className="wb-charts-pages" data-page={cur}>
-          <div className="wb-charts-page" key={`${tab}-${cur}`}>
+          <div className="wb-charts-page" key={`${tab}-${cur}-${dataStamp ?? ''}`}>
             {pages[cur]?.map((c) => (
               <section
                 className="wb-card wb-chart-card" key={c.key}
