@@ -2188,3 +2188,30 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── 付费构成三色轴（2026-10-26 补回）───────────────────────────────
+ * ⚠️ 这组规则曾经被"整体替换文件末尾"的改动误删过：组件仍渲染 `.wb-mix-*`，
+ * 但没有任何宽度/高度，结果整列只剩文字、看起来像"三色轴不见了"。
+ * 如果以后再改 workbench.css 的大块，记得 grep 这三个类名。 */
+.wb-mix {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-mix-bar {
+  display: inline-flex;
+  width: 96px;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(210, 216, 222, 0.5);
+}
+
+.wb-mix-bar i { display: block; height: 100%; }
+
+.wb-mix-text {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}

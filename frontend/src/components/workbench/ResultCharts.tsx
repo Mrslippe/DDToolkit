@@ -51,6 +51,29 @@ interface Card {
   money?: boolean
 }
 
+
+/** 把所有 series 的数值压成 0（保留名称与维度）：先画"空图"，下一帧再画真数据，
+ *  这样**不依赖** ECharts 的初始动画是否被跳过 —— 切页签/翻页必定能播一次。 */
+function zeroed(opt: EChartsCoreOption): EChartsCoreOption {
+  const clone = { ...opt } as Record<string, unknown>
+  const series = (opt as { series?: unknown[] }).series
+  if (Array.isArray(series)) {
+    clone.series = series.map((s) => {
+      const item = { ...(s as Record<string, unknown>) }
+      const data = item.data
+      if (Array.isArray(data)) {
+        item.data = data.map((d) => {
+          if (Array.isArray(d)) return [d[0], 0]
+          if (d && typeof d === 'object') return { ...(d as object), value: 0 }
+          return 0
+        })
+      }
+      return item
+    })
+  }
+  return clone as EChartsCoreOption
+}
+
 /** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
 function EChart({ option, playKey }: { option: EChartsCoreOption; playKey: string }) {
   const box = useRef<HTMLDivElement | null>(null)
@@ -86,7 +109,10 @@ function EChart({ option, playKey }: { option: EChartsCoreOption; playKey: strin
       requestAnimationFrame(() => {
         if (!host2.isConnected) return
         api.current = echarts.init(host2)
-        api.current.setOption(option, true)
+        api.current.setOption(zeroed(option), true)     // 第 1 帧：全 0
+        requestAnimationFrame(() => {
+          api.current?.setOption(option, false)         // 第 2 帧：真数据 → 生长/填充动画
+        })
       })
     } catch { /* 图表失败不影响其余内容 */ }
   }, [option, playKey])
