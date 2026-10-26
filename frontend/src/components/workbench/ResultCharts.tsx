@@ -52,100 +52,13 @@ interface Card {
 }
 
 
-/** 把所有 series 的数值压成 0（保留名称与维度）：先画"空图"，下一帧再画真数据，
- *  这样**不依赖** ECharts 的初始动画是否被跳过 —— 切页签/翻页必定能播一次。 */
-function zeroed(opt: EChartsCoreOption): EChartsCoreOption {
-  const clone = { ...opt } as Record<string, unknown>
-  const series = (opt as { series?: unknown[] }).series
-  if (Array.isArray(series)) {
-    clone.series = series.map((s) => {
-      const item = { ...(s as Record<string, unknown>) }
-      const data = item.data
-      if (Array.isArray(data)) {
-        item.data = data.map((d) => {
-          if (Array.isArray(d)) return [d[0], 0]
-          if (d && typeof d === 'object') return { ...(d as object), value: 0 }
-          return 0
-        })
-      }
-      return item
-    })
-  }
-  return clone as EChartsCoreOption
-}
-
-/** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
-function EChart({ option, playKey }: { option: EChartsCoreOption; playKey: string }) {
-  const box = useRef<HTMLDivElement | null>(null)
-  const api = useRef<ReturnType<typeof echarts.init> | null>(null)
-  /** 上一次真正渲染时的 (run, option) 快照：同一个 run 只重建一次实例，
-   *  否则 StrictMode / 连续 render 会让动画播两遍（2026-10-26 用户报"一次翻页播两次"） */
-  /** 上一次触发"重播动画"的键：只有它变化才销毁重建 */
-  const lastPlay = useRef<string>('')
-
-  useEffect(() => {
-    const host = box.current
-    if (!host) return
-    try {
-      if (!document.createElement('canvas').getContext('2d')) return   // jsdom
-      // 已经初始化过、且这次不是"切页签/翻页" ⇒ 只更新数据，不重建实例。
-      // （数据到达时 option 会变，若重建就会重播动画 —— 这正是"切页签播两次"的真因）
-      if (api.current && lastPlay.current === playKey) {
-        api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
-        return
-      }
-      if (api.current && api.current.getDom() !== host) {
-        api.current.dispose()
-        api.current = null
-      }
-      // run 变化（切页签 / 翻页）= 销毁重建实例。`clear()` 不保证重播（实测无效），
-      // 只有新建实例才会走"初始动画"这条路径：柱子从 0 生长、饼图重新旋转填充。
-      lastPlay.current = playKey
-      api.current?.dispose()
-      api.current = null
-      // 下一帧再 init：容器此时已完成布局，宽度非 0，ECharts 才会播初始动画
-      // （同步 init 在"刚切页签、卡片还没测量"时宽度是 0，动画会被静默跳过 —— 2026-10-26）
-      const host2 = host
-      requestAnimationFrame(() => {
-        if (!host2.isConnected) return
-        api.current = echarts.init(host2)
-        api.current.setOption(zeroed(option), true)     // 第 1 帧：全 0
-        requestAnimationFrame(() => {
-          api.current?.setOption(option, false)         // 第 2 帧：真数据 → 生长/填充动画
-        })
-      })
-    } catch { /* 图表失败不影响其余内容 */ }
-  }, [option, playKey])
-
-  // 容器尺寸变化要 resize，但**不能在新建实例的同一帧**做：
-  // 新建后立刻 resize 会让 ECharts 重启动画，表现为"切页签动画播两遍"（2026-10-26 真因）。
-  // 这里等一帧再挂 observer，且首次回调跳过。
-  useEffect(() => {
-    const host = box.current
-    if (!host || typeof ResizeObserver === 'undefined') return
-    let first = true
-    const ro = new ResizeObserver(() => {
-      if (first) { first = false; return }
-      api.current?.resize()
-    })
-    ro.observe(host)
-    return () => ro.disconnect()
-  }, [])
-
-  useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
-  return <div ref={box} className="wb-chart" />
-}
-
-/** 统一的动画时长：柱子生长 / 折线描边 / 饼图旋转都用这一档 */
+/** 统一的动画时长：柱子生长 / 折线描边 / 饼图扫入都用这一档 */
 const ANIM = { animation: true, animationDuration: 700, animationEasing: 'cubicOut' as const }
 
-
-/** 饼图图例：名称 + 数值（数量或金额），颜色点由 ECharts 自带 */
+/** 饼图选项（图例由 React 渲染，见 `.wb-pie-legend`） */
 function pieOption(
   data: { name: string; value: number }[], money = false,
 ): EChartsCoreOption {
-  // ⚠️ 不再用 ECharts 自带的 legend：卡片窄时它会被算没（2026-10-26 实测"图例消失"）。
-  // 图例改由 React 渲染（见 PieLegend），颜色/名称/数值都可控。
   return {
     ...ANIM,
     tooltip: {
@@ -156,25 +69,81 @@ function pieOption(
       type: 'pie',
       radius: ['46%', '70%'],
       center: ['50%', '50%'],
-      // 关掉外侧标签：名字交给图例，值也在图例里 —— 同时避免画布边缘把昵称裁掉一个字
       label: { show: false },
       labelLine: { show: false },
-      /*
-       * ⚠️ 饼图必须显式指定 `animationType: 'scale'`（2026-10-27）。
-       * 默认的 'expansion' 依赖"新数据比旧数据多"这种**增量**语义；
-       * 而我们的两帧重播是「值全 0 → 真值」，0 值扇区实际不占角度，
-       * ECharts 会把真值当"新增扇区"直接画出来，不做过渡 —— 看起来就是"饼图没动画"。
-       * 'scale' 是按半径整体缩放，0 → 正常半径一定会有过渡。
-       * 同时给每个扇区一个稳定的 `id`，让 ECharts 认得出"同一块"而不是"新的一块"。
-       */
-      animationType: 'scale',
-      animationDuration: 700,
-      animationEasing: 'cubicOut',
-      data: data.map((d, i) => ({
-        ...d, id: d.name, itemStyle: { color: PINK[i % PINK.length] },
-      })),
+      data: data.map((d, i) => ({ ...d, itemStyle: { color: PINK[i % PINK.length] } })),
     }],
   }
+}
+
+/**
+ * 单张图（2026-10-27 重写，方案 A）。
+ *
+ * 只做三件事，全部围绕「**可见时才初始化**」：
+ * 1. `IntersectionObserver` 观察自身是否真的在可视区（被 `overflow: hidden` 裁掉的
+ *    相邻轮播页**不算可见** —— 这正是之前"在 0 宽容器里 init"的根因）；
+ * 2. 变可见 → `init()` + `setOption(option)`：走 ECharts **原生** initial animation；
+ * 3. 变不可见 → `dispose()`，切回来时重新 init，于是**每次看到都会重播一次原生动画**；
+ * 4. 可见期间数据更新（同一页签重新分析）→ 只 `setOption` 不重建，且关掉动画，不会重播。
+ */
+function EChart({ option }: { option: EChartsCoreOption }) {
+  const box = useRef<HTMLDivElement | null>(null)
+  const api = useRef<ReturnType<typeof echarts.init> | null>(null)
+  const lastOpt = useRef<EChartsCoreOption | null>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const host = box.current
+    if (!host) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true)
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => setVisible(entries.some((e) => e.isIntersecting)),
+      { threshold: 0 },
+    )
+    io.observe(host)
+    return () => io.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const host = box.current
+
+    // 不可见：销毁实例（切回来时重新 init，原生动画自然重播）
+    if (!host || !visible) {
+      api.current?.dispose()
+      api.current = null
+      lastOpt.current = null
+      return
+    }
+
+    // 实例已存在：只是数据变了 → 更新但不播动画
+    if (api.current) {
+      if (lastOpt.current !== option) {
+        lastOpt.current = option
+        api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
+      }
+      return
+    }
+
+    // 首次可见：等一帧让布局完成（宽度 > 0），再 init —— 否则初始动画会被跳过
+    let raf = 0
+    let tries = 0
+    const boot = () => {
+      if (!host.isConnected) return
+      if (!host.offsetWidth && tries < 8) { tries += 1; raf = requestAnimationFrame(boot); return }
+      if (!document.createElement('canvas').getContext('2d')) return   // jsdom
+      api.current = echarts.init(host)
+      api.current.setOption(option, true)
+      lastOpt.current = option
+    }
+    raf = requestAnimationFrame(boot)
+    return () => cancelAnimationFrame(raf)
+  }, [visible, option])
+
+  useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
+  return <div ref={box} className="wb-chart" />
 }
 
 const axisBase = (labels: string[], values: number[], name: string): EChartsCoreOption => ({
@@ -419,7 +388,6 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   const [hoverEdge, setHoverEdge] = useState<'left' | 'right' | null>(null)
   /** 切页签后短暂显示一次箭头，提示"这里可以翻" */
   const [flash, setFlash] = useState(false)
-  const [run, setRun] = useState(0)
   /** 翻页瞬间（约 300ms）：给视口加一层"边缘→中心"的径向淡出，
    *  让从外侧进来的下一页看起来是**渐显**而不是硬切（2026-10-26 用户口径） */
   const [flipping, setFlipping] = useState(false)
@@ -427,7 +395,6 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   useEffect(() => {
     setPage(0)
     setFlash(true)
-    setRun((v) => v + 1)
     const t = window.setTimeout(() => setFlash(false), 1600)
     return () => window.clearTimeout(t)
   }, [tab])
@@ -455,7 +422,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
           type="button" className="wb-charts-arrow" aria-label="上一页"
           data-testid="charts-prev" disabled={cur === 0}
           onClick={() => {
-            setPage(Math.max(0, cur - 1)); setRun((v) => v + 1)
+            setPage(Math.max(0, cur - 1))
             setFlipping(true); window.setTimeout(() => setFlipping(false), 340)
           }}
         >
@@ -484,7 +451,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
                   </h3>
                   {c.legend ? (
                     <div className="wb-pie">
-                      <EChart option={c.option} playKey={`${tab}:${run}`} />
+                      <EChart option={c.option} />
                       <ul className="wb-pie-legend">
                         {c.legend.map((d, i) => (
                           <li key={d.name}>
@@ -499,7 +466,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
                       </ul>
                     </div>
                   ) : (
-                    <EChart option={c.option} playKey={`${tab}:${run}`} />
+                    <EChart option={c.option} />
                   )}
                   {c.footer}
                 </section>
@@ -516,7 +483,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
           type="button" className="wb-charts-arrow" aria-label="下一页"
           data-testid="charts-next" disabled={cur >= maxPage}
           onClick={() => {
-            setPage(Math.min(maxPage, cur + 1)); setRun((v) => v + 1)
+            setPage(Math.min(maxPage, cur + 1))
             setFlipping(true); window.setTimeout(() => setFlipping(false), 340)
           }}
         >
