@@ -415,3 +415,27 @@ def test_collect_retries_failed_sessions_once(tmp_path: Path,
                                       "2026-09-16 20:00:00")]))
     assert got.done == 1 and got.failed == 0, f"补采后应成功：{got.as_dict()}"
     assert calls["n"] >= 2, "应该真的重试了一次"
+
+
+def test_fetch_records_reports_page_progress(monkeypatch) -> None:
+    """翻页回调：把所有页的进度回报给采集进度（2026-10-27）。"""
+    import asyncio
+    from app.services.fan import collector as C
+
+    async def fake_get(client, path, params, **kw):
+        d = dict(params)
+        if "pageNum" not in d:
+            return {"data": {"data": {"danmakus": []}, "hasMore": True, "total": 12_000}}
+        n = int(d["pageNum"])
+        # 只给 3 页；第 4 页起为空 —— 采集侧"没拉够就继续翻"，靠空页收尾
+        recs = [{"i": n * 100 + i} for i in range(100)] if n <= 3 else []
+        return {"data": {"data": {"danmakus": recs}, "hasMore": n < 3, "total": 12_000}}
+
+    monkeypatch.setattr(C, "_get_json", fake_get)
+    seen: list[tuple[int, int]] = []
+    got = asyncio.run(C.fetch_records(None, "x", on_page=lambda a, b: seen.append((a, b))))
+    assert seen, "必须回报翻页进度"
+    pages = [a for a, _ in seen]
+    assert pages[:3] == [1, 2, 3], pages
+    assert all(total == 3 for _, total in seen), seen     # 12,000 / 5,000 → 3 页
+    assert len(got) == 300

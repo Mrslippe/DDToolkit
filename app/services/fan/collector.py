@@ -255,7 +255,8 @@ async def _get_json(client: httpx.AsyncClient, path: str,
 
 
 async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
-                         with_extra: bool = False) -> list[dict] | tuple[list[dict], dict] | None:
+                         with_extra: bool = False,
+                         on_page: Callable[[int, int], None] | None = None) -> list[dict] | tuple[list[dict], dict] | None:
     """取一场的**全部**记录。
 
     返回 `None` 表示上游没给数据；否则返回列表。
@@ -294,6 +295,9 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
         has_more = False
         # 大场次给更长的超时：15 万条用固定 120s 会被腰斩（2026-10-27）
         _timeout = adaptive_timeout_s(max(total, len(first)))
+        if on_page and total > 0:
+            # 估算总页数，供进度显示"第 N/M 页"
+            on_page(page, max(1, -(-total // COLLECT_PAGE_SIZE)))
         for attempt in range(FETCH_EMPTY_ATTEMPTS):
             jj = await _get_json(client, "/api/v2/live",
                                  [("liveId", live_id), ("pageSize", COLLECT_PAGE_SIZE),
@@ -327,6 +331,17 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
     result = merged if len(merged) >= len(first) else first
     return (result, extra) if with_extra else result
 
+
+def _verify(base: Path, live_id: str) -> bool:
+    """落盘后回读校验：两个文件都在、stats 能解析、`live_id` 对得上。"""
+    try:
+        sp = base / "stats" / f"{live_id}.json"
+        if not sp.is_file() or not _raw_path(base, live_id).is_file():
+            return False
+        data = json.loads(sp.read_text(encoding="utf-8"))
+        return str(data.get("live_id") or "") == live_id
+    except (OSError, ValueError):
+        return False
 
 def _merge_records(first: list[dict], pages: list[dict]) -> list[dict]:
     """把"超大页"和"翻页"两份记录合并去重（保持时间顺序）。
@@ -910,13 +925,17 @@ async def collect(
                 rp = _raw_path(base, s.live_id)
                 if sp.is_file() and rp.is_file():
                     p.skipped += 1
+                    _mark(p, s.live_id, "skipped", 0, "已存在")
                     return
                 p.current = s.start_at
                 p.phase = "fetch"
                 p.page = p.pages = 0
                 p.sessions_detail.append({"live_id": s.live_id, "start_at": s.start_at,
                                           "state": "running", "records": 0, "reason": ""})
-                _got = await fetch_records(client, s.live_id, with_extra=True)
+                def _on_page(pg: int, pgs: int, _p: CollectProgress = p) -> None:
+                    _p.page, _p.pages = pg, pgs
+                _got = await fetch_records(client, s.live_id, with_extra=True,
+                                           on_page=_on_page)
                 if _got is None:
                     recs, _extra = None, {}
                 else:
@@ -987,6 +1006,11 @@ async def collect(
                     q["note"] = f"上游只给到 {len(recs)}/{_plat} 条"
                 p.phase = "write"
                 await asyncio.to_thread(_write, base, s.live_id, raw, stats)
+                p.phase = "verify"
+                if not await asyncio.to_thread(_verify, base, s.live_id):
+                    p.failed += 1
+                    _mark(p, s.live_id, "failed", len(recs), "落盘后校验失败")
+                    return
                 p.done += 1
                 _mark(p, s.live_id, "ok", len(recs), "")
 
