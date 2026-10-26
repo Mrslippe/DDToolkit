@@ -285,7 +285,9 @@ def _chart_data(win, table, payload: dict) -> dict[str, Any]:
         items.sort(key=lambda x: -x[1])
         head = items[:top]
         tail = sum(v for _, v in items[top:])
-        labels = [f"{(users[u].name or u)[:8]}" for u, _ in head]
+        # ⚠️ 不要在这里截断：图例的截断交给前端 CSS（可换行）。
+        # 之前 `[:8]` 把 "AoineKo青猫" 截成 "AoineKo青"，看起来像"昵称被裁"（2026-10-27）。
+        labels = [f"{(users[u].name or u)}" for u, _ in head]
         values = [round(v, 2) for _, v in head]
         if tail > 0:
             labels.append(f"其他 {len(items) - top} 人")
