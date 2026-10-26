@@ -79,8 +79,15 @@ function EChart({ option, playKey }: { option: EChartsCoreOption; playKey: strin
       // 只有新建实例才会走"初始动画"这条路径：柱子从 0 生长、饼图重新旋转填充。
       lastPlay.current = playKey
       api.current?.dispose()
-      api.current = echarts.init(host)
-      api.current.setOption(option, true)
+      api.current = null
+      // 下一帧再 init：容器此时已完成布局，宽度非 0，ECharts 才会播初始动画
+      // （同步 init 在"刚切页签、卡片还没测量"时宽度是 0，动画会被静默跳过 —— 2026-10-26）
+      const host2 = host
+      requestAnimationFrame(() => {
+        if (!host2.isConnected) return
+        api.current = echarts.init(host2)
+        api.current.setOption(option, true)
+      })
     } catch { /* 图表失败不影响其余内容 */ }
   }, [option, playKey])
 
@@ -302,7 +309,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
             yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
             series: [{
               type: 'line', smooth: true, symbol: 'none',
-              data: pts.map((v) => [v[0], v[1]]),
+              data: pts.map((v) => [v[0], v[1], v[2]]),
               lineStyle: { color: PINK[0] },
               areaStyle: { color: 'rgba(255,162,180,0.18)' },
             }],

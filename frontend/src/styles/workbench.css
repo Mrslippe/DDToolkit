@@ -243,7 +243,7 @@
 
 /* ── 名单表 ───────────────────────────────────────────────────────────── */
 .wb-table-wrap {
-  overflow-x: auto;          /* 窄窗横向滚动，不压扁列 */
+  overflow: visible;         /* 2026-10-26 用户口径：名单不需要滚动条（列宽已固定） */
 }
 
 .wb-table {
@@ -2147,10 +2147,10 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   height: 240px;
 }
 
-.wb-pie .wb-chart { flex: 1 1 58%; height: 100%; }
+.wb-pie .wb-chart { flex: 0 0 46%; height: 100%; }
 
 .wb-pie-legend {
-  flex: 1 1 42%;
+  flex: 1 1 54%;
   min-width: 0;
   margin: 0;
   padding: 0 6px 0 0;
@@ -2176,7 +2176,7 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 .wb-pie-name {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 72px;      /* 短昵称不该被裁：给名字留最小宽度，挤的时候先压数值列 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
