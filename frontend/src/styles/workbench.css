@@ -2010,29 +2010,21 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   to   { opacity: 0; transform: scale(0.96); }
 }
 
-/* ── 图表轮播（2026-10-26 三改）：窄带悬停 + 不裁阴影 + 重排动画 ──── */
+/* ── 图表轮播（2026-10-26 四改）：单侧悬停 / 页码内嵌 / 阴影留白 ──── */
 .wb-charts { position: relative; display: block; width: 100%; }
 
-/* 容器留出阴影空间：卡片阴影被 overflow:hidden 裁掉是上一版的问题 */
+/* 上下左右都留出阴影空间：`overflow:hidden` 只为裁掉相邻页，不该裁卡片阴影 */
 .wb-charts-viewport {
   overflow: hidden;
   width: 100%;
-  padding: 14px 6px;      /* 上下给阴影留白 */
-  margin: -14px -6px;     /* 视觉上仍然对齐内容区 */
+  padding: 16px 22px;
+  margin: -16px -22px;
 }
 
 .wb-charts-pages {
   display: flex;
   width: 100%;
   transition: transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-/* 切页签时的重排动画（翻页走 translate 过渡，两者互不干扰） */
-.wb-charts-pages.is-anim { animation: wb-charts-in 240ms ease both; }
-
-@keyframes wb-charts-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
 }
 
 .wb-charts-page {
@@ -2046,19 +2038,19 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-chart-card { padding: 14px 16px 10px; }
 .wb-chart-card .wb-chart { height: 240px; }
 
-/* 左右两条**窄带**：只有鼠标进入这条 56px 的竖条，箭头才出现 */
+/* 左右窄带：叠在卡片之上（z-index 高于 viewport），只有进入该带才显示那一侧箭头 */
 .wb-charts-edge {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 56px;
-  z-index: 6;
+  width: 48px;
+  z-index: 9;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.wb-charts-edge.is-left { left: -14px; }
-.wb-charts-edge.is-right { right: -14px; }
+.wb-charts-edge.is-left { left: -22px; }
+.wb-charts-edge.is-right { right: -22px; }
 
 .wb-charts-arrow {
   display: inline-flex;
@@ -2074,22 +2066,32 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 160ms ease;
+  transition: opacity 140ms ease;
 }
 
-.wb-charts.is-visible .wb-charts-arrow { opacity: 1; pointer-events: auto; }
+/* 只有"对应侧被悬停"或"切页签闪一下"时，该侧箭头才可见 */
+.wb-charts.is-left  .wb-charts-edge.is-left  .wb-charts-arrow,
+.wb-charts.is-right .wb-charts-edge.is-right .wb-charts-arrow,
+.wb-charts.is-flash .wb-charts-arrow { opacity: 1; pointer-events: auto; }
+
 .wb-charts-arrow:disabled { opacity: 0.3; cursor: default; }
 
+/* 页码放在图表行的右下角，避免压到页签下方的发丝线 */
 .wb-charts-pos {
   position: absolute;
-  right: 4px;
-  top: -20px;
+  right: 6px;
+  bottom: 2px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
   font-size: 11.5px;
   color: var(--c-text-sub);
   opacity: 0;
-  transition: opacity 160ms ease;
+  transition: opacity 140ms ease;
 }
-.wb-charts.is-visible .wb-charts-pos { opacity: 1; }
+.wb-charts.is-left .wb-charts-pos,
+.wb-charts.is-right .wb-charts-pos,
+.wb-charts.is-flash .wb-charts-pos { opacity: 1; }
 
 .wb-chart-foot { margin: 6px 0 0; font-size: 12px; color: var(--c-text-sub); line-height: 1.5; }
 

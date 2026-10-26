@@ -59,12 +59,11 @@ function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
         api.current.dispose()
         api.current = null
       }
-      api.current ??= echarts.init(host)
-      // run 变化（切页签 / 翻页）时先 clear，ECharts 会把整段动画**从头重放**：
-      // 柱状图重新长出来、饼图重新旋转填充（2026-10-26 用户口径）
-      api.current.clear()
+      // run 变化（切页签 / 翻页）= 销毁重建实例。`clear()` 不保证重播（实测无效），
+      // 只有新建实例才会走"初始动画"这条路径：柱子从 0 生长、饼图重新旋转填充。
+      api.current?.dispose()
+      api.current = echarts.init(host)
       api.current.setOption(option, true)
-      api.current.resize()
     } catch { /* 图表失败不影响其余内容 */ }
   }, [option, run])
 
@@ -298,15 +297,11 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   const [hoverEdge, setHoverEdge] = useState<'left' | 'right' | null>(null)
   /** 切页签后短暂显示一次箭头，提示"这里可以翻" */
   const [flash, setFlash] = useState(false)
-  /** 切页签时的重排动画（翻页用 translate 过渡，两者互不影响） */
-  const [anim, setAnim] = useState(0)
-
   const [run, setRun] = useState(0)
 
   useEffect(() => {
     setPage(0)
     setFlash(true)
-    setAnim((v) => v + 1)
     setRun((v) => v + 1)
     const t = window.setTimeout(() => setFlash(false), 1600)
     return () => window.clearTimeout(t)
@@ -314,14 +309,20 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
 
   const maxPage = Math.max(0, pages.length - 1)
   const cur = Math.min(page, maxPage)
-  const showArrows = flash || hoverEdge !== null
+  const cls = [
+    'wb-charts',
+    flash ? 'is-flash' : '',
+    hoverEdge === 'left' ? 'is-left' : '',
+    hoverEdge === 'right' ? 'is-right' : '',
+  ].filter(Boolean).join(' ')
 
   if (!pages.length) return null
 
   return (
-    <div className={`wb-charts${showArrows ? ' is-visible' : ''}`} data-testid="result-charts">
+    <div className={cls} data-testid="result-charts"
+         onMouseLeave={() => setHoverEdge(null)}>
       {/* 左右各一条窄带：只有鼠标进入这一小列才显示箭头 */}
-      <div className="wb-charts-edge is-left"
+      {pages.length > 1 && <div className="wb-charts-edge is-left"
            onMouseEnter={() => setHoverEdge('left')}
            onMouseLeave={() => setHoverEdge(null)}>
         <button
@@ -331,12 +332,11 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         >
           <ChevronLeft className="size-4" />
         </button>
-      </div>
+      </div>}
 
       <div className="wb-charts-viewport">
         <div
-          className={`wb-charts-pages${anim ? ' is-anim' : ''}`}
-          key={anim}
+          className="wb-charts-pages"
           style={{ transform: `translateX(-${cur * 100}%)` }}
           data-page={cur}
         >
@@ -362,7 +362,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         </div>
       </div>
 
-      <div className="wb-charts-edge is-right"
+      {pages.length > 1 && <div className="wb-charts-edge is-right"
            onMouseEnter={() => setHoverEdge('right')}
            onMouseLeave={() => setHoverEdge(null)}>
         <button
@@ -372,7 +372,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         >
           <ChevronRight className="size-4" />
         </button>
-      </div>
+      </div>}
 
       <span className="wb-charts-pos">{cur + 1} / {pages.length}</span>
     </div>

@@ -138,7 +138,18 @@ beforeEach(() => {
                                              state: 'running' })
   fanCollectStatus.mockReset().mockResolvedValue({ items: [], count: 0 })
   fanCollectCancel.mockReset().mockResolvedValue({ ok: true })
-  fanRanked.mockReset().mockResolvedValue(RANKED)
+  fanRanked.mockReset().mockResolvedValue({
+    ...RANKED,
+    charts: {
+      pool_trend: [
+        { end: 5, size: 100, new: 100, left: 0, same: 0 },
+        { end: 10, size: 120, new: 30, left: 10, same: 90 },
+      ],
+      lag_hist: { labels: ['<5', '5–10'], counts: [10, 5] },
+      msg_hist: { labels: ['<5', '5–10'], counts: [20, 8] },
+      spam_split: { confirmed: 3, suspected: 5, none: 100 },
+    },
+  })
   fanSearch.mockReset().mockResolvedValue({ items: [], total_match: 0 })
   fanTags.mockReset().mockResolvedValue({ items: [] })
   fanMember.mockReset().mockResolvedValue({
@@ -477,5 +488,19 @@ describe('大窗口确认（2026-10-25）', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(q('[data-testid="big-window-dialog"]')).toBeNull()
     expect(fanRanked).toHaveBeenCalled()
+  })
+})
+
+describe('图表轮播（2026-10-26）', () => {
+  it('★ 点下一页切换 data-page，且卡片不被箭头挤压', async () => {
+    await mount()
+    await act(async () => { q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    const next = q<HTMLButtonElement>('[data-testid="charts-next"]')
+    expect(next).toBeTruthy()
+    expect(document.querySelector('.wb-charts-pages')!.getAttribute('data-page')).toBe('0')
+    await act(async () => { next!.click() })
+    expect(document.querySelector('.wb-charts-pages')!.getAttribute('data-page')).toBe('1')
   })
 })
