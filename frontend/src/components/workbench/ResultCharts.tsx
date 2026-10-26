@@ -77,6 +77,24 @@ function pieOption(
 }
 
 /**
+ * 把 series 的 data 换成**空数组**（不是 0 值）。
+ *
+ * 这是让"原生动画"稳定出现的唯一可靠做法：
+ * - 饼图：空 → 有值 会走 `expansion`（扇区从中心扫入）；
+ * - 折线/柱状：空 → 有值 会走"描边 / 生长"。
+ *
+ * 早先试过"值全 0"，但 0 值扇区在饼图里不占角度，等于没变化，所以饼图不动。
+ */
+function emptyData(opt: EChartsCoreOption): EChartsCoreOption {
+  const clone = { ...opt } as Record<string, unknown>
+  const series = (opt as { series?: unknown[] }).series
+  if (Array.isArray(series)) {
+    clone.series = series.map((s) => ({ ...(s as Record<string, unknown>), data: [] }))
+  }
+  return clone as EChartsCoreOption
+}
+
+/**
  * 单张图（2026-10-27 重写，方案 A）。
  *
  * 只做三件事，全部围绕「**可见时才初始化**」：
@@ -135,8 +153,14 @@ function EChart({ option }: { option: EChartsCoreOption }) {
       if (!host.offsetWidth && tries < 8) { tries += 1; raf = requestAnimationFrame(boot); return }
       if (!document.createElement('canvas').getContext('2d')) return   // jsdom
       api.current = echarts.init(host)
-      api.current.setOption(option, true)
+      // 先给"空数据"，下一帧再给真数据 —— ECharts 会按**原生**方式做入场动画
+      // （饼图 expansion / 折线描边 / 柱状生长）。直接一次给真数据时，
+      // 若容器刚布局完或数据在首帧就位，ECharts 会跳过初始动画（实测）。
+      api.current.setOption(emptyData(option), true)
       lastOpt.current = option
+      requestAnimationFrame(() => {
+        api.current?.setOption(option, false)
+      })
     }
     raf = requestAnimationFrame(boot)
     return () => cancelAnimationFrame(raf)
