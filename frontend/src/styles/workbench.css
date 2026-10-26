@@ -2029,23 +2029,19 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   padding: 16px 0;
 }
 
-/* 翻页瞬间：边缘 → 中心 的径向淡出（用页面背景色遮住两侧），
-   让从外侧进来的下一页渐显；静止时不显示，不会淡化卡片边缘。 */
-.wb-charts-viewport::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  /* ⚠️ 尺寸用 `farthest-side`（默认）：椭圆的边缘**正好落在盒子边上**。
-     早先写死 `ellipse 88% 130%` —— 半径比盒子大，52% 处的起点落在盒子**外面**，
-     于是可见区域内几乎没有渐变，看起来"没变化"（2026-10-26 实测）。 */
-  background: radial-gradient(ellipse farthest-side at 50% 50%,
-              rgba(0, 0, 0, 0) 38%, var(--c-bg-page) 96%);
-  opacity: 0;
-  transition: opacity 260ms ease;
+/*
+ * 翻页瞬间：**容器左右边缘降低透明度**（2026-10-26 用户口径，参考图二）。
+ *
+ * 用 mask 而不是"盖一层背景色"——mask 是真的让内容变透明，
+ * 新卡片从右侧滑进来时会在容器右缘自然渐显，左缘同理。
+ * 只在 `is-flipping` 的 340ms 内生效，静止时不遮任何东西。
+ */
+.wb-charts.is-flipping .wb-charts-viewport {
+  -webkit-mask-image: linear-gradient(to right,
+      transparent 0, #000 11%, #000 89%, transparent 100%);
+  mask-image: linear-gradient(to right,
+      transparent 0, #000 11%, #000 89%, transparent 100%);
 }
-
-.wb-charts.is-flipping .wb-charts-viewport::after { opacity: 1; }
 
 .wb-charts-pages {
   display: flex;
