@@ -159,7 +159,20 @@ function pieOption(
       // 关掉外侧标签：名字交给图例，值也在图例里 —— 同时避免画布边缘把昵称裁掉一个字
       label: { show: false },
       labelLine: { show: false },
-      data: data.map((d, i) => ({ ...d, itemStyle: { color: PINK[i % PINK.length] } })),
+      /*
+       * ⚠️ 饼图必须显式指定 `animationType: 'scale'`（2026-10-27）。
+       * 默认的 'expansion' 依赖"新数据比旧数据多"这种**增量**语义；
+       * 而我们的两帧重播是「值全 0 → 真值」，0 值扇区实际不占角度，
+       * ECharts 会把真值当"新增扇区"直接画出来，不做过渡 —— 看起来就是"饼图没动画"。
+       * 'scale' 是按半径整体缩放，0 → 正常半径一定会有过渡。
+       * 同时给每个扇区一个稳定的 `id`，让 ECharts 认得出"同一块"而不是"新的一块"。
+       */
+      animationType: 'scale',
+      animationDuration: 700,
+      animationEasing: 'cubicOut',
+      data: data.map((d, i) => ({
+        ...d, id: d.name, itemStyle: { color: PINK[i % PINK.length] },
+      })),
     }],
   }
 }
