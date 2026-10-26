@@ -2036,8 +2036,11 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse 88% 130% at 50% 50%,
-              rgba(0, 0, 0, 0) 52%, var(--c-bg-page) 100%);
+  /* ⚠️ 尺寸用 `farthest-side`（默认）：椭圆的边缘**正好落在盒子边上**。
+     早先写死 `ellipse 88% 130%` —— 半径比盒子大，52% 处的起点落在盒子**外面**，
+     于是可见区域内几乎没有渐变，看起来"没变化"（2026-10-26 实测）。 */
+  background: radial-gradient(ellipse farthest-side at 50% 50%,
+              rgba(0, 0, 0, 0) 38%, var(--c-bg-page) 96%);
   opacity: 0;
   transition: opacity 260ms ease;
 }
