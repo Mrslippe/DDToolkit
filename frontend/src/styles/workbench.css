@@ -2010,17 +2010,19 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 }
 
 /* ── 图表轮播（2026-10-26 改版）：整页滑动 + 浮动箭头 ───────────────── */
-.wb-charts { position: relative; }
+.wb-charts { position: relative; width: 100%; }
 
-.wb-charts-viewport { overflow: hidden; }
+.wb-charts-viewport { overflow: hidden; width: 100%; }
 
 .wb-charts-pages {
   display: flex;
+  width: 100%;
   transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .wb-charts-page {
   flex: 0 0 100%;
+  min-width: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;

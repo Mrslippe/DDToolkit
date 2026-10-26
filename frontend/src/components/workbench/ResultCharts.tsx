@@ -61,8 +61,18 @@ function EChart({ option }: { option: EChartsCoreOption }) {
       }
       api.current ??= echarts.init(host)
       api.current.setOption(option, true)
+      api.current.resize()
     } catch { /* 图表失败不影响其余内容 */ }
   }, [option])
+
+  // 容器尺寸变化要 resize：卡片在轮播里可能先以窄宽度初始化（2026-10-26）
+  useEffect(() => {
+    const host = box.current
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => api.current?.resize())
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [])
 
   useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
   return <div ref={box} className="wb-chart" />
