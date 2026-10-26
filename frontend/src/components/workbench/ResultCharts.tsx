@@ -41,6 +41,8 @@ interface Card {
   title: string
   note?: string
   option: EChartsCoreOption
+  /** 卡片底部的说明文字（如池子口径），2026-10-26 放进卡片内部 */
+  footer?: React.ReactNode
 }
 
 /** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
@@ -99,6 +101,12 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         key: 'tiers',
         title: '核心度分层',
         note: `共 ${pool.size} 人`,
+        footer: (
+          <p className="wb-chart-foot" data-testid="pool-rule">
+            池子按 3×平均同接{pool.acv ? `（ACV ${Math.round(pool.acv).toLocaleString()}）` : ''}划定
+            {pool.excluded ? ` · 另有 ${pool.excluded.toLocaleString()} 人分流走` : ''}
+          </p>
+        ),
         option: {
           tooltip: { trigger: 'item', formatter: '{b}: {c} 人（{d}%）' },
           legend: { bottom: 0, textStyle: { fontSize: 11 } },
@@ -258,56 +266,80 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
   }, [items, pool, tab, attBins, charts])
 
   const PER_PAGE = 2
-  const maxPage = Math.max(0, cards.length - PER_PAGE)
-  useEffect(() => { setPage(0) }, [tab])
-  const start = Math.min(page, maxPage)
-  const shown = cards.slice(start, start + PER_PAGE)
+  const pages = useMemo(() => {
+    const out: Card[][] = []
+    for (let i = 0; i < cards.length; i += PER_PAGE) out.push(cards.slice(i, i + PER_PAGE))
+    return out
+  }, [cards])
 
-  if (!cards.length) return null
+  /** 鼠标是否停在图表区（悬停才显示箭头） */
+  const [hover, setHover] = useState(false)
+  /** 切页签后短暂显示一次箭头，提示"这里可以翻" */
+  const [flash, setFlash] = useState(false)
+
+  useEffect(() => {
+    setPage(0)
+    setFlash(true)
+    const t = window.setTimeout(() => setFlash(false), 1600)
+    return () => window.clearTimeout(t)
+  }, [tab])
+
+  const maxPage = Math.max(0, pages.length - 1)
+  const cur = Math.min(page, maxPage)
+
+  if (!pages.length) return null
 
   return (
-    <div className="wb-charts" data-testid="result-charts">
-      <button
-        type="button" className="wb-charts-arrow" aria-label="上一张"
-        data-testid="charts-prev" disabled={start === 0}
-        onClick={() => setPage(Math.max(0, start - 1))}
-      >
-        <ChevronLeft className="size-4" />
-      </button>
-
-      <div className="wb-charts-track">
-        {shown.map((c) => (
-          <section className="wb-card wb-chart-card" key={c.key}
-                   data-testid={c.key === 'tiers' ? 'chart-pie-card'
-                     : c.key === 'strength' ? 'chart-line-card'
-                       : `chart-${c.key}`}>
-            <h3 className="wb-card-title">
-              {c.title}
-              {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
-            </h3>
-            <EChart option={c.option} />
-          </section>
-        ))}
+    <div
+      className={`wb-charts${hover || flash ? ' is-visible' : ''}`}
+      data-testid="result-charts"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div className="wb-charts-viewport">
+        <div
+          className="wb-charts-pages"
+          style={{ transform: `translateX(-${cur * 100}%)` }}
+          data-page={cur}
+        >
+          {pages.map((group, pi) => (
+            <div className="wb-charts-page" key={pi}>
+              {group.map((c) => (
+                <section
+                  className="wb-card wb-chart-card" key={c.key}
+                  data-testid={c.key === 'tiers' ? 'chart-pie-card'
+                    : c.key === 'strength' ? 'chart-line-card'
+                      : `chart-${c.key}`}
+                >
+                  <h3 className="wb-card-title">
+                    {c.title}
+                    {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
+                  </h3>
+                  <EChart option={c.option} />
+                  {c.footer}
+                </section>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
 
       <button
-        type="button" className="wb-charts-arrow" aria-label="下一张"
-        data-testid="charts-next" disabled={start >= maxPage}
-        onClick={() => setPage(Math.min(maxPage, start + 1))}
+        type="button" className="wb-charts-arrow is-left" aria-label="上一页"
+        data-testid="charts-prev" disabled={cur === 0}
+        onClick={() => setPage(Math.max(0, cur - 1))}
+      >
+        <ChevronLeft className="size-4" />
+      </button>
+      <button
+        type="button" className="wb-charts-arrow is-right" aria-label="下一页"
+        data-testid="charts-next" disabled={cur >= maxPage}
+        onClick={() => setPage(Math.min(maxPage, cur + 1))}
       >
         <ChevronRight className="size-4" />
       </button>
 
-      {tab === 'overview' && pool && (
-        <p className="wb-charts-note" data-testid="pool-rule">
-          池子按 3×平均同接{pool.acv ? `（ACV ${Math.round(pool.acv).toLocaleString()}）` : ''}划定
-          {pool.excluded ? ` · 另有 ${pool.excluded.toLocaleString()} 人分流走` : ''}
-        </p>
-      )}
-
-      <span className="wb-charts-pos">
-        {start + 1}–{Math.min(start + PER_PAGE, cards.length)} / {cards.length}
-      </span>
+      <span className="wb-charts-pos">{cur + 1} / {pages.length}</span>
     </div>
   )
 }
