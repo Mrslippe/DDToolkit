@@ -158,6 +158,35 @@ class CollectError(Exception):
 
 
 # ── 上游 ────────────────────────────────────────────────────────────────────
+#: 退避基数（秒）
+RETRY_BASE_S = 0.8
+#: 单次重试的最长等待
+RETRY_MAX_S = 20.0
+
+
+def _retry_delay(attempt: int, *, base: float = RETRY_BASE_S,
+                 cap: float = RETRY_MAX_S, jitter: float = 0.3) -> float:
+    """第 `attempt` 次重试前等待多久：指数退避 + ±`jitter` 随机抖动。
+
+    抖动是为了**打散并发任务的重试时刻** —— 上游 504 抖动时，3 个并发任务
+    如果同时退避、同时重试，会把压力重新叠在同一瞬间。
+    """
+    import random
+    d = min(cap, base * (2 ** max(0, attempt - 1)))
+    return d * (1 + random.uniform(-jitter, jitter))
+
+
+def adaptive_timeout_s(total_records: int, *, base: float = COLLECT_TIMEOUT_S,
+                       per_1k: float = 3.0, cap: float = 600.0) -> float:
+    """按"这场的记录数"估一个请求超时。
+
+    实测 15 万条的场次用固定 120s 很容易被腰斩；线性给到 `total/1000 × 3s`，
+    下限 `base`、上限 `cap`。
+    """
+    if total_records <= 0:
+        return base
+    return float(min(cap, max(base, total_records / 1000.0 * per_1k)))
+
 async def _get_json(client: httpx.AsyncClient, path: str,
                     params: list[tuple[str, Any]], *,
                     attempts: int = COLLECT_ATTEMPTS,
@@ -166,13 +195,17 @@ async def _get_json(client: httpx.AsyncClient, path: str,
     last: str = ""
     for i in range(max(1, attempts)):
         if i:
-            await asyncio.sleep(0.8 * i)
+            # 指数退避 + ±30% 抖动：避免多个并发任务在同一时刻齐步重试（504 风暴）
+            await asyncio.sleep(_retry_delay(i))
         try:
             kwargs = {"timeout": timeout_s} if timeout_s else {}
             r = await client.get(f"{DANMAKUS_BASE}{path}", params=params,
                                  headers=HEADERS, **kwargs)
             if r.status_code != 200:
                 last = f"HTTP {r.status_code}"
+                # 4xx 里只有 408/429 值得重试；其余（404/403）重试也是白等
+                if 400 <= r.status_code < 500 and r.status_code not in (408, 429):
+                    break
                 continue
             if r.content[:1] != b"{":
                 last = "响应不是 JSON"
@@ -223,10 +256,13 @@ async def fetch_records(client: httpx.AsyncClient, live_id: str, *,
     for page in range(1, COLLECT_MAX_PAGES + 1):
         recs: list[dict] = []
         has_more = False
+        # 大场次给更长的超时：15 万条用固定 120s 会被腰斩（2026-10-27）
+        _timeout = adaptive_timeout_s(max(total, len(first)))
         for attempt in range(FETCH_EMPTY_ATTEMPTS):
             jj = await _get_json(client, "/api/v2/live",
                                  [("liveId", live_id), ("pageSize", COLLECT_PAGE_SIZE),
-                                  ("pageNum", page)])
+                                  ("pageNum", page)],
+                                 timeout_s=_timeout)
             if not jj:
                 break
             e = jj.get("data") or {}

@@ -367,3 +367,21 @@ def test_aggregate_platform_span_sets_start_end():
     assert stats["start_at"].startswith("2026-08-27"), stats["start_at"]
     assert stats["end_at"].startswith("2026-08-27"), stats["end_at"]
     assert stats["start_at"] < stats["end_at"]
+
+
+def test_retry_delay_has_jitter_and_cap() -> None:
+    """重试等待：指数增长、带抖动、有上限（2026-10-27）。"""
+    from app.services.fan.collector import RETRY_MAX_S, _retry_delay
+    seen = [_retry_delay(1) for _ in range(20)]
+    assert 0.56 <= min(seen) <= 1.04 and 0.56 <= max(seen) <= 1.04   # 0.8 ± 30%
+    assert len(set(seen)) > 1, "必须是随机的（抖动）"
+    assert _retry_delay(10) <= RETRY_MAX_S * 1.3
+
+
+def test_adaptive_timeout_scales_with_records() -> None:
+    """大场次给更长超时，小场次保底（2026-10-27）。"""
+    from app.services.fan.collector import adaptive_timeout_s
+    assert adaptive_timeout_s(0) == 120.0
+    assert adaptive_timeout_s(5_000) == 120.0          # 保底
+    assert adaptive_timeout_s(150_000) > 120.0         # 大场次放宽
+    assert adaptive_timeout_s(10_000_000) == 600.0     # 有上限
