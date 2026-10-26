@@ -1618,6 +1618,9 @@ export interface FanRankedRow {
   gift_amt?: number
   guard_amt?: number
   sc_amt?: number
+  gift_cnt?: number
+  guard_cnt?: number
+  sc_cnt?: number
   spam_level?: 'none' | 'suspected' | 'confirmed'
 }
 

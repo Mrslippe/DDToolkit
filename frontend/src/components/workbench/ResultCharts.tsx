@@ -46,36 +46,43 @@ interface Card {
   option: EChartsCoreOption
   /** 卡片底部的说明文字（如池子口径），2026-10-26 放进卡片内部 */
   footer?: React.ReactNode
+  /** 饼图的 HTML 图例（颜色 + 名称 + 数值）；ECharts 自带 legend 在窄卡片里会消失 */
+  legend?: { name: string; value: number }[]
+  money?: boolean
 }
 
 /** 单张图：option 变化时重设，宿主更换时重建（2026-10-25 的教训） */
-function EChart({ option, run }: { option: EChartsCoreOption; run: number }) {
+function EChart({ option, playKey }: { option: EChartsCoreOption; playKey: string }) {
   const box = useRef<HTMLDivElement | null>(null)
   const api = useRef<ReturnType<typeof echarts.init> | null>(null)
   /** 上一次真正渲染时的 (run, option) 快照：同一个 run 只重建一次实例，
    *  否则 StrictMode / 连续 render 会让动画播两遍（2026-10-26 用户报"一次翻页播两次"） */
-  const lastRun = useRef(-1)
-  const lastOpt = useRef<EChartsCoreOption | null>(null)
+  /** 上一次触发"重播动画"的键：只有它变化才销毁重建 */
+  const lastPlay = useRef<string>('')
 
   useEffect(() => {
     const host = box.current
     if (!host) return
     try {
       if (!document.createElement('canvas').getContext('2d')) return   // jsdom
-      if (lastRun.current === run && lastOpt.current === option && api.current) return
+      // 已经初始化过、且这次不是"切页签/翻页" ⇒ 只更新数据，不重建实例。
+      // （数据到达时 option 会变，若重建就会重播动画 —— 这正是"切页签播两次"的真因）
+      if (api.current && lastPlay.current === playKey) {
+        api.current.setOption({ ...option, animation: false } as EChartsCoreOption, true)
+        return
+      }
       if (api.current && api.current.getDom() !== host) {
         api.current.dispose()
         api.current = null
       }
       // run 变化（切页签 / 翻页）= 销毁重建实例。`clear()` 不保证重播（实测无效），
       // 只有新建实例才会走"初始动画"这条路径：柱子从 0 生长、饼图重新旋转填充。
-      lastRun.current = run
-      lastOpt.current = option
+      lastPlay.current = playKey
       api.current?.dispose()
       api.current = echarts.init(host)
       api.current.setOption(option, true)
     } catch { /* 图表失败不影响其余内容 */ }
-  }, [option, run])
+  }, [option, playKey])
 
   // 容器尺寸变化要 resize，但**不能在新建实例的同一帧**做：
   // 新建后立刻 resize 会让 ECharts 重启动画，表现为"切页签动画播两遍"（2026-10-26 真因）。
@@ -104,35 +111,18 @@ const ANIM = { animation: true, animationDuration: 700, animationEasing: 'cubicO
 function pieOption(
   data: { name: string; value: number }[], money = false,
 ): EChartsCoreOption {
-  const byName = new Map(data.map((d) => [d.name, d.value]))
-  const fmt = (n: string) => {
-    const v = byName.get(n) ?? 0
-    return money
-      ? `${n}  ¥${Math.round(v).toLocaleString()}`
-      : `${n}  ${Math.round(v).toLocaleString()}`
-  }
+  // ⚠️ 不再用 ECharts 自带的 legend：卡片窄时它会被算没（2026-10-26 实测"图例消失"）。
+  // 图例改由 React 渲染（见 PieLegend），颜色/名称/数值都可控。
   return {
     ...ANIM,
     tooltip: {
       trigger: 'item',
       formatter: money ? '{b}: ¥{c}（{d}%）' : '{b}: {c}（{d}%）',
     },
-    legend: {
-      type: 'scroll',
-      orient: 'vertical',
-      left: 8,
-      top: 'middle',
-      itemGap: 8,
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { fontSize: 11 },
-      formatter: fmt,
-      pageTextStyle: { fontSize: 10 },
-    },
     series: [{
       type: 'pie',
-      radius: ['42%', '66%'],
-      center: ['64%', '50%'],
+      radius: ['46%', '70%'],
+      center: ['50%', '50%'],
       // 关掉外侧标签：名字交给图例，值也在图例里 —— 同时避免画布边缘把昵称裁掉一个字
       label: { show: false },
       labelLine: { show: false },
@@ -178,6 +168,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         note: `共 ${pool.size} 人`,
         option: pieOption(
           Object.entries(pool.tiers).map(([name, value]) => ({ name, value }))),
+        legend: Object.entries(pool.tiers).map(([name, value]) => ({ name, value })),
         footer: (
           <p className="wb-chart-foot" data-testid="pool-rule">
             池子按 3×平均同接{pool.acv ? `（ACV ${Math.round(pool.acv).toLocaleString()}）` : ''}划定
@@ -268,6 +259,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
         out.push({
           key: 'msgshare', title: '弹幕量贡献', note: 'Top 8 + 其他',
           option: pieOption(mc.labels.map((name, i) => ({ name, value: mc.values[i] }))),
+          legend: mc.labels.map((name, i) => ({ name, value: mc.values[i] })),
         })
       }
       // ② 场均弹幕 vs 分位（折线，横轴取对数）
@@ -300,7 +292,11 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
               axisLabel: {
                 fontSize: 10, color: '#5b6c7e',
                 // 刻度值 x → 分位百分比
-                formatter: (x: number) => `${((1 - Math.pow(10, -x)) * 100).toFixed(0)}%`,
+                // 高分段显示三位小数（0.990 / 0.999），否则右侧全挤成 "100%"
+                formatter: (x: number) => {
+                  const p = 1 - Math.pow(10, -x)
+                  return p >= 0.99 ? p.toFixed(3) : p.toFixed(2)
+                },
               },
             },
             yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#5b6c7e' } },
@@ -320,6 +316,8 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
       out.push({
         key: 'payshare', title: '付费贡献', note: 'Top 8 + 其他（鲸鱼单列）',
         option: pieOption(pc.labels.map((name, i) => ({ name, value: pc.values[i] })), true),
+        legend: pc.labels.map((name, i) => ({ name, value: pc.values[i] })),
+        money: true,
       })
     }
 
@@ -332,6 +330,12 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
           { name: '醒目留言', value: Math.round(ps.sc) },
           { name: '礼物', value: Math.round(ps.gift) },
         ], true),
+        legend: [
+          { name: '舰长类', value: Math.round(ps.guard) },
+          { name: '醒目留言', value: Math.round(ps.sc) },
+          { name: '礼物', value: Math.round(ps.gift) },
+        ],
+        money: true,
       })
     }
 
@@ -432,7 +436,25 @@ export default function ResultCharts({ items, pool, tab, attBins, charts }: Prop
                     {c.title}
                     {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
                   </h3>
-                  <EChart option={c.option} run={run} />
+                  {c.legend ? (
+                    <div className="wb-pie">
+                      <EChart option={c.option} playKey={`${tab}:${run}`} />
+                      <ul className="wb-pie-legend">
+                        {c.legend.map((d, i) => (
+                          <li key={d.name}>
+                            <i style={{ background: PINK[i % PINK.length] }} />
+                            <span className="wb-pie-name" title={d.name}>{d.name}</span>
+                            <span className="wb-pie-val">
+                              {c.money ? `¥${Math.round(d.value).toLocaleString()}`
+                                : Math.round(d.value).toLocaleString()}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <EChart option={c.option} playKey={`${tab}:${run}`} />
+                  )}
                   {c.footer}
                 </section>
               ))}

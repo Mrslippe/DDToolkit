@@ -2138,3 +2138,53 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 @media (max-width: 1100px) {
   .wb-charts-page { grid-template-columns: 1fr; }
 }
+
+/* 饼图 + HTML 图例（2026-10-26）：ECharts 自带 legend 在窄卡片里会消失，改自己画 */
+.wb-pie {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 240px;
+}
+
+.wb-pie .wb-chart { flex: 1 1 58%; height: 100%; }
+
+.wb-pie-legend {
+  flex: 1 1 42%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 6px 0 0;
+  list-style: none;
+  max-height: 100%;
+  overflow-y: auto;
+  font-size: 11.5px;
+}
+
+.wb-pie-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.wb-pie-legend i {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.wb-pie-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-main);
+}
+
+.wb-pie-val {
+  flex: 0 0 auto;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}

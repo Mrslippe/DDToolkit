@@ -70,27 +70,47 @@ function spamLabel(level?: string): string {
  * 颜色与付费页饼图一致：舰长类=主粉、SC=珊瑚、礼物=藏青。
  */
 function payMixBar(r: FanRankedRow) {
-  const guard = r.guard_amt ?? 0
-  const sc = r.sc_amt ?? 0
-  const gift = r.gift_amt ?? 0
+  let guard = r.guard_amt ?? 0
+  let sc = r.sc_amt ?? 0
+  let gift = r.gift_amt ?? 0
+  let estimated = false
+
+  // 老数据没有 g/gd/sc 三项金额时：用**次数**按比例分摊总额，
+  // 保证三色轴永远画得出来（tooltip 标注"按次数估算"）。
+  if (guard + sc + gift <= 0 && r.pay_total > 0) {
+    const nGuard = r.guard_cnt ?? 0
+    const nSc = r.sc_cnt ?? 0
+    const nGift = r.gift_cnt ?? 0
+    const nSum = nGuard + nSc + nGift
+    if (nSum > 0) {
+      guard = (r.pay_total * nGuard) / nSum
+      sc = (r.pay_total * nSc) / nSum
+      gift = (r.pay_total * nGift) / nSum
+      estimated = true
+    }
+  }
+
   const total = guard + sc + gift
   if (!total) {
-    // 分类金额缺失（老数据没有 g/gd/sc 三项）时，退化成"总额单色条"，
-    // 至少能看出这人花了多少，不会整列空白（2026-10-26 用户报"三色轴不见了"）
-    return r.pay_total > 0
-      ? (
-        <span className="wb-mix">
-          <span className="wb-mix-bar"><i style={{ width: '100%', background: '#c9406f' }}
-                                         title="缺分类金额（老数据）" /></span>
-          <span className="wb-mix-text">¥{r.pay_total.toLocaleString()}</span>
+    // 金额与次数都缺（极老的缓存行）：退化成一整条单色，至少不是空白
+    return r.pay_total > 0 ? (
+      <span className="wb-mix">
+        <span className="wb-mix-bar">
+          <i style={{ width: '100%', background: '#c9406f' }} title="缺分类明细" />
         </span>
-      )
-      : '—'
+        <span className="wb-mix-text">¥{r.pay_total.toLocaleString()}</span>
+      </span>
+    ) : '—'
   }
+
   const seg = (v: number, color: string, label: string) => {
     const w = (v / total) * 100
     if (w <= 0) return null
-    return <i key={label} style={{ width: `${w}%`, background: color }} title={`${label} ${w.toFixed(0)}%`} />
+    return (
+      <i key={label}
+         style={{ width: `${w}%`, background: color }}
+         title={`${label} ${w.toFixed(0)}%${estimated ? '（按次数估算）' : ''}`} />
+    )
   }
   const pct = (v: number) => `${((v / total) * 100).toFixed(0)}%`
   return (
@@ -101,7 +121,7 @@ function payMixBar(r: FanRankedRow) {
         {seg(gift, '#7c93b5', '礼物')}
       </span>
       <span className="wb-mix-text">
-        {pct(guard)} / {pct(sc)} / {pct(gift)}
+        {pct(guard)} / {pct(sc)} / {pct(gift)}{estimated ? ' ≈' : ''}
       </span>
     </span>
   )
