@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from app.models.vtuber import EVENT_KIND_EVENT, EVENT_KINDS

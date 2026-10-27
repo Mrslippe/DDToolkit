@@ -164,6 +164,9 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
+    // 只依赖 clamp：监听器里读 stateKey/size/scale 是为了**顺带记住**视野位置，
+    // 把它们放进依赖会反复重挂监听（且 clamp 已随 size/total 变化）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clamp])
 
   /* 场次异步到达 / 换 V：按 stateKey 归位（缩放也一起恢复） */
@@ -200,6 +203,9 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
         : (wantStart >= span ? maxScroll : center - el.clientWidth / 2)
       el.scrollLeft = Math.max(0, Math.min(maxScroll, target))
     }
+    // 只在 stateKey 变化时归位：size/scale/scroll 在这里读的是**恢复当时**的值，
+    // 把它们放进依赖会让归位反复触发（正是"漂移"的老问题）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     // 等本轮渲染与 clamp 跑完再放开回写
     requestAnimationFrame(() => {
       suppress.current = false

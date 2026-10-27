@@ -130,6 +130,8 @@ function EChart({ option }: { option: EChartsCoreOption }) {
     }
     raf = requestAnimationFrame(boot)
     return () => cancelAnimationFrame(raf)
+    // 只在挂载时初始化：后续数据更新走 key 重建（dataStamp），不需要重新 init
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => () => { api.current?.dispose(); api.current = null }, [])
