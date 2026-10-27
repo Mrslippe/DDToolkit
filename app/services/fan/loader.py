@@ -94,6 +94,9 @@ LEGACY_VTUBERS: tuple[VtuberRef, ...] = (
     VtuberRef("弥月Mizuki", "pilot_v3_mizuki", "1789460279", "弥月"),
     VtuberRef("明前奶绿", "pilot_v3_mingqian", "2132180406", "明前奶绿"),
     VtuberRef("星瞳_Official", "pilot_v3_xingtong", "401315430", "星瞳"),
+    # 2026-10-27：七海的数据目录是 `bili-434334701`（按 mid 生成，不走 pilot_v3_ 前缀）。
+    # 加进样本后 `load_window("七海…")` 才能直接解析 —— 之前它在库里没登记、数据却采到了。
+    VtuberRef("七海Nana7mi", "bili-434334701", "434334701", "七海"),
 )
 
 #: 向后兼容的别名：老代码/探针按 `VTUBERS` 取那三个样本。

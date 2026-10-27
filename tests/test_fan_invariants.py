@@ -23,7 +23,7 @@ from app.services.fan.checks import check_identity
 from app.services.fan.compose import type_label
 from app.services.fan.pool import pool_size_for
 
-VSHORTS = ["弥月", "明前奶绿", "星瞳"]
+VSHORTS = ["弥月", "明前奶绿", "星瞳", "七海"]
 
 
 def _window(short: str, n: int = 75):
