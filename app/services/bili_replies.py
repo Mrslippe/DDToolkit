@@ -18,6 +18,7 @@ import json
 import re
 import time
 import uuid
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -27,20 +28,23 @@ import httpx
 from app.core.http import new_async_client
 from app.services import wbi
 
+logger = logging.getLogger(__name__)
+
 API = "https://api.bilibili.com"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-#: 主楼最多翻多少页（20 条/页 → 2 万条封顶）
-MAX_PAGES = 1000
+#: 主楼最多翻多少页（20 条/页）。大帖（8 万条）按 1 页/秒要跑几小时，
+#: 默认封在 150 页 = 3000 条，够做名单重叠；超出标 partial 并提示。
+MAX_PAGES = 150
 #: 每页条数（B 站上限 20）
 PAGE_SIZE = 20
 #: 楼中楼：只对"评论数最多的前 N 条主楼"抓（避免请求数爆炸）
 SUB_TOP = 50
 #: 请求间隔（秒）—— 评论区接口对高频很敏感
-GAP_S = 1.2
+GAP_S = 0.6
 
 BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
 AV_RE = re.compile(r"av(\d+)", re.I)
@@ -131,9 +135,17 @@ async def _get(
             headers["Cookie"] = cookie
         r = await client.get(url, params=p, headers=headers, timeout=30)
         if r.status_code != 200:
+            logger.warning("bili %s → HTTP %s（%s）", url.rsplit("/", 1)[-1], r.status_code, params)
             return None
         data = r.json()
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            logger.warning("bili %s → 非 JSON 对象", url.rsplit("/", 1)[-1])
+            return None
+        code = data.get("code")
+        if code not in (0, None):
+            logger.warning("bili %s → code=%s message=%s", url.rsplit("/", 1)[-1], code,
+                           str(data.get("message"))[:80])
+        return data
     except Exception:  # noqa: BLE001 —— 网络/解析失败统一吞成 None
         return None
 
@@ -203,6 +215,7 @@ async def fetch_users(
     state: ScanState,
     should_stop: Callable[[], bool] | None = None,
     cookie: str = "",
+    max_pages: int = MAX_PAGES,
 ) -> list[dict[str, Any]]:
     """分页抓主楼（可选楼中楼），按 uid 聚合成评论名单。"""
     rtype = "1" if kind == "video" else "11"
@@ -227,25 +240,31 @@ async def fetch_users(
                 u["last_ms"] = ms if u["last_ms"] is None else max(u["last_ms"], ms)
 
     page = 1
-    total_pages = 0
-    while page <= MAX_PAGES:
+    cursor: int | None = None
+    while page <= max_pages:
         if should_stop and should_stop():
             state.state = "cancelled"
             break
-        j = await _get(
-            client,
-            f"{API}/x/v2/reply",
-            {"type": rtype, "oid": oid, "sort": 0, "ps": PAGE_SIZE, "pn": page},
-            cookie=cookie,
-        )
+        # ⚠️ 用 `/x/v2/reply/main`（带 cursor）而不是老的 `/x/v2/reply`：
+        # 2026-10-28 实测老接口对未登录请求返回 code=0 但 **replies 为空**，
+        # 表现成"抓取成功但一条没有"，很难查。
+        params: dict[str, Any] = {"type": rtype, "oid": oid, "mode": 3, "ps": PAGE_SIZE}
+        if cursor is not None:
+            params["next"] = cursor
+        j = await _get(client, f"{API}/x/v2/reply/main", params, cookie=cookie)
         d = (j or {}).get("data") or {}
+        cur = d.get("cursor") or {}
         replies = d.get("replies") or []
-        if not total_pages:
-            state.expected = int((d.get("page") or {}).get("count") or state.expected or 0)
+        if not state.expected:
+            state.expected = int(cur.get("all_count") or 0)
             if state.expected:
-                total_pages = max(1, -(-state.expected // PAGE_SIZE))
-                state.pages = min(total_pages, MAX_PAGES)
+                state.pages = min(max_pages, max(1, -(-state.expected // PAGE_SIZE)))
+        logger.info("评论第 %d 页：%d 条（all_count=%s is_end=%s）",
+                    page, len(replies), cur.get("all_count"), cur.get("is_end"))
         if not replies:
+            if page == 1:
+                logger.warning("第 1 页就是空的：oid=%s type=%s（可能被风控或接口变了）", oid, rtype)
+                state.error = state.error or "上游第 1 页就没有评论（可能被风控或帖子已关闭评论）"
             break
         for r in replies:
             member = r.get("member") or {}
@@ -256,7 +275,6 @@ async def fetch_users(
             add(mid, member.get("uname") or "", ms, sub=False)
             state.fetched += 1
 
-        # 楼中楼：只给"评论数最多的前 SUB_TOP 条主楼"抓，避免请求数爆炸
         if with_sub and page == 1:
             top = sorted(replies, key=lambda r: int(r.get("rcount") or 0), reverse=True)[:SUB_TOP]
             state.phase = "sub"
@@ -280,11 +298,19 @@ async def fetch_users(
             state.phase = "replies"
 
         state.page = page
+        if cur.get("is_end"):
+            break
+        nxt = cur.get("next")
+        if not nxt:
+            break
+        cursor = int(nxt)
         page += 1
         await asyncio.sleep(GAP_S)
 
     if state.expected and state.fetched < state.expected:
         state.partial = True
+        if not state.error and page > max_pages:
+            state.error = f"只抓到前 {max_pages} 页（{state.fetched}/{state.expected} 条），已标为部分数据"
     state.users = sorted(seen.values(), key=lambda u: (-u["cnt"], -u["sub_cnt"]))
     return state.users
 
@@ -323,11 +349,13 @@ async def run_scan(
     state: ScanState | None = None,
     should_stop: Callable[[], bool] | None = None,
     cookie: str = "",
+    max_pages: int = MAX_PAGES,
 ) -> ScanState:
     """完整跑一次：解析 → 抓取 → 落盘。**不抛异常**，失败写进 `state.error`。"""
     st = state or ScanState(scan_id=uuid.uuid4().hex[:12], input=text)
     st.input = text
     st.state = "running"
+    logger.info("评论抓取开始：input=%r with_sub=%s scan_id=%s", text, with_sub, st.scan_id)
     async with new_async_client() as client:
         try:
             st.phase = "resolve"
@@ -338,9 +366,12 @@ async def run_scan(
             st.up_name = info.get("up_name") or ""
             st.cover = info.get("cover") or ""
             st.expected = int(info.get("expected") or 0)
+            logger.info("解析成功：kind=%s oid=%s title=%r expected=%d",
+                        st.target_kind, st.target_id, st.title[:40], st.expected)
             await fetch_users(
                 client, st.target_kind, st.target_id,
                 with_sub=with_sub, state=st, should_stop=should_stop, cookie=cookie,
+                max_pages=max_pages,
             )
             if st.state != "cancelled":
                 st.state = "done"
@@ -348,7 +379,10 @@ async def run_scan(
         except Exception as exc:  # noqa: BLE001 —— 统一兜成可展示的原因
             st.state = "failed"
             st.error = str(exc) or type(exc).__name__
+            logger.warning("评论抓取失败：%s（scan_id=%s）", st.error, st.scan_id)
         finally:
             st.finished_at = time.time()
             save(st, root)
+            logger.info("评论抓取结束：state=%s 抓取 %d 条 / 期望 %s · 用户 %d · %.1fs",
+                        st.state, st.fetched, st.expected or "?", len(st.users), st.elapsed)
     return st

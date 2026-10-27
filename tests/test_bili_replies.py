@@ -35,21 +35,22 @@ def test_fetch_users_aggregates_and_marks_partial(monkeypatch) -> None:
     """主楼按 uid 聚合、楼中楼计入 `sub_cnt`；拿不满时标 partial。"""
 
     pages = {
-        1: {"data": {"page": {"count": 100}, "replies": [
+        1: {"data": {"cursor": {"all_count": 100, "is_end": False, "next": 2}, "replies": [
             _reply(1, "甲", 1700000000, 11, rcount=5),
             _reply(2, "乙", 1700000100, 12),
             _reply(1, "甲", 1700000200, 13),
         ]}},
-        2: {"data": {"page": {"count": 100}, "replies": [
+        2: {"data": {"cursor": {"all_count": 100, "is_end": True, "next": 0}, "replies": [
             _reply(3, "丙", 1700000300, 14),
         ]}},
-        3: {"data": {"page": {"count": 100}, "replies": []}},
     }
     subs = {"data": {"replies": [{"member": {"mid": 9, "uname": "丁"}}]}}
 
     async def fake_get(client, url, params=None, **kw):
-        if url.endswith("/x/v2/reply"):
-            return pages.get((params or {}).get("pn"))
+        if url.endswith("/x/v2/reply/main"):
+            # 第一页不带 next，第二页带 next=2
+            nxt = (params or {}).get("next")
+            return pages.get(int(nxt) if nxt else 1)
         if url.endswith("/x/v2/reply/reply"):
             return subs
         return None

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 class ScanIn(BaseModel):
     input: str = Field(..., description="动态/视频链接、BV 号或 av 号")
     with_sub: bool = Field(True, description="是否抓楼中楼（更全，但请求数增加）")
+    max_pages: int = Field(150, ge=1, le=1000, description="主楼最多抓多少页（20 条/页）")
 
 
 def overlap_stats(tier: dict[str, str], strength: dict[str, float],
@@ -101,9 +102,12 @@ def build_router(*, deps: dict[str, Any]) -> APIRouter:
             import asyncio as _a
 
             try:
+                logger.info("对比页：开始抓取评论 input=%r with_sub=%s max_pages=%s",
+                            payload.input, payload.with_sub, payload.max_pages)
                 _a.run(br.run_scan(
                     payload.input, root=root, with_sub=payload.with_sub, state=st,
                     should_stop=lambda: stops.get(st.scan_id, False),
+                    max_pages=payload.max_pages,
                 ))
             except Exception:  # noqa: BLE001 —— run_scan 内部已兜，这里只是最后一道
                 logger.exception("评论抓取任务异常")
