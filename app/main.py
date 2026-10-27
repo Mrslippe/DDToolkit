@@ -552,6 +552,19 @@ app.include_router(settings_router.router)
 # ⚠️ debug 路由走**带守卫的助手**（仅 dev 注册）—— 生产构建里那条路径不存在。
 app.include_router(messages_router.router)
 app.include_router(fan_router.router)
+# 对比页 · 帖子评论模式（2026-10-28）：评论抓取 + 与核心度名单的重叠。
+# 用**依赖注入式**路由（`build_router`），避免它 import fan.py 的私有状态。
+from app.routers import fan as _fan  # noqa: E402
+from app.routers import fan_compare as _fan_compare  # noqa: E402
+
+app.include_router(_fan_compare.build_router(deps={
+    "require_module": _fan.require_module,
+    "resolve_data_dir": __import__("app.services.fan.loader", fromlist=["resolve_data_dir"]).resolve_data_dir,
+    "compute": _fan._compute,
+    "default_window": _fan.DEFAULT_WINDOW,
+    "min_window": _fan.MIN_WINDOW,
+    "max_window": _fan.MAX_WINDOW,
+}))
 messages_router.include_debug_routes(app)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问
