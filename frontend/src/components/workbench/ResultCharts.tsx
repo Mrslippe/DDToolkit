@@ -9,7 +9,9 @@ import type { FanRankedRow } from '../../api/types'
 
 echarts.use([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, CanvasRenderer])
 
-export type ResultTab = 'overview' | 'attendance' | 'interaction' | 'payment'
+export type ResultTab = 'overview' | 'attendance' | 'interaction' | 'payment' | 'compare'
+/** 需要走 /ranked 的四个分析页签（`compare` 不走） */
+export type RankedTab = Exclude<ResultTab, 'compare'>
 
 const PINK = ['#c9406f', '#ffa2b4', '#fc7079', '#7c93b5', '#d9a5b3', '#a66c8a']
 const GREEN = '#52c41a'

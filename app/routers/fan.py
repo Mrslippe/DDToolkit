@@ -1598,6 +1598,85 @@ def ranked_csv(
     )
 
 
+@router.get("/fan/compare/multi")
+def compare_multi(
+    vtubers: str = Query(..., description="逗号分隔的 2–6 个主播（显示名或简称）"),
+    window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """多个 V 的**两两名单重叠**（对比页 · 多主播模式，2026-10-28）。
+
+    与 `/fan/cross` 同口径，只是扩到 N 个：N(N-1)/2 个配对，p 值做 **BH 校正**。
+    ⚠️ 仍然**不返回分数比较**（跨 V 测量不变性已否证），只给层级与重叠。
+    """
+    from app.services.fan.cross_v import (bh_adjust, describe, overlap,
+                                          profile as cross_profile, tier_moves)
+
+    names = [x.strip() for x in (vtubers or "").split(",") if x.strip()]
+    if not 2 <= len(names) <= 6:
+        raise HTTPException(400, f"需要 2–6 个主播（收到 {len(names)} 个）：{names}")
+    if len(set(names)) != len(names):
+        raise HTTPException(400, "主播重复了，请去掉重复项")
+
+    since, until = _range_or_none(since, until)
+    profs = []
+    for n in names:
+        payload = _compute(n, window, since, until)
+        profs.append(cross_profile(payload["window"]))
+
+    pairs: list[dict[str, Any]] = []
+    raw_p: list[float] = []
+    for i in range(len(profs)):
+        for j in range(i + 1, len(profs)):
+            ov = overlap(profs[i], profs[j])
+            raw_p.append(ov.p_value)
+            pairs.append({"i": i, "j": j, "ov": ov})
+    adj = bh_adjust(raw_p)
+
+    out_pairs = []
+    for idx, item in enumerate(pairs):
+        i, j, ov = item["i"], item["j"], item["ov"]
+        out_pairs.append({
+            "a": profs[i].short, "b": profs[j].short,
+            "a_name": profs[i].name, "b_name": profs[j].name,
+            "size_a": ov.size_a, "size_b": ov.size_b,
+            "intersection": ov.intersection,
+            "jaccard": round(ov.jaccard, 6),
+            "lift": round(ov.lift, 4),
+            "p_value": ov.p_value, "p_adjusted": adj[idx],
+            "p_value_lower": ov.p_value_lower,
+            "is_enriched": ov.is_enriched and adj[idx] < 0.05,
+            "is_depleted": ov.is_depleted,
+            "tier_table": ov.tiers,
+            "tier_moves": tier_moves(profs[i], profs[j]),
+            "reading": describe(ov),
+        })
+
+    # 方阵（对称）：非对角放该配对在 `pairs` 里的下标，前端点格子下钻
+    n = len(profs)
+    matrix = [[None] * n for _ in range(n)]
+    for idx, item in enumerate(pairs):
+        i, j = item["i"], item["j"]
+        cell = {"pair": idx, "jaccard": out_pairs[idx]["jaccard"],
+                "lift": out_pairs[idx]["lift"], "shared": out_pairs[idx]["intersection"]}
+        matrix[i][j] = cell
+        matrix[j][i] = cell
+
+    return {
+        "window": window, "since": since, "until": until,
+        "vtubers": [{"name": p.name, "short": p.short, "pool": len(p.pool),
+                     "sessions": p.n_sessions, "tiers": p.counts()} for p in profs],
+        "matrix": matrix,
+        "pairs": out_pairs,
+        "notes": [
+            "只比层级，不比分数：跨 V 的绝对阈值不可移植",
+            f"共 {len(out_pairs)} 个配对，p 值已做 BH 校正（FDR）",
+        ],
+    }
+
+
 @router.get("/fan/cross")
 def cross(
     vtubers: str = Query(..., description="逗号分隔的两个主播（显示名或简称）"),

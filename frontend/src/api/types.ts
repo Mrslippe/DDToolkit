@@ -1758,3 +1758,45 @@ export interface FanMemberDetail {
   window_sessions: number
   series: FanMemberSeriesPoint[]
 }
+
+
+/** 多主播对比（2026-10-28） */
+export interface FanCompareVtuber {
+  name: string
+  short: string
+  pool: number
+  sessions: number
+  tiers: Record<string, number>
+}
+
+export interface FanComparePair {
+  a: string
+  b: string
+  a_name: string
+  b_name: string
+  size_a: number
+  size_b: number
+  intersection: number
+  jaccard: number
+  lift: number
+  p_value: number
+  /** BH 校正后的 p（多重比较） */
+  p_adjusted: number
+  p_value_lower: number
+  is_enriched: boolean
+  is_depleted: boolean
+  tier_table: Record<string, Record<string, number>>
+  tier_moves: Record<string, number>
+  reading: string
+}
+
+export interface FanCompareMulti {
+  window: number
+  since: string | null
+  until: string | null
+  vtubers: FanCompareVtuber[]
+  /** 对称方阵：非对角放 `{pair, jaccard, lift, shared}`，对角为 null */
+  matrix: ({ pair: number; jaccard: number; lift: number; shared: number } | null)[][]
+  pairs: FanComparePair[]
+  notes: string[]
+}

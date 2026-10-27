@@ -315,3 +315,20 @@ def test_cross_requires_exactly_two(client) -> None:
 def test_cross_unknown_vtuber_is_404(client) -> None:
     assert client.get("/fan/cross",
                       params={"vtubers": "弥月,不存在"}).status_code == 404
+
+
+def test_bh_adjust_properties() -> None:
+    """BH 校正：单调、封顶 1、与序无关（2026-10-28 多主播对比用）。"""
+    from app.services.fan.cross_v import bh_adjust
+
+    assert bh_adjust([]) == []
+    one = bh_adjust([0.03])
+    assert abs(one[0] - 0.03) < 1e-12
+
+    ps = [0.001, 0.02, 0.5]
+    adj = bh_adjust(ps)
+    assert all(0.0 <= x <= 1.0 for x in adj)
+    # 校正后不会比原始更小
+    assert all(a >= p - 1e-12 for a, p in zip(adj, ps))
+    # 排序不变（最小 p 的校正值仍最小）
+    assert adj[0] <= adj[1] <= adj[2]

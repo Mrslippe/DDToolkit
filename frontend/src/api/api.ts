@@ -1,6 +1,6 @@
 import type {
   FanSortBy,
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -1117,6 +1117,14 @@ export const api = {
     return { blob: await res.blob(), filename: m ? decodeURIComponent(m[1]) : `${name}.csv` }
   },
 
+  /** 多主播重叠（对比页 · 多主播模式，2026-10-28） */
+  fanCompareMulti: (vtubers: string[], opts?: { window?: number; since?: string; until?: string }) => {
+    const q = new URLSearchParams({ vtubers: vtubers.join(',') })
+    if (opts?.window) q.set('window', String(opts.window))
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    return request<FanCompareMulti>(`/fan/compare/multi?${q}`)
+  },
   fanRanked: (name: string, by: FanSortBy,
               opts?: { since?: string; until?: string; window?: number; limit?: number;
                        offset?: number; ids?: string[]; tags?: string[] }) => {

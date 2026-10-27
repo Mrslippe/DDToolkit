@@ -20,8 +20,9 @@ import ProfileCard from '../components/workbench/ProfileCard'
 import PurgeButton from '../components/workbench/PurgeButton'
 import RangeButton from '../components/workbench/RangeButton'
 import RankedTable from '../components/workbench/RankedTable'
-import ResultCharts, { type ResultTab } from '../components/workbench/ResultCharts'
+import ResultCharts, { type RankedTab, type ResultTab } from '../components/workbench/ResultCharts'
 import ResultTabs from '../components/workbench/ResultTabs'
+import ComparePanel from '../components/workbench/ComparePanel'
 import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
@@ -62,6 +63,9 @@ const TAB_BY = {
   interaction: 'interaction',
   payment: 'payment',
 } as const
+
+/** 对比页不请求名单；其余页签按 `TAB_BY` 取口径。 */
+const byOf = (t: ResultTab) => TAB_BY[(t === 'compare' ? 'overview' : t) as RankedTab]
 /** 进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
 const POLL_MS = 1000
 
@@ -282,7 +286,7 @@ export default function WorkbenchPage() {
         }))
       setRanked(data)
       // `by` 是后端口径名（strength/attendance/...），反查回页签
-      const tabOf = (Object.keys(TAB_BY) as ResultTab[]).find((t) => TAB_BY[t] === by)
+      const tabOf = (Object.keys(TAB_BY) as RankedTab[]).find((t) => TAB_BY[t] === by)
       if (tabOf) setRankedTab(tabOf)
       setRows((prev) => (append ? [...prev, ...data.items] : data.items))
       const total = data.list_total ?? data.pool?.size ?? data.total_in_pool
@@ -301,7 +305,7 @@ export default function WorkbenchPage() {
   useEffect(() => {
     tagFilterRef.current = tagFilter
     setHasMore(false)
-    void loadRanked(TAB_BY[tab], 0, false, tagFilter)
+    void loadRanked(byOf(tab), 0, false, tagFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tagFilter.join('|')])
 
@@ -309,7 +313,7 @@ export default function WorkbenchPage() {
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
     setHasMore(false)
-    void loadRanked(TAB_BY[t], 0, false, tagFilterRef.current)
+    void loadRanked(byOf(t), 0, false, tagFilterRef.current)
   }, [loadRanked])
 
   // 标签目录随 /ranked 一起返回（2026-10-25）：不再单独发请求 ——
@@ -323,7 +327,7 @@ export default function WorkbenchPage() {
   /** 懒加载：接着已加载的条数往后取一页 */
   const onLoadMore = useCallback((): void => {
     if (busy || !hasMore) return
-    void loadRanked(TAB_BY[tab], rows.length, true)
+    void loadRanked(byOf(tab), rows.length, true)
   }, [busy, hasMore, loadRanked, tab, rows.length])
 
   const startCollect = useCallback(async (): Promise<void> => {
@@ -607,14 +611,24 @@ export default function WorkbenchPage() {
               >
                 {/* 数据还没跟上当前页签时**不渲染图表**：
                     否则会先用旧数据挂载一次、新数据到了再重新挂载 —— 视觉上两次闪动（2026-10-27） */}
-                {rankedTab === tab ? (
+                {tab === 'compare' ? (
+                  <ComparePanel
+                    current={ranked.vtuber ?? picked}
+                    options={vtubers
+                      .filter((v) => v.name !== ranked?.vtuber)
+                      .map((v) => ({ name: v.name, short: v.short || v.name }))}
+                    window={ranked.sessions}
+                    since={since}
+                    until={until}
+                  />
+                ) : rankedTab === tab ? (
                   <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
                                 attBins={ranked.att_bins} charts={ranked.charts}
                                 dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
                 ) : (
                   <div className="wb-charts-pending" aria-hidden />
                 )}
-                <RankedTable
+                {tab !== 'compare' && <RankedTable
                   vtuber={picked}
                   by={ranked.by as FanSortBy}
                   since={since}
@@ -637,7 +651,7 @@ export default function WorkbenchPage() {
                   loading={busy}
                   onLoadMore={onLoadMore}
                   tab={tab}
-                />
+                />}
               </div>
             </>
           ) : (

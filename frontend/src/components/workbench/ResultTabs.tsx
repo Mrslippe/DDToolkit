@@ -5,6 +5,8 @@ const TABS: { key: ResultTab; label: string }[] = [
   { key: 'attendance', label: '出席' },
   { key: 'interaction', label: '互动' },
   { key: 'payment', label: '付费' },
+  // 对比：面向**外部数据**（别的帖子的评论、别的 V 的名单），与四个分析页签用分隔符隔开
+  { key: 'compare', label: '对比' },
 ]
 
 interface Props {
@@ -27,7 +29,7 @@ export default function ResultTabs({ value, onChange }: Props) {
           type="button"
           role="tab"
           aria-selected={value === t.key}
-          className={`wb-tab${value === t.key ? ' is-active' : ''}`}
+          className={`wb-tab${value === t.key ? ' is-active' : ''}${t.key === 'compare' ? ' is-compare' : ''}`}
           data-testid={`tab-${t.key}`}
           onClick={() => onChange(t.key)}
         >

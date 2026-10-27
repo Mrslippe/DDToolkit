@@ -172,6 +172,26 @@ def assign_tiers(table: AxisTable, strength: Mapping[str, float] | None = None) 
     return out
 
 
+def bh_adjust(pvalues: Sequence[float]) -> list[float]:
+    """Benjamini–Hochberg 校正（FDR）。
+
+    多个 V 会一次算出 N(N-1)/2 个 p 值 —— **不校正就是在做多重比较**，
+    会把"偶然重叠"当成"显著富集"。这里返回与输入同序的校正后 p 值。
+    """
+    m = len(pvalues)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    adj = [0.0] * m
+    prev = 1.0
+    for rank in range(m, 0, -1):
+        i = order[rank - 1]
+        val = min(prev, pvalues[i] * m / rank)
+        prev = val
+        adj[i] = val
+    return adj
+
+
 def profile(win: Window) -> VProfile:
     """从一个窗口算出 V 画像。
 
