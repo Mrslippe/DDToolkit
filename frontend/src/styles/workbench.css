@@ -2379,3 +2379,39 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-venn-b { fill: rgba(47, 158, 158, .20); stroke: rgba(47, 158, 158, .55); stroke-width: 1; }
 .wb-venn-t { font-size: 11px; fill: var(--c-text-sub); }
 .wb-venn-inter { font-size: 16px; font-weight: 600; fill: var(--c-primary-deep); }
+
+/* ── 通用按钮（2026-10-28 补：`wb-btn` / `wb-btn-ghost` 之前根本没定义，
+   所以导出 CSV 与「开始抓取」渲成了"图标压着文字 + 大号 svg"）────────── */
+.wb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--c-primary, #c9406f);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter .15s ease, background .15s ease;
+}
+
+.wb-btn:hover:not(:disabled) { filter: brightness(1.05); }
+.wb-btn:disabled { opacity: .55; cursor: default; }
+.wb-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+
+/* ghost：白底 + 细边，用于"导出/取消"这类次级动作 */
+.wb-btn-ghost {
+  background: #fff;
+  color: var(--c-text-main);
+  border-color: var(--c-border, #e6e8ec);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+}
+.wb-btn-ghost:hover:not(:disabled) { background: #fff5f7; border-color: rgba(201, 64, 111, .35); }
+
+/* 图标统一尺寸：不写死的话 lucide 会按 24×24 撑开，把文字顶下去 */
+.wb-btn > svg { width: 14px; height: 14px; flex: 0 0 auto; }
