@@ -1432,7 +1432,7 @@
 }
 
 .wb-tab:focus-visible {
-  outline: 2px solid var(--c-primary-deep);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: var(--pcard-radius-inner);
 }
@@ -1582,7 +1582,7 @@
 }
 .wb-search-input:focus {
   outline: none;
-  border-color: var(--c-primary-deep);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgba(201, 64, 111, 0.12);
 }
 

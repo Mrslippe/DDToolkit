@@ -195,6 +195,7 @@ def test_real_data_c1_never_drops() -> None:
     （那 1 场在加载阶段就因无入场事件被剔，不会走到 C1）。"""
     _require_data()
     total = 0
+    session_count = 0
     for v in VTUBERS:
         try:
             w = load_window(v, 75)
@@ -202,9 +203,12 @@ def test_real_data_c1_never_drops() -> None:
             pytest.skip(str(exc))
         if not w.sessions:
             continue
+        session_count += len(w.sessions)
         vs = check_window(w)
         assert dropped(vs) == [], f"{v.short} 出现 C1 弃用：{dropped(vs)}"
         total += len(vs)
+    if session_count == 0:
+        pytest.skip("没有可用的真实场次（CI 不带数据集）")
     assert total > 0
 
 

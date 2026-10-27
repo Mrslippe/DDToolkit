@@ -17,5 +17,8 @@ import viteConfig from './vite.config'
 export default mergeConfig(viteConfig, defineConfig({
   test: {
     setupFiles: ['./src/test/setup.ts'],
+    // 钉死时区：这些用例断言的是"库内 naive UTC + 展示补 +00:00 + 按东八区渲染"的约定，
+    // 在 UTC 的 CI runner 上会整体偏 8 小时（2026-10-27 修）。
+    env: { TZ: 'Asia/Shanghai' },
   },
 }))

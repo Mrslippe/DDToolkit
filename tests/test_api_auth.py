@@ -169,7 +169,9 @@ def test_public_whitelist_is_exactly_what_we_intend(token):
     所以端点自己校验配对 token + 只接受回环 + 连续失败节流。
     下一条用例专门证明"放行 ≠ 不设防"。
     """
-    assert api_auth.PUBLIC_PREFIXES == ("/healthz", "/static/")
+    # 2026-10-24 起 `/fan/avatar/` 也是公开前缀：`<img src>` 带不了自定义头，
+    # 端点本身只接受纯数字 uid 且只代理 B 站头像（见 api_auth.PUBLIC_PREFIXES 的注释）。
+    assert api_auth.PUBLIC_PREFIXES == ("/healthz", "/static/", "/fan/avatar/")
     assert api_auth.PUBLIC_EXACT == {
         ("GET", "/img-proxy"), ("GET", "/video-proxy"), ("POST", "/auth/import"),
     }
