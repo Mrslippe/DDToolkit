@@ -1118,10 +1118,10 @@ export const api = {
   },
 
   /** 评论抓取（对比页 · 帖子评论模式，2026-10-28） */
-  fanCommentScanStart: (input: string, withSub = true) =>
-    request<{ scan_id: string; state: string }>('/fan/compare/scan',
+  fanCommentScanStart: (input: string, withSub = true, maxPages = 150) =>
+    request<{ scan_id: string; state: string; reused?: boolean }>('/fan/compare/scan',
       { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input, with_sub: withSub }) }),
+        body: JSON.stringify({ input, with_sub: withSub, max_pages: maxPages }) }),
 
   fanCommentScan: (scanId: string) =>
     request<FanCommentScan>(`/fan/compare/scan/${encodeURIComponent(scanId)}`),

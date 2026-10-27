@@ -25,6 +25,8 @@ const POLL_MS = 1000
 export default function CommentComparePane({ vtuber, window, since, until }: Props) {
   const [input, setInput] = useState('')
   const [withSub, setWithSub] = useState(true)
+  // 抓取深度：页数越多越慢、越容易触发风控
+  const [depth, setDepth] = useState<number>(150)
   const [scan, setScan] = useState<FanCommentScan | null>(null)
   const [users, setUsers] = useState<FanCommentUser[]>([])
   const [result, setResult] = useState<FanCommentOverlap | null>(null)
@@ -71,7 +73,7 @@ export default function CommentComparePane({ vtuber, window, since, until }: Pro
     if (!input.trim() || busy) return
     setBusy(true); setError(null); setResult(null); setUsers([]); setScan(null)
     try {
-      const { scan_id } = await api.fanCommentScanStart(input.trim(), withSub)
+      const { scan_id } = await api.fanCommentScanStart(input.trim(), withSub, depth)
       setScan({ scan_id, input: input.trim(), state: 'queued', phase: '', page: 0, pages: 0,
                 fetched: 0, expected: 0, partial: false, error: '', target_kind: '',
                 target_id: '', title: '', up_name: '', cover: '', elapsed: 0, users_count: 0 })
@@ -120,6 +122,13 @@ export default function CommentComparePane({ vtuber, window, since, until }: Pro
           <input type="checkbox" checked={withSub} onChange={(e) => setWithSub(e.target.checked)} />
           含楼中楼
         </label>
+        <select className="wb-select" value={depth} data-testid="comment-depth"
+                onChange={(e) => setDepth(Number(e.target.value))}
+                title="抓取深度：越深越慢，也越容易触发上游风控">
+          <option value={3}>快速（60 条）</option>
+          <option value={150}>标准（3000 条）</option>
+          <option value={500}>深度（1 万条）</option>
+        </select>
         {busy ? (
           <button type="button" className="wb-btn wb-btn-ghost" onClick={() => void cancel()} data-testid="comment-cancel">
             <Square className="size-4" /> 取消

@@ -2415,3 +2415,16 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 
 /* 图标统一尺寸：不写死的话 lucide 会按 24×24 撑开，把文字顶下去 */
 .wb-btn > svg { width: 14px; height: 14px; flex: 0 0 auto; }
+
+/* 抓取深度下拉（对比页 · 帖子评论） */
+.wb-select {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--c-border, #e6e8ec);
+  background: #fff;
+  font-size: 12.5px;
+  color: var(--c-text-main, #26323d);
+  cursor: pointer;
+}
+.wb-select:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }

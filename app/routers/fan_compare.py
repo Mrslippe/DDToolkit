@@ -119,12 +119,23 @@ def build_router(*, deps: dict[str, Any]) -> APIRouter:
     @router.post("/fan/compare/scan")
     def start_scan(payload: ScanIn, _: None = Depends(deps["require_module"])) -> dict[str, Any]:
         """发起一次评论抓取（后台任务，立即返回 scan_id）。"""
-        try:
-            from app.services import bili_replies as br
+        from app.services import bili_replies as br
 
-            br.parse_target(payload.input)  # 先做一次本地校验，输入错就别起任务
+        try:
+            kind, value = br.parse_target(payload.input)  # 本地校验，输入错就别起任务
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+        # 风控冷却中：直接拒绝，并把剩余时间告诉前端（不硬碰）
+        left = br.cooldown_remaining()
+        if left:
+            raise HTTPException(429, f"上游风控冷却中，请 {max(1, left // 60)} 分钟后再试")
+
+        # 同一帖子 30 分钟内抓过 → 复用快照，不再打网络（重复深分页最易触发风控）
+        snap = br.find_recent_by_input(resolve_data_dir(), payload.input)
+        if snap:
+            return {"scan_id": snap["scan_id"], "state": "done", "reused": True}
+
         return _start(payload)
 
     @router.get("/fan/compare/scan/{scan_id}")

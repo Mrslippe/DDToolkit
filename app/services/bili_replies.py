@@ -19,6 +19,7 @@ import re
 import time
 import uuid
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -95,6 +96,44 @@ class ScanState:
         if with_users:
             out["users"] = self.users
         return out
+
+
+# ── 风控防护（2026-10-28）─────────────────────────────────────────────
+#: 全局最小间隔：跨任务共享，保证同一时刻只有一条"评论流"在跑（≈1 req/1.2s）
+GLOBAL_GAP_S = 1.2
+#: 风控冷却：收到 -352/-412 后，所有评论抓取暂停这么久
+COOLDOWN_S = 15 * 60
+#: 同帖快照复用窗口：30 分钟内重复请求直接返回旧快照（**不打网络**）
+REUSE_S = 30 * 60
+
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+_cooldown_until = 0.0
+
+
+class RiskControl(RuntimeError):
+    """上游风控（-352/-412）。调用方应停止本轮并等待冷却。"""
+
+
+def cooldown_remaining() -> int:
+    """还剩多少秒冷却（0 = 不在冷却）。"""
+    return max(0, int(_cooldown_until - time.time()))
+
+
+def _enter_cooldown() -> None:
+    global _cooldown_until
+    _cooldown_until = time.time() + COOLDOWN_S
+    logger.warning("触发上游风控：评论抓取冷却 %d 分钟", COOLDOWN_S // 60)
+
+
+async def _throttle() -> None:
+    """全局节流：保证相邻两次评论请求至少间隔 `GLOBAL_GAP_S`（跨任务）。"""
+    global _last_request_at
+    with _throttle_lock:
+        wait = max(0.0, _last_request_at + GLOBAL_GAP_S - time.time())
+        _last_request_at = time.time() + wait
+    if wait > 0:
+        await asyncio.sleep(wait)
 
 
 def parse_target(text: str) -> tuple[str, str]:
@@ -177,6 +216,9 @@ async def _get(
     cookie: str = "",
 ) -> dict | None:
     """一次 GET（可选 WBI 签名）。失败返回 None，由调用方决定怎么报错。"""
+    if cooldown_remaining():
+        raise RiskControl(f"风控冷却中，还需 {cooldown_remaining() // 60} 分钟")
+    await _throttle()
     try:
         p = await wbi.sign_params(dict(params or {})) if sign else dict(params or {})
         headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
@@ -194,7 +236,10 @@ async def _get(
             return None
         code = data.get("code")
         if code not in (0, None):
-            hint = "（风控：需要 buvid cookie 或登录态）" if code in (-352, -412) else ""
+            if code in (-352, -412):
+                _enter_cooldown()
+                raise RiskControl(f"上游风控（code={code}），已冷却 {COOLDOWN_S // 60} 分钟")
+            hint = ""
             logger.warning("bili %s → code=%s message=%s%s", url.rsplit("/", 1)[-1], code,
                            str(data.get("message"))[:80], hint)
         return data
@@ -381,6 +426,61 @@ def _scan_dir(root: Path) -> Path:
     return d
 
 
+def _index_path(root: Path) -> Path:
+    return _scan_dir(root) / "index.json"
+
+
+def find_recent(root: Path, kind: str, oid: str, *, max_age_s: int = REUSE_S) -> dict[str, Any] | None:
+    """同一 `(kind, oid)` 在 `max_age_s` 内抓过就复用快照（避免重复深分页 → 风控）。"""
+    try:
+        idx = json.loads(_index_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    item = (idx.get(f"{kind}:{oid}") or {})
+    saved_at = float(item.get("saved_at") or 0)
+    if not saved_at or time.time() - saved_at > max_age_s:
+        return None
+    snap = load(str(item.get("scan_id") or ""), root)
+    if not snap or snap.get("state") != "done":
+        return None
+    logger.info("复用 30 分钟内的同帖快照：%s:%s → %s", kind, oid, snap.get("scan_id"))
+    return snap
+
+
+def find_recent_by_input(root: Path, text: str, *, max_age_s: int = REUSE_S) -> dict[str, Any] | None:
+    """按"用户输入原文"复用快照（同帖 30 分钟内不重复打网络）。"""
+    try:
+        idx = json.loads(_index_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    item = (idx.get(f"input:{(text or '').strip()}") or {})
+    saved_at = float(item.get("saved_at") or 0)
+    if not saved_at or time.time() - saved_at > max_age_s:
+        return None
+    snap = load(str(item.get("scan_id") or ""), root)
+    if not snap or snap.get("state") != "done":
+        return None
+    logger.info("复用 30 分钟内的同帖快照（按输入）：%r → %s", text, snap.get("scan_id"))
+    return snap
+
+
+def _remember(root: Path, state: ScanState) -> None:
+    if state.state != "done" or not state.target_id:
+        return
+    path = _index_path(root)
+    try:
+        idx = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        idx = {}
+    stamp = {"scan_id": state.scan_id, "saved_at": time.time()}
+    idx[f"{state.target_kind}:{state.target_id}"] = stamp
+    # 同时按"用户输入的原文"记一份：这样**再点一次同样的链接**也能直接复用，
+    # 不用先解析一次 oid（解析本身也是一次请求，会加重风控）。
+    if state.input:
+        idx[f"input:{state.input.strip()}"] = stamp
+    path.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+
+
 def save(state: ScanState, root: Path) -> Path:
     path = _scan_dir(root) / f"{state.scan_id}.json"
     tmp = path.with_name(path.name + ".tmp")
@@ -388,6 +488,7 @@ def save(state: ScanState, root: Path) -> Path:
     payload["saved_at"] = time.time()
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+    _remember(root, state)
     return path
 
 
