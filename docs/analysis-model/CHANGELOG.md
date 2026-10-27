@@ -16,7 +16,7 @@ verified:    2026-10-27
 | `docs/plans/fan-model-plan.md` | 6.6 KB / 119 行 | `README.md`、`01-data.md`、`02-model.md`、`04-validation.md`、`05-pipeline-ops.md` | 口径定案（真源/弃用规则/时间/场次/单位/窗口）、数据链路、质量闸三层、参数表、验证结论、待办与不做的事 |
 | `docs/analysis/mingqian-fan-structure.md` | 14 KB / 241 行 | `02-model.md` §7、`03-tags-spam.md` §1.4、`04-validation.md` §1/§3/§4 | 单主播实跑快照：数据层数字、三轴分布、类型、效标、信度、标签、跨 V、L6 时间动态、六条限制 |
 
-数据快照 `docs/analysis/mingqian-top500.csv` **未删**（它是数据产物，不是文档）；因此
+数据快照 `（已删除：旧快照 CSV，2026-10-27 清理）` **未删**（它是数据产物，不是文档）；因此
 `docs/analysis/` 目录保留。旧快照里的具体排名/人数已被 2026-10-27 重采数据取代，
 本目录只保留带日期的结构性数字，并指向新的 L2 黄金值。
 
@@ -51,9 +51,9 @@ verified:    2026-10-27
 
 ## 5. 未动的遗留（供后续确认）
 
-- `docs/analysis/mingqian-top500.csv`：数据快照，不是文档；保留在 `docs/analysis/`，
+- `（已删除：旧快照 CSV，2026-10-27 清理）`：数据快照，不是文档；保留在 `docs/analysis/`，
   因此该目录未删。
-- `docs/plans/fan-model-flow.png`：模型流程图，不是文档；没有被任何文档引用，保留在 `plans/`。
+- `（已删除：无引用的流程图，2026-10-27 清理）`：模型流程图，不是文档；没有被任何文档引用，保留在 `plans/`。
 - 代码/测试 docstring 里仍有旧路径（`app/routers/fan.py`、`app/services/fan/*.py`、
   `tests/test_fan_*.py` 等共约 11 处）。按本次「只改文档」的约定**未改代码**；
   下次改对应模块时顺手改，或另做一批纯注释修改。

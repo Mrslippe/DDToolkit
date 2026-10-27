@@ -1,6 +1,6 @@
 [project]
 name = "ddtoolkit"
-version = "1.0.2"
+version = "1.4.0"
 description = "DDToolkit 后端（FastAPI + SQLAlchemy + SQLite）—— 唯一真源是 uv.lock"
 # ⚠️ Python 3.14：本机实测 3.14.1 上全部运行依赖都有预编译轮子。
 requires-python = ">=3.12"
