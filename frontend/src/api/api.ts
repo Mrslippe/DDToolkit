@@ -1096,6 +1096,27 @@ export const api = {
     request<{ ok: boolean }>(
       `/fan/collect/cancel?vtuber=${encodeURIComponent(name)}`, { method: 'POST' }),
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
+  /** 导出名单 CSV（2026-10-28）。走后端保证与页面同口径；因为要带 token 头，走 fetch → Blob。 */
+  fanRankedCsv: async (name: string, by: FanSortBy,
+    opts?: { since?: string; until?: string; window?: number; ids?: string[]; tags?: string[] },
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const q = new URLSearchParams({ by })
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    if (opts?.window) q.set('window', String(opts.window))
+    if (opts?.ids?.length) q.set('ids', opts.ids.join(','))
+    if (opts?.tags?.length) q.set('tags', opts.tags.join(','))
+    const url = `${apiBase}/fan/${encodeURIComponent(name)}/ranked.csv?${q}`
+    const headers = new Headers()
+    if (apiToken) headers.set(TOKEN_HEADER, apiToken)
+    headers.set(HOST_HEADER, myHost())
+    const res = await fetch(url, { headers })
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`)
+    const cd = res.headers.get('content-disposition') ?? ''
+    const m = /filename\*=UTF-8''([^;]+)/.exec(cd)
+    return { blob: await res.blob(), filename: m ? decodeURIComponent(m[1]) : `${name}.csv` }
+  },
+
   fanRanked: (name: string, by: FanSortBy,
               opts?: { since?: string; until?: string; window?: number; limit?: number;
                        offset?: number; ids?: string[]; tags?: string[] }) => {

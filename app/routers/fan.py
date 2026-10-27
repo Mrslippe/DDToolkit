@@ -39,6 +39,8 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from urllib.parse import quote
+
 from fastapi.responses import Response
 
 from pydantic import BaseModel, Field
@@ -677,6 +679,44 @@ async def fan_avatar(uid: str) -> Response:
         media_type=media,
         headers={"Cache-Control": "public, max-age=2592000, immutable"},
     )
+
+
+#: CSV 列顺序（**固定**，便于用户做二次分析；新增列只能追加在末尾）
+CSV_COLUMNS = ("排名", "uid", "昵称", "强度", "出勤分位", "互动分位", "付费分位",
+               "出勤场次", "出席率", "弹幕数", "去重弹幕", "付费金额",
+               "舰长", "SC", "礼物", "类型", "标签")
+
+_BY_LABEL = {"strength": "综合", "attendance": "出席", "interaction": "互动",
+             "payment": "付费", "retention": "留存", "income": "收入"}
+
+
+def _csv_cell(v: Any) -> str:
+    """CSV 单元格：统一成字符串并转义（含逗号/引号/换行都包引号）。"""
+    if v is None:
+        return ""
+    text = str(v)
+    if any(ch in text for ch in (",", '"', "\n", "\r")):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def ranked_csv_bytes(items: list[dict[str, Any]]) -> bytes:
+    """名单 → CSV 字节（**带 UTF-8 BOM**，Excel 双击不乱码；CRLF 换行）。
+
+    单独抽成纯函数：不给数据也能测列序与转义，CI 里不必有数据集。
+    """
+    lines = [",".join(CSV_COLUMNS)]
+    for r in items:
+        pct = r.get("axis_percentiles") or {}
+        lines.append(",".join(_csv_cell(x) for x in (
+            r.get("rank"), r.get("uid"), r.get("name") or "", r.get("strength"),
+            pct.get("attendance"), pct.get("interaction"), pct.get("payment"),
+            r.get("att_sessions"), r.get("att_rate"),
+            r.get("msg_total"), r.get("msg_unique"), r.get("pay_total"),
+            r.get("guard_amt"), r.get("sc_amt"), r.get("gift_amt"),
+            r.get("type"), ";".join(r.get("tags") or ()),
+        )))
+    return ("\ufeff" + "\r\n".join(lines) + "\r\n").encode("utf-8")
 
 
 @router.get("/fan/{vtuber}/ranked")
@@ -1529,6 +1569,35 @@ def timeline(
 
 
 # ── 跨 V ────────────────────────────────────────────────────────────────────
+@router.get("/fan/{vtuber}/ranked.csv")
+def ranked_csv(
+    vtuber: str,
+    by: str = Query(..., description="排序口径（与 /ranked 一致）"),
+    window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    ids: str | None = Query(None, description="窗口的场次清单（逗号分隔）"),
+    tags: str | None = Query(None, description="标签过滤（逗号分隔，与语义）"),
+    _: None = Depends(require_module),
+) -> Response:
+    """导出当前口径的**完整名单**为 CSV（2026-10-28）。
+
+    为什么在后端出而不是前端拼：口径、排序、标签过滤、`ids` 窗口都要与页面**完全一致**，
+    前端只有分页加载的那 20 行；后端能一次给全量（上限 `MAX_LIMIT`）。
+    """
+    payload = ranked(vtuber=vtuber, by=by, window=window, since=since, until=until,
+                     limit=MAX_LIMIT, offset=0, ids=ids, tags=tags, _=None)
+    items = list(payload.get("items") or ())
+    body = ranked_csv_bytes(items)
+    label = _BY_LABEL.get(by, by)
+    day = datetime.now(CN_TZ).strftime("%Y%m%d")
+    name = f"{payload.get('short') or vtuber}-{day}-{label}.csv"
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+    )
+
+
 @router.get("/fan/cross")
 def cross(
     vtubers: str = Query(..., description="逗号分隔的两个主播（显示名或简称）"),

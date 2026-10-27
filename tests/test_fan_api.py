@@ -288,3 +288,29 @@ def test_turning_module_off_hides_data_again(client: TestClient) -> None:
     assert client.get("/fan/弥月/ranked", params={"by": "strength", "window": 12}).status_code == 200
     client.put("/settings/prefs", json={"values": {"fan_workbench": "off"}})
     assert client.get("/fan/弥月/ranked", params={"by": "strength", "window": 12}).status_code == 404
+
+
+def test_ranked_csv_shape_and_escaping() -> None:
+    """CSV 导出：列序固定、带 BOM、含逗号/引号的昵称要正确转义（2026-10-28）。"""
+    from app.routers.fan import CSV_COLUMNS, ranked_csv_bytes
+
+    items = [
+        {"rank": 1, "uid": "42", "name": '阿,"猫"', "strength": 0.987654,
+         "axis_percentiles": {"attendance": 1.0, "interaction": 0.5, "payment": 0.25},
+         "att_sessions": 9, "att_rate": 1.0, "msg_total": 100, "msg_unique": 80,
+         "pay_total": 12.5, "guard_amt": 10.0, "sc_amt": 2.5, "gift_amt": 0.0,
+         "type": "综合", "tags": ["老头", "全勤"]},
+        {"rank": 2, "uid": "7", "name": "", "strength": 0.5,
+         "axis_percentiles": {}, "att_sessions": 1, "att_rate": 0.1,
+         "msg_total": 3, "msg_unique": 3, "pay_total": 0,
+         "type": "出勤", "tags": []},
+    ]
+    raw = ranked_csv_bytes(items)
+    assert raw[:3] == b"\xef\xbb\xbf", "必须带 UTF-8 BOM，Excel 才不乱码"
+    text = raw.decode("utf-8-sig")
+    lines = text.splitlines()
+    assert lines[0] == ",".join(CSV_COLUMNS)
+    assert len(lines) == 3
+    assert '"阿,""猫"""' in lines[1], "含逗号与引号的昵称要包引号并把引号翻倍"
+    assert lines[1].endswith("综合,老头;全勤")
+    assert lines[2].startswith("2,7,")

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { ChevronUp } from 'lucide-react'
 import { api } from '../api/api'
 import type {
-  FanActivity, FanCollectProgress, FanRanked, FanRankedRow, FanSessionPreview, FanVtuber,
+  FanActivity, FanCollectProgress, FanRanked, FanRankedRow, FanSessionPreview, FanSortBy, FanVtuber,
 } from '../api/types'
 import FloatPill from '../components/common/FloatPill'
 import {
@@ -616,6 +616,7 @@ export default function WorkbenchPage() {
                 )}
                 <RankedTable
                   vtuber={picked}
+                  by={ranked.by as FanSortBy}
                   since={since}
                   until={until}
                   ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)}

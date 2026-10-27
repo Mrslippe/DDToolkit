@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { resolveAsset } from '../../api/api'
-import type { FanRankedRow } from '../../api/types'
+import { api, resolveAsset } from '../../api/api'
+import type { FanRankedRow, FanSortBy } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
+import { Download } from 'lucide-react'
 import MemberSearch from './MemberSearch'
 import TagFilter from './TagFilter'
 import TagPills from './TagPills'
@@ -17,6 +18,8 @@ interface Props {
   onLoadMore: () => void
   /** 当前页签：决定「细节」列展示哪个轴的分量 */
   tab?: ResultTab
+  /** 导出 CSV 用的排序口径（与页面当前页签一致） */
+  by?: FanSortBy
   /** 搜索与详情需要的上下文 */
   vtuber: string
   since: string
@@ -136,10 +139,29 @@ function payMixBar(r: FanRankedRow) {
  *   细节列只在出席/互动/付费页出现，总览页直接看计算值。
  */
 export default function RankedTable({
-  rows, total, hasMore, loading, onLoadMore, tab = 'overview',
+  rows, total, hasMore, loading, onLoadMore, tab = 'overview', by,
   vtuber, since, until, ids, onOpenMember,
   tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta, lagRef,
 }: Props) {
+  /** 导出 CSV：走后端拿全量，与页面口径一致（2026-10-28） */
+  const [exporting, setExporting] = useState(false)
+  const [exportErr, setExportErr] = useState<string | null>(null)
+  const onExport = async () => {
+    if (!by || exporting) return
+    setExporting(true); setExportErr(null)
+    try {
+      const { blob, filename } = await api.fanRankedCsv(vtuber, by, { since, until, ids, tags: tagFilter })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setExportErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExporting(false)
+    }
+  }
   const sentinel = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -171,8 +193,21 @@ export default function RankedTable({
                         onPick={onOpenMember} />
           <TagFilter tags={tagOptions} loading={tagLoading} error={tagError}
                      value={tagFilter} onChange={onTagFilter} />
+          <button type="button" className="wb-btn wb-btn-ghost" data-testid="export-csv"
+                  disabled={exporting}
+                  title="导出当前口径的完整名单（CSV，Excel 可直接打开）"
+                  onClick={onExport}>
+            <Download className="size-4" />
+            {exporting ? '导出中…' : '导出 CSV'}
+          </button>
         </div>
       </div>
+
+      {exportErr && (
+        <p className="wb-hint" role="alert" data-testid="export-error">
+          导出失败：{exportErr}
+        </p>
+      )}
 
       {rows.length === 0 && !loading ? (
         <p className="wb-hint">这一页没有数据。</p>
