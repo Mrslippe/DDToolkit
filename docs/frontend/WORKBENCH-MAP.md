@@ -2,7 +2,7 @@
 doc: frontend/workbench-map
 class: index
 scope: 「数据分析工作台」这一屏的**功能 → 落点**查询表：界面元素 ↦ 数据来源 ↦ 具体文件:函数；含后端端点表、三条不变量、常见改动的落点清单与定位手法
-not-scope: 组件与 CSS 类名索引与页面视觉规范 → frontend/UI-MAP.md B6；模型的数学推导与验证结论 → plans/fan-model-plan.md
+not-scope: 组件与 CSS 类名索引与页面视觉规范 → frontend/UI-MAP.md B6；模型的数学推导与验证结论 → analysis-model/README.md
 sot: frontend/src/pages/WorkbenchPage.tsx, frontend/src/components/workbench/, app/routers/fan.py, app/services/fan/
 verify: grep 本表任意一行给出路径，落点必须存在；`python scripts/doc_check.py`
 retire-when: 工作台拆成多页，或本表能被脚本按 import 图自动生成
@@ -42,7 +42,7 @@ budget: 400
 | `POST /fan/{v}/collect` | `fan.py: start_collect` → `collector.collect` | 给了 `sessions` 就**按清单采**，否则退回日期枚举 |
 | `GET /fan/collect/status` | `fan.py: collect_status` | 直接返回 `CollectProgress.as_dict()` |
 | `GET /fan/{v}/ranked` | `fan.py: fan_ranked` | `by` **必填**，后端没有默认 |
-| `GET /fan/{v}/activity` | `fan.py: fan_activity` | 只数**代表行**；`recent` 上限 `ACTIVITY_LIMIT = 150` |
+| `GET /fan/{v}/activity` | `fan.py: fan_activity` | 只数**代表行**；`recent` 上限 `ACTIVITY_LIMIT = 2000` |
 | `GET /fan/{v}/profile` | `fan.py: fan_profile` | 同上，`total_sessions` 只数代表行 |
 | `POST /fan/{v}/purge` | `fan.py: fan_purge` | `dry_run` **默认 true**；只 unlink 文件，不 rmtree |
 
@@ -61,7 +61,7 @@ budget: 400
 | 热力图配色 / 图例 | `Heatmap.tsx` 的 `cls` 与 `.wb-hm-*`（`workbench.css`） |
 | 滑杆档位（25/50/75） | `WindowSlider.tsx` 的档位常量 |
 | 采集并发 / 下限 | `collector.py`：`COLLECT_CONCURRENCY`、`MIN_RECORDS` |
-| 窗口大小上限 | `WorkbenchPage` 的窗口参数 + `WindowSlider` 的 150 上限 |
+| 窗口大小上限 | 后端 `MAX_WINDOW = 5000`（2026-10-25 取消 150 硬上限）；滑杆档位仍是 25/50/75/150 |
 | 名单条数 | `WorkbenchPage` 的 `LIMIT`（当前 300） |
 | 分层阈值 | `ResultCharts` 的 0.2 / 0.5（与 `cross_v.assign_tiers` 同阈值） |
 

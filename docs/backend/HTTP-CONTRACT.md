@@ -319,10 +319,10 @@ retire-when: HTTP 层换框架，或路由整体重排
 ---
 
 
-### 3.7 `app/routers/fan.py` — 粉丝结构分析（5 条，2026-10-17 新增）
+### 3.7 `app/routers/fan.py` — 粉丝结构分析（一组端点，2026-10-17 新增）
 
-> 只读，全部从 `datasets/fan-structure/` 的 JSON 事实表现算，**不写库、不联网**。
-> 模型定义见 `docs/plans/fan-model-plan.md`；施工阶段见 `docs/plans/fan-model-plan.md`。
+> 分析端点只读，从 `datasets/fan-structure/` 的 JSON 事实表现算，**不写库**；采集端点只写数据根并访问上游。
+> 模型定义见 `docs/analysis-model/README.md`；数据层与采集链路见 `docs/analysis-model/01-data.md`、`docs/analysis-model/05-pipeline-ops.md`。
 
 | 方法 + 路径 | 说明 |
 |---|---|
@@ -332,7 +332,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/fan/collect/status?vtuber=` | 采集进度（`state` / `done` / `total` / `failed` / `elapsed`）。不传主播则返回全部 |
 | POST `/fan/collect/cancel?vtuber=` | 取消采集。**已写盘的场次保留**（重采要几分钟，删了不划算） |
 | GET `/fan/{vtuber}/ranked?by=` | 名单。**`by` 必填**（`strength` / `retention` / `income`），缺了 **400** 不是 422；未知主播 404 |
-| GET `/fan/{vtuber}/tags` | 13 条展示标签的说明与本窗口占比。**标签不进排序** |
+| GET `/fan/{vtuber}/tags` | 10 条展示标签的说明与本窗口占比。**标签不进排序** |
 | GET `/fan/{vtuber}/health` | 完整性判据 C1–C4 的汇总。无外部源时全部 `unverified`，但**没有一场被弃** |
 | GET `/fan/cross?vtubers=a,b` | 两 V 名单重叠 + **超几何零模型**。**只比层级、不比分数** |
 | GET `/fan/{vtuber}/timeline` | **L6 时间动态**：滑动窗（默认 25 场 / 步长 10）→ 层级序列 → 迁移矩阵 + 换血率 + 生存曲线/半衰期。矩阵含**第 4 态「未观测」**；配**独立假设零模型**（看 lift，不看对角线）；半衰期附 `r2` 与 `plateau`（指数不成立时半衰期不可信）。**单次 10~30 秒** |

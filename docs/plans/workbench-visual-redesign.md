@@ -2,7 +2,7 @@
 doc:         plans/workbench-visual-redesign
 class:       plan
 scope:       数据分析工作台的界面重构 —— 用户 2026-10-18 给的粗糙模板：工作台**不共用帖子浏览的左栏**，改为「档案卡 + 贡献热力图 + 区间滑杆 + 结果区」的独立界面。含元素分解、字段可得性核对、已拍板决策、档案卡的字段排序与停止线、分期与验收
-not-scope:   分析模型的数学与验证 → plans/fan-model-plan.md；采集链路的工程口径 → plans/fan-model-plan.md；壳层与工具栏的既有契约 → frontend/UI-MAP.md §A
+not-scope:   分析模型的数学与验证 → analysis-model/04-validation.md；采集链路的工程口径 → analysis-model/05-pipeline-ops.md；壳层与工具栏的既有契约 → frontend/UI-MAP.md §A
 expires:     界面重构落地并并入 frontend/UI-MAP.md 后删除
 budget:      400
 ---

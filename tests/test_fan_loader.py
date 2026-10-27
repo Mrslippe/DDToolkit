@@ -1,6 +1,6 @@
 """`app/services/fan/loader.py` 的用例。
 
-覆盖 P0 的三条验收判据（见 `docs/plans/fan-model-plan.md` §2 P0）：
+覆盖 P0 的三条验收判据（见 `docs/analysis-model/README.md` §2 P0）：
 
 - **P0-1 与探针一致**：三个 V 的窗口聚合结果与探针产物逐项相等（差异 0）。
 - **P0-2 结构化错误**：缺 stats 目录 / 坏 JSON / 缺 raw 文件 三种输入不抛未捕获异常。

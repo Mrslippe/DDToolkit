@@ -2,7 +2,7 @@
 
 对外只暴露**数据读取**与**计算**能力。本包**不写任何文件**。
 
-模块边界（对应 `docs/plans/fan-model-plan.md` 的阶段）：
+模块边界（对应 `docs/analysis-model/README.md` 的阶段）：
 
 | 模块 | 阶段 | 职责 |
 |---|---|---|

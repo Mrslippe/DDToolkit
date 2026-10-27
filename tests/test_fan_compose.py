@@ -41,7 +41,7 @@ from app.services.fan.compose import (
 #   1. 数据回填：`stats` 的场次跨度此前混用本地时间，227 场中 76 场偏 +8h，
 #      按天筛选与"最近 75 场"的取法因此改变；
 #   2. 模型改动：出勤轴由「出席率」改为「出席场次 + 档内首次出场时机」的字典序
-#      —— 见 `axes.build_axis_table` 与 docs/analysis/analysis-model.md §2.1′。
+#      —— 见 `axes.build_axis_table` 与 docs/analysis-model/README.md §2.1′。
 GOLDEN = {
     #            入选池   类型分布                                        强度前 3（uid, S）
     # 2026-10-27 全量重采后重录：此前数据里混有约 17 场严重污染（弹幕量偏高、时滞基准错）+
