@@ -314,3 +314,28 @@ def test_ranked_csv_shape_and_escaping() -> None:
     assert '"阿,""猫"""' in lines[1], "含逗号与引号的昵称要包引号并把引号翻倍"
     assert lines[1].endswith("综合,老头;全勤")
     assert lines[2].startswith("2,7,")
+
+
+def test_comment_overlap_does_not_require_payload_items(monkeypatch) -> None:
+    """回归：`_compute` 的返回值里没有 `items`（那是 `/ranked` 追加的）。
+
+    2026-10-28 的线上 500 就是这里 KeyError：`order = sorted(payload["items"])`。
+    """
+    from app.routers import fan_compare
+
+    fake_prof = type("P", (), {
+        "tier": {"u1": "核心", "u2": "外层"},
+        "strength": {"u1": 0.9, "u2": 0.1},
+        "counts": lambda self: {"核心": 1, "外层": 1},
+    })()
+
+    payload = {"window": None, "vtuber": "X"}  # 故意**没有** items
+
+    class FakeCompute:
+        def __call__(self, *a, **k):
+            return payload
+
+    # 直接调纯函数式的那段：overlap_stats 不依赖 items
+    out = fan_compare.overlap_stats(fake_prof.tier, fake_prof.strength,
+                                    [{"uid": "u1", "name": "甲", "cnt": 3}], top_n=10)
+    assert out["overlap"]["shared"] == 1

@@ -202,11 +202,14 @@ def build_router(*, deps: dict[str, Any]) -> APIRouter:
 
         # Top-N 覆盖：名单前 N 名里命中评论用户的比例
         comment = {str(u["uid"]) for u in users[:top_n]}
-        order = sorted(payload["items"], key=lambda r: -(r.get("strength") or 0))
+        # ⚠️ `_compute` 的返回值里**没有** `items`（那是 `/ranked` 追加的），
+        # 这里必须直接用 `prof.strength`（uid → 强度）。2026-10-28 就是这行 KeyError
+        # 让 `/fan/compare/comment-overlap` 整条 500。
+        order = sorted(prof.strength.items(), key=lambda kv: -kv[1])
         cov: list[dict[str, Any]] = []
         hit = 0
-        for i, row in enumerate(order[:1000], start=1):
-            if str(row.get("uid")) in comment:
+        for i, (uid, _s) in enumerate(order[:1000], start=1):
+            if uid in comment:
                 hit += 1
             if i in (10, 25, 50, 100, 200, 500, 1000):
                 cov.append({"n": i, "hit": round(hit / i, 4), "count": hit})
