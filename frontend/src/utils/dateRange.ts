@@ -22,7 +22,9 @@ export const EMPTY_RANGE: DateRange = { from: '', to: '' }
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
 /** Date → 本地 `YYYY-MM-DD` */
-import { cnToday } from './cndate'
+// 带 `.ts` 后缀：`scripts/check_date_range.mjs` 用 Node 的类型擦除直接跑这个文件，
+// Node ESM **不做**扩展名补全（Vite/tsc 都能吃带后缀的写法，tsconfig 已开 allowImportingTsExtensions）。
+import { cnToday } from './cndate.ts'
 
 export function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
