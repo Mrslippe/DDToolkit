@@ -1799,6 +1799,9 @@ export interface FanCompareMulti {
   matrix: ({ pair: number; jaccard: number; lift: number; shared: number } | null)[][]
   pairs: FanComparePair[]
   notes: string[]
+  /** 还没采/没数据的主播（逐 V 标注，不拖垮整次请求） */
+  missing?: { name: string; reason: string }[]
+  needs_analysis?: string[]
 }
 
 

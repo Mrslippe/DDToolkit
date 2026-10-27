@@ -2361,3 +2361,21 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-cov-v { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-sub); }
 
 .wb-comment-shared { display: flex; flex-direction: column; gap: 8px; }
+
+/* 对比页：缺分析提示 + Venn（2026-10-28） */
+.wb-missing {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 10px;
+  background: rgba(232, 176, 75, .12); color: #8a5a00; font-size: 12.5px;
+}
+.wb-chip-warn { background: rgba(232, 176, 75, .22); color: #7a4d00; }
+.wb-chip-warn button {
+  border: 0; background: transparent; cursor: pointer; text-decoration: underline;
+  font-size: 12px; color: inherit; padding: 0 0 0 2px;
+}
+
+.wb-venn { width: 100%; max-width: 360px; height: auto; }
+.wb-venn-a { fill: rgba(201, 64, 111, .22); stroke: rgba(201, 64, 111, .55); stroke-width: 1; }
+.wb-venn-b { fill: rgba(47, 158, 158, .20); stroke: rgba(47, 158, 158, .55); stroke-width: 1; }
+.wb-venn-t { font-size: 11px; fill: var(--c-text-sub); }
+.wb-venn-inter { font-size: 16px; font-weight: 600; fill: var(--c-primary-deep); }

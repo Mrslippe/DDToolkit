@@ -24,6 +24,7 @@ retire-when: 分析模型换范式（不再用三轴 + 分位 + ACV 池），或
 | `03-tags-spam.md` | 10 条展示标签、独轮车三档、`stats.bp` 行为画像、`msh` simhash | 改标签/刷屏判据/审计脚本 |
 | `04-validation.md` | 信度、效度、误差来源、已知实现问题、局限、三层测试策略、相邻模块 | 质疑结论能不能用 / 改完模型怎么验 |
 | `05-pipeline-ops.md` | 采集链路、gzip、分页与重试、并发、进度字段、补采、落盘校验、重采运维 | 改 collector / 采集失败排障 |
+| `06-compare.md` | 对比分析：多主播重叠、帖子评论名单重叠、Jaccard/lift/超几何/BH、判读纪律 | 改对比页 / 加新的对比对象 |
 | `CHANGELOG.md` | 本次整合从哪几份文档来、删了什么、引用改到哪 | 追溯文档历史 |
 
 ## 2. 一页速查（现行口径）
@@ -81,6 +82,7 @@ retire-when: 分析模型换范式（不再用三轴 + 分位 + ACV 池），或
 | 改标签或独轮车判据 | `03-tags-spam.md`；独轮车判据变了要升 `SPAM_ALGO_VERSION` |
 | 判断结论能不能用 / 怎么验 | `04-validation.md` |
 | 采集失败 / 缺页 / 进度卡住 | `05-pipeline-ops.md` |
+| 要对比两个 V / 对比某帖评论者 | `06-compare.md` |
 | 接口返回哪些字段 | `backend/HTTP-CONTRACT.md` §3.7 + `app/routers/fan.py` |
 | 界面元素落在哪个组件 | `frontend/WORKBENCH-MAP.md` |
 | 通用表结构 / 迁移 | `backend/DATA-MODEL.md`（本文不重复） |

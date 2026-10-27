@@ -21,11 +21,32 @@ interface Props {
   window: number
   since: string
   until: string
+  /** 缺数据的 V → 让页面去「采集并分析」（用户确认后才会真的采） */
+  onRequestAnalysis?: (name: string) => void
 }
 
 type Mode = 'multi' | 'comment'
 
-export default function ComparePanel({ current, options, window, since, until }: Props) {
+/** 两集合 Venn：半径按人数开方缩放，交集数字居中（纯 SVG，无依赖） */
+function Venn({ a, b, inter, sizeA, sizeB }: { a: string; b: string; inter: number; sizeA: number; sizeB: number }) {
+  const rA = 46 + 26 * Math.sqrt(sizeA / Math.max(sizeA, sizeB, 1))
+  const rB = 46 + 26 * Math.sqrt(sizeB / Math.max(sizeA, sizeB, 1))
+  const w = 360, h = 200, cy = 100
+  const dx = Math.min(78, (rA + rB) / 3.2)
+  const cxA = w / 2 - dx, cxB = w / 2 + dx
+  return (
+    <svg className="wb-venn" viewBox={`0 0 ${w} ${h}`} role="img"
+         aria-label={`${a} 与 ${b} 的名单重叠：共享 ${inter} 人`} data-testid="compare-venn">
+      <circle cx={cxA} cy={cy} r={rA} className="wb-venn-a" />
+      <circle cx={cxB} cy={cy} r={rB} className="wb-venn-b" />
+      <text x={cxA - 26} y={cy + 4} className="wb-venn-t">{a}</text>
+      <text x={cxB + 26} y={cy + 4} className="wb-venn-t" textAnchor="end">{b}</text>
+      <text x={w / 2} y={cy + 5} className="wb-venn-inter" textAnchor="middle">{inter}</text>
+    </svg>
+  )
+}
+
+export default function ComparePanel({ current, options, window, since, until, onRequestAnalysis }: Props) {
   const [mode, setMode] = useState<Mode>('multi')
   const [picked, setPicked] = useState<string[]>([current])
   const [data, setData] = useState<FanCompareMulti | null>(null)
@@ -102,6 +123,19 @@ export default function ComparePanel({ current, options, window, since, until }:
             ))}
           </div>
 
+          {(data?.needs_analysis?.length ?? 0) > 0 && (
+            <div className="wb-missing" role="alert" data-testid="compare-missing">
+              <b>这些主播还没有分析结果：</b>
+              {data!.needs_analysis!.map((n) => (
+                <span key={n} className="wb-chip wb-chip-warn">
+                  {n}
+                  {onRequestAnalysis && (
+                    <button type="button" onClick={() => onRequestAnalysis(n)}>采集并分析</button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
           {error && <p className="wb-hint" role="alert" data-testid="compare-error">加载失败：{error}</p>}
           {loading && <p className="wb-hint">正在计算两两重叠…</p>}
 
@@ -135,6 +169,11 @@ export default function ComparePanel({ current, options, window, since, until }:
                   ))}
                 </tbody>
               </table>
+
+              {pair && (
+                <Venn a={pair.a} b={pair.b} inter={pair.intersection}
+                      sizeA={pair.size_a} sizeB={pair.size_b} />
+              )}
 
               {pair && (
                 <div className="wb-pair" data-testid="compare-pair">

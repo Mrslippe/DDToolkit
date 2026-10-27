@@ -1622,9 +1622,24 @@ def compare_multi(
 
     since, until = _range_or_none(since, until)
     profs = []
+    info: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
     for n in names:
-        payload = _compute(n, window, since, until)
-        profs.append(cross_profile(payload["window"]))
+        try:
+            payload = _compute(n, window, since, until)
+        except Exception as exc:  # noqa: BLE001 —— 该 V 还没采/没数据：**逐 V 标注**，不拖垮整次请求
+            missing.append({"name": n, "reason": str(exc)[:120]})
+            continue
+        prof = cross_profile(payload["window"])
+        profs.append(prof)
+        info.append({"name": prof.name, "short": prof.short, "pool": len(prof.pool),
+                     "sessions": prof.n_sessions, "tiers": prof.counts()})
+
+    if len(profs) < 2:
+        return {"window": window, "since": since, "until": until,
+                "vtubers": info, "matrix": [], "pairs": [], "missing": missing,
+                "needs_analysis": [m["name"] for m in missing],
+                "notes": ["可分析的不足两个主播：先采集并分析缺失的主播，再来对比"]}
 
     pairs: list[dict[str, Any]] = []
     raw_p: list[float] = []
@@ -1666,8 +1681,9 @@ def compare_multi(
 
     return {
         "window": window, "since": since, "until": until,
-        "vtubers": [{"name": p.name, "short": p.short, "pool": len(p.pool),
-                     "sessions": p.n_sessions, "tiers": p.counts()} for p in profs],
+        "vtubers": info,
+        "missing": missing,
+        "needs_analysis": [m["name"] for m in missing],
         "matrix": matrix,
         "pairs": out_pairs,
         "notes": [

@@ -330,6 +330,19 @@ export default function WorkbenchPage() {
     void loadRanked(byOf(tab), rows.length, true)
   }, [busy, hasMore, loadRanked, tab, rows.length])
 
+  /** 对比页发现"这个 V 还没分析"时，用户确认后直接采它（不传切片 = 采区间内全部待采场次） */
+  const startCollectFor = useCallback(async (name: string): Promise<void> => {
+    setErr(null)
+    try {
+      await api.fanCollect(name, since, until, [])
+      setProgress({ vtuber: name, since, until, state: 'running',
+                    total: 0, done: 0, failed: 0, skipped: 0,
+                    current: '', message: '', elapsed: 0 })
+    } catch (e) {
+      setErr(friendly(e as Error))
+    }
+  }, [since, until])
+
   const startCollect = useCallback(async (): Promise<void> => {
     if (!picked || !since || !until) return
     setBusy(true)
@@ -617,6 +630,13 @@ export default function WorkbenchPage() {
                     options={vtubers
                       .filter((v) => v.name !== ranked?.vtuber)
                       .map((v) => ({ name: v.name, short: v.short || v.name }))}
+                    onRequestAnalysis={(name) => {
+                      // 用户确认后：切到那个 V，并直接把「采集」提出来（不偷偷采）
+                      setPicked(name)
+                      const ok = window.confirm(
+                        `${name} 还没有分析结果。现在采集并分析？\n\n采集会占用一段时间，期间可以取消。`)
+                      if (ok) void startCollectFor(name)
+                    }}
                     window={ranked.sessions}
                     since={since}
                     until={until}
