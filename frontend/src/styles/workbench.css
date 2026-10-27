@@ -2324,3 +2324,40 @@ tr.wb-row-click:hover td { background: #fff8fa; }
 .wb-matrix-cell.is-active { outline: 2px solid var(--c-primary-deep); }
 
 .wb-pair { display: flex; flex-direction: column; gap: 8px; }
+
+/* ── 对比页 · 帖子评论模式（2026-10-28）────────────────────────────── */
+.wb-comment { display: flex; flex-direction: column; gap: 14px; }
+
+.wb-comment-input {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px;
+  background: #fff; border: 1px solid var(--c-border, #e6e8ec);
+}
+.wb-comment-input .wb-input {
+  flex: 1; min-width: 0; border: 0; outline: none; font-size: 13.5px; background: transparent;
+}
+.wb-comment-input .wb-input:focus-visible { outline: none; }
+.wb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--c-text-sub); white-space: nowrap; }
+
+.wb-comment-progress { display: flex; flex-direction: column; gap: 6px; }
+
+.wb-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.wb-kpi {
+  padding: 12px 14px; border-radius: 12px; background: #fff;
+  border: 1px solid var(--c-border, #e6e8ec); display: flex; flex-direction: column; gap: 4px;
+}
+.wb-kpi b { font-size: 24px; font-weight: 600; color: var(--c-primary-deep); font-variant-numeric: tabular-nums; }
+.wb-kpi span { font-size: 11.5px; color: var(--c-text-sub); }
+@media (max-width: 900px) { .wb-kpis { grid-template-columns: repeat(2, 1fr); } }
+
+.wb-comment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .wb-comment-grid { grid-template-columns: 1fr; } }
+
+.wb-cov { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wb-cov li { display: grid; grid-template-columns: 56px 1fr 48px; align-items: center; gap: 8px; font-size: 12px; }
+.wb-cov-n { color: var(--c-text-sub); }
+.wb-cov-track { height: 8px; border-radius: 999px; background: rgba(201,64,111,.1); overflow: hidden; }
+.wb-cov-track i { display: block; height: 100%; background: var(--c-primary, #c9406f); }
+.wb-cov-v { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-sub); }
+
+.wb-comment-shared { display: flex; flex-direction: column; gap: 8px; }

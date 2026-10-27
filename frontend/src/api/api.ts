@@ -1,6 +1,6 @@
 import type {
   FanSortBy,
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti, FanCommentScan, FanCommentOverlap } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -1117,6 +1117,32 @@ export const api = {
     return { blob: await res.blob(), filename: m ? decodeURIComponent(m[1]) : `${name}.csv` }
   },
 
+  /** 评论抓取（对比页 · 帖子评论模式，2026-10-28） */
+  fanCommentScanStart: (input: string, withSub = true) =>
+    request<{ scan_id: string; state: string }>('/fan/compare/scan',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input, with_sub: withSub }) }),
+
+  fanCommentScan: (scanId: string) =>
+    request<FanCommentScan>(`/fan/compare/scan/${encodeURIComponent(scanId)}`),
+
+  fanCommentScanCancel: (scanId: string) =>
+    request<{ ok: boolean }>(`/fan/compare/scan/${encodeURIComponent(scanId)}/cancel`,
+      { method: 'POST' }),
+
+  fanCommentUsers: (scanId: string, limit = 500) =>
+    request<{ count: number; items: import('./types').FanCommentUser[] }>(
+      `/fan/compare/scan/${encodeURIComponent(scanId)}/users?limit=${limit}`),
+
+  fanCommentOverlap: (scanId: string, vtuber: string,
+    opts?: { window?: number; since?: string; until?: string; topN?: number }) => {
+    const q = new URLSearchParams({ scan_id: scanId, vtuber })
+    if (opts?.window) q.set('window', String(opts.window))
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    if (opts?.topN) q.set('top_n', String(opts.topN))
+    return request<FanCommentOverlap>(`/fan/compare/comment-overlap?${q}`)
+  },
   /** 多主播重叠（对比页 · 多主播模式，2026-10-28） */
   fanCompareMulti: (vtubers: string[], opts?: { window?: number; since?: string; until?: string }) => {
     const q = new URLSearchParams({ vtubers: vtubers.join(',') })

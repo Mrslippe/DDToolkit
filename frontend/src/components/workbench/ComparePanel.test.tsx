@@ -65,11 +65,12 @@ describe('ComparePanel（多主播对比）', () => {
     expect(lastCall[0]).toEqual(['弥月Mizuki', '星瞳_Official'])
   })
 
-  it('帖子评论模式给出明确占位（不是空白）', async () => {
+  it('帖子评论模式渲染出输入卡（P4 起是真实面板，不再是占位）', async () => {
     await mount(<ComparePanel current="弥月Mizuki" options={[]} window={75} since="" until="" />)
     await act(async () => {
       (document.querySelector('[data-testid="compare-mode-comment"]') as HTMLButtonElement).click()
     })
-    expect(document.querySelector('[data-testid="compare-comment-todo"]')!.textContent).toContain('下一步')
+    expect(document.querySelector('[data-testid="comment-compare"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="comment-input"]')).toBeTruthy()
   })
 })

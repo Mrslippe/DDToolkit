@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Users, MessageSquare, Plus, X } from 'lucide-react'
 import { api } from '../../api/api'
 import type { FanCompareMulti } from '../../api/types'
+import CommentComparePane from './CommentComparePane'
 
 /**
  * 对比页（2026-10-28，P2：多主播重叠）。
@@ -80,9 +81,7 @@ export default function ComparePanel({ current, options, window, since, until }:
       </div>
 
       {mode === 'comment' ? (
-        <p className="wb-hint" data-testid="compare-comment-todo">
-          帖子评论对比（粘贴动态/视频链接，抓评论区并排序）将在下一步接入。当前版本先提供「多主播」对比。
-        </p>
+        <CommentComparePane vtuber={current} window={window} since={since} until={until} />
       ) : (
         <>
           <div className="wb-chips" data-testid="compare-chips">

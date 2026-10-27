@@ -1800,3 +1800,57 @@ export interface FanCompareMulti {
   pairs: FanComparePair[]
   notes: string[]
 }
+
+
+/** 评论抓取任务（对比页 · 帖子评论模式，2026-10-28） */
+export interface FanCommentScan {
+  scan_id: string
+  input: string
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  phase: string
+  page: number
+  pages: number
+  fetched: number
+  expected: number
+  partial: boolean
+  error: string
+  target_kind: string
+  target_id: string
+  title: string
+  up_name: string
+  cover: string
+  elapsed: number
+  users_count: number
+}
+
+export interface FanCommentUser {
+  uid: string
+  name: string
+  cnt: number
+  sub_cnt: number
+  first_ms?: number | null
+  last_ms?: number | null
+}
+
+/** 评论名单 × 核心度名单的重叠结果 */
+export interface FanCommentOverlap {
+  scan: FanCommentScan
+  ranked: { vtuber: string; window: number; pool: number }
+  overlap: {
+    shared: number
+    jaccard: number
+    lift: number
+    expected: number
+    p_value: number
+    p_value_lower: number
+    is_enriched: boolean
+    is_depleted: boolean
+  }
+  coverage: { n: number; hit: number; count: number }[]
+  tiers: Record<string, { hit: number; miss: number }>
+  shared: {
+    uid: string; name: string; cnt: number; sub_cnt: number
+    tier: string; s: number
+  }[]
+  notes: string[]
+}
