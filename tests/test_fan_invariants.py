@@ -95,3 +95,21 @@ def test_coverage_per_session_is_complete(short: str) -> None:
         if isinstance(ratio, (int, float)) and ratio < 0.95:
             low.append((s.live_id[:8], ratio))
     assert not low, f"{short} 有 {len(low)} 场覆盖率不足：{low[:3]}"
+
+
+@pytest.mark.parametrize("short", VSHORTS)
+def test_paid_type_exists(short: str) -> None:
+    """⑥ 付费轴不能整段失效：真实数据里必须存在被判为「付费」的人。"""
+    w = _window(short)
+    t = build_axis_table(w, pool_size=pool_size_for(w))
+    labels = list(type_label(t).values())
+    assert labels.count("付费") > 0, f"{short} 没有任何人被判为付费（付费轴失效？）"
+
+
+@pytest.mark.parametrize("short", VSHORTS)
+def test_pay_equals_three_components(short: str) -> None:
+    """⑦ 每个用户的 `pay` 必须等于「舰长 + SC + 礼物」—— 防漏加一路或多加一路。"""
+    w = _window(short)
+    bad = [u for u, f in w.users.items()
+           if abs(f.pay - (f.gift_amt + f.guard_amt + f.sc_amt)) > 1e-6]
+    assert not bad, f"{short} 有 {len(bad)} 人 pay 与三路求和不符：{bad[:3]}"

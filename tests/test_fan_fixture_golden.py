@@ -28,6 +28,25 @@ def _mk_window() -> Window:
             stats={}, sum_m=0, sum_sc=0, sum_pay=0.0, n_pairs=0,
         ))
     users: dict[str, UserFact] = {}
+    # ── 付费原型（L1 新增，2026-10-27）：验证"付费轴"能被独立判出来 ──
+    payers = {
+        "pay_guard": {"guard_amt": 5000.0, "sc_amt": 0.0, "gift_amt": 0.0},
+        "pay_sc": {"guard_amt": 0.0, "sc_amt": 3000.0, "gift_amt": 0.0},
+        "pay_mix": {"guard_amt": 2000.0, "sc_amt": 1000.0, "gift_amt": 500.0},
+    }
+    for uid, comp in payers.items():
+        pay = comp["guard_amt"] + comp["sc_amt"] + comp["gift_amt"]
+        users[uid] = UserFact(
+            uid=uid, att_n=4, m=5, uniq=3, maxrep=1, text_tracked=True, name=uid,
+            gift_amt=comp["gift_amt"], guard_amt=comp["guard_amt"], sc_amt=comp["sc_amt"],
+            pay_events=3, lag_sum=2400, lag_cnt=4,
+            sc_cnt=1 if comp["sc_amt"] else 0, gift_cnt=1 if comp["gift_amt"] else 0,
+            guard_cnt=1 if comp["guard_amt"] else 0,
+            guard_top="舰长" if comp["guard_amt"] else "",
+            pay=pay, msg_sess=4, sc_sess=1 if comp["sc_amt"] else 0,
+            first_pos=0, last_pos=3,
+        )
+
     for k in range(20):
         uid = f"u{k:02d}"
         # 出席：前 8 人全勤，9-14 半勤，其余 1 场
@@ -58,12 +77,12 @@ def _mk_window() -> Window:
 
 #: L1 黄金值：池内人数 / 类型分布 / 强度前 3（uid, S）
 #: ⚠️ 这组值**不随真实数据变化**；改了模型才允许重录。
-#: ⚠️ 夹具只覆盖「出席 / 参与度（弹幕）/ 综合」三条判定路径；
-#: 付费轴需要更复杂的付费结构才会独立成类，留给真实数据快照（L2）覆盖。
+#: 2026-10-27 加入三个**付费原型**（纯舰长 / 纯 SC / 混合）后重钉：
+#: 付费轴现在会被独立判出来（`付费: 2`），是 L1 唯一曾经缺口的补丁。
 GOLDEN = {
     "pool": 18,
-    "types": {"出勤": 7, "互动": 1, "付费": 0, "综合": 10},
-    "top3": [("u19", 0.6852), ("u18", 0.6667), ("u17", 0.6481)],
+    "types": {"出勤": 6, "互动": 1, "付费": 2, "综合": 9},
+    "top3": [("u19", 0.6481), ("u18", 0.6296), ("u17", 0.6111)],
 }
 
 
@@ -89,3 +108,25 @@ def test_fixture_is_deterministic() -> None:
     b = rank(build_axis_table(_mk_window(), pool_size=18),
              participation_strength(build_axis_table(_mk_window(), pool_size=18)))
     assert a == b
+
+
+def test_paid_axis_is_detected() -> None:
+    """付费轴的**判据**要能被独立触发（2026-10-27 补 L1 的唯一缺口）。
+
+    不钉具体强度值，只钉三件事：
+    1. 三种付费原型（纯舰长 / 纯 SC / 混合）都被判成「付费」；
+    2. 每个用户的 `pay` 恰好等于三路之和（防漏加一路）；
+    3. 无付费用户的 `pay` 为 0（防把别的东西算进付费）。
+    """
+    w = _mk_window()
+    t = build_axis_table(w, pool_size=len(w.users))
+    labels = type_label(t)
+
+    for uid in ("pay_guard", "pay_sc", "pay_mix"):
+        assert labels.get(uid) == "付费", f"{uid} 应判为付费，实际 {labels.get(uid)!r}"
+
+    for uid, f in w.users.items():
+        assert abs(f.pay - (f.gift_amt + f.guard_amt + f.sc_amt)) < 1e-6, f"{uid} 三路求和不等于 pay"
+
+    for uid in ("u05", "u10"):
+        assert w.users[uid].pay == 0.0
