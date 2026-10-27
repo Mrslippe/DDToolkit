@@ -192,7 +192,11 @@ def build_router(*, deps: dict[str, Any]) -> APIRouter:
         if not users:
             raise HTTPException(409, "这次抓取没有拿到任何评论（可能被风控或帖子无评论）")
 
-        payload = compute(vtuber, window, since, until)
+        try:
+            payload = compute(vtuber, window, since, until)
+        except Exception as exc:  # noqa: BLE001 —— 没采/没数据：给可读的 409，不是 500 堆栈
+            logger.warning("对比失败：%s（vtuber=%s）", type(exc).__name__, vtuber)
+            raise HTTPException(409, f"{vtuber} 还没有可用的分析结果：{exc}") from exc
         prof = cross_profile(payload["window"])
         stats = overlap_stats(prof.tier, prof.strength, users, top_n=top_n)
 

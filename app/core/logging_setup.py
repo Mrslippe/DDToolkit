@@ -70,6 +70,30 @@ def build_file_handler(log_file: str | Path, backup_days: int) -> logging.Handle
     )
 
 
+def attach_uvicorn_to_file(log_file: str | Path, backup_days: int) -> None:
+    """把 **uvicorn / starlette 自己的 logger** 也接到同一个轮转文件上（2026-10-28）。
+
+    为什么需要单独做：`uvicorn` 会用自己的 handler（只往 stderr 写），
+    根 logger 的 `basicConfig` 管不到它 —— 于是"控制台看得见的
+    `Exception in ASGI application` 堆栈，`logs/app.log` 里一条都没有"。
+    这正是用户报"控制台报错但日志文件查不到"的原因。
+
+    做法：给这几个 logger 挂同一个文件 handler，并关掉 `propagate`
+    （否则同一条日志会同时经根 handler 再写一遍）。
+    """
+    handler = build_file_handler(log_file, backup_days)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "starlette", "fastapi"):
+        lg = logging.getLogger(name)
+        # 幂等：重复调用不要叠加 handler
+        if any(getattr(h, "_dsh_file_handler", False) for h in lg.handlers):
+            continue
+        handler_copy = logging.StreamHandler() if False else handler  # 同一个 handler 共享即可
+        setattr(handler_copy, "_dsh_file_handler", True)
+        lg.handlers = [handler_copy]
+        lg.propagate = False
+
+
 def setup_logging(level: str, log_file: str | Path, backup_days: int) -> None:
     """根日志双通道：轮转文件 + 控制台。
 
@@ -89,3 +113,6 @@ def setup_logging(level: str, log_file: str | Path, backup_days: int) -> None:
             logging.StreamHandler(),
         ],
     )
+    # 根 handler 管不到 uvicorn 自己的 logger —— 单独挂一次，
+    # 让"控制台能看到的 ASGI 堆栈"也必须在 logs/app.log 里能查到。
+    attach_uvicorn_to_file(log_file, backup_days)
