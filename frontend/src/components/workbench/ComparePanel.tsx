@@ -141,6 +141,7 @@ export default function ComparePanel({ current, options, window, since, until, o
 
           {data && (
             <div className="wb-compare-grid">
+              {data.matrix.length === data.vtubers.length && data.matrix.length > 0 && (
               <table className="wb-matrix" data-testid="compare-matrix">
                 <thead>
                   <tr>
@@ -152,7 +153,7 @@ export default function ComparePanel({ current, options, window, since, until, o
                   {data.vtubers.map((row, i) => (
                     <tr key={row.short}>
                       <th>{row.short}</th>
-                      {data.matrix[i].map((cell, j) => (
+                      {(data.matrix[i] ?? []).map((cell, j) => (
                         <td key={j}>
                           {cell === null ? <span className="wb-matrix-diag">—</span> : (
                             <button type="button"
@@ -169,6 +170,7 @@ export default function ComparePanel({ current, options, window, since, until, o
                   ))}
                 </tbody>
               </table>
+              )}
 
               {pair && (
                 <Venn a={pair.a} b={pair.b} inter={pair.intersection}

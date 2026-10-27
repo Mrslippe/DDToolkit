@@ -65,6 +65,22 @@ describe('ComparePanel（多主播对比）', () => {
     expect(lastCall[0]).toEqual(['弥月Mizuki', '星瞳_Official'])
   })
 
+  it('★ 只有 1 个主播可分析时不崩（matrix 为空）', async () => {
+    fanCompareMulti.mockResolvedValue({ ...DATA, matrix: [], pairs: [], vtibers: undefined,
+      vtubers: [DATA.vtubers[0]], needs_analysis: ['星瞳_Official'] })
+    await mount(<ComparePanel current="弥月Mizuki" options={[{ name: '星瞳_Official', short: '星瞳' }]}
+                              window={75} since="" until="" />)
+    await act(async () => {
+      const add = Array.from(document.querySelectorAll('.wb-chip-add'))
+        .find((el) => el.textContent?.includes('星瞳')) as HTMLButtonElement
+      add.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    // 关键：不抛错，并且明确告诉用户"还没有分析结果"
+    expect(document.querySelector('[data-testid="compare-missing"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="compare-matrix"]')).toBeNull()
+  })
+
   it('帖子评论模式渲染出输入卡（P4 起是真实面板，不再是占位）', async () => {
     await mount(<ComparePanel current="弥月Mizuki" options={[]} window={75} since="" until="" />)
     await act(async () => {
