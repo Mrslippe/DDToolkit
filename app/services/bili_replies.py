@@ -119,6 +119,53 @@ def parse_target(text: str) -> tuple[str, str]:
     raise ValueError(f"认不出这个输入：{s!r}（支持 BV 号、av 号、视频/动态链接）")
 
 
+#: 进程内缓存的"设备指纹"cookie（buvid3/buvid4）。评论区接口没有它就会回 `code=-352`
+_SPI_COOKIE: tuple[str, float] | None = None
+_SPI_TTL_S = 12 * 3600
+
+
+def _auth_cookie() -> str:
+    """应用里已登录的 B 站 cookie（含 SESSDATA）。
+
+    ⚠️ 2026-10-28 实测：**未登录时评论区只返回 3 条"热门预览"**（`is_end=true`），
+    看起来像"抓取成功但只有 3 条"。要拿到完整名单必须带登录态。
+    这里直接复用 `auth.auth_manager`，与其余 B 站抓取同源。
+    """
+    try:
+        from app.services import auth as _auth
+
+        mgr = getattr(_auth, "auth_manager", None)
+        if mgr is None:
+            return ""
+        ck = mgr.cookie_str if isinstance(mgr.cookie_str, str) else mgr.cookie_str()
+        return ck if "SESSDATA=" in (ck or "") else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _spi_cookie(client: httpx.AsyncClient) -> str:
+    """取一份 buvid 指纹 cookie 并缓存（2026-10-28）。
+
+    `/x/v2/reply/main` 不带 `buvid3` 会直接回 **code=-352（风控校验失败）**；
+    这个 cookie 不需要登录态，`x/frontend/finger/spi` 就能拿到。
+    """
+    global _SPI_COOKIE
+    now = time.time()
+    if _SPI_COOKIE and now - _SPI_COOKIE[1] < _SPI_TTL_S:
+        return _SPI_COOKIE[0]
+    try:
+        r = await client.get(f"{API}/x/frontend/finger/spi",
+                             headers={"User-Agent": UA}, timeout=20)
+        d = (r.json().get("data") or {}) if r.status_code == 200 else {}
+        ck = f"buvid3={d.get('b_3','')}; buvid4={d.get('b_4','')}; b_nut={int(now)}"
+        if d.get("b_3"):
+            _SPI_COOKIE = (ck, now)
+            logger.info("已获取 buvid 指纹 cookie（%s…）", str(d.get("b_3"))[:12])
+        return ck
+    except Exception:  # noqa: BLE001 —— 拿不到就空着，让上层把 -352 报清楚
+        return ""
+
+
 async def _get(
     client: httpx.AsyncClient,
     url: str,
@@ -131,8 +178,10 @@ async def _get(
     try:
         p = await wbi.sign_params(dict(params or {})) if sign else dict(params or {})
         headers = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
-        if cookie:
-            headers["Cookie"] = cookie
+        # cookie 优先级：调用方传的 → 应用登录态（含 SESSDATA）→ 只有 buvid 的设备指纹。
+        # 没登录时评论区只给 3 条预览（is_end=true），必须靠登录态才拿得到全量。
+        ck = cookie or _auth_cookie() or await _spi_cookie(client)
+        headers["Cookie"] = ck
         r = await client.get(url, params=p, headers=headers, timeout=30)
         if r.status_code != 200:
             logger.warning("bili %s → HTTP %s（%s）", url.rsplit("/", 1)[-1], r.status_code, params)
@@ -143,8 +192,9 @@ async def _get(
             return None
         code = data.get("code")
         if code not in (0, None):
-            logger.warning("bili %s → code=%s message=%s", url.rsplit("/", 1)[-1], code,
-                           str(data.get("message"))[:80])
+            hint = "（风控：需要 buvid cookie 或登录态）" if code in (-352, -412) else ""
+            logger.warning("bili %s → code=%s message=%s%s", url.rsplit("/", 1)[-1], code,
+                           str(data.get("message"))[:80], hint)
         return data
     except Exception:  # noqa: BLE001 —— 网络/解析失败统一吞成 None
         return None
@@ -262,6 +312,10 @@ async def fetch_users(
         logger.info("评论第 %d 页：%d 条（all_count=%s is_end=%s）",
                     page, len(replies), cur.get("all_count"), cur.get("is_end"))
         if not replies:
+            if not _auth_cookie():
+                state.error = state.error or (
+                    "未登录 B 站：评论区接口只返回热门预览（3 条）。"
+                    "请在设置里登录 B 站账号后再抓取。")
             if page == 1:
                 logger.warning("第 1 页就是空的：oid=%s type=%s（可能被风控或接口变了）", oid, rtype)
                 state.error = state.error or "上游第 1 页就没有评论（可能被风控或帖子已关闭评论）"
