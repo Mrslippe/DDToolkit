@@ -1817,6 +1817,8 @@ export interface FanCommentScan {
   expected: number
   partial: boolean
   error: string
+  /** 说明性提示（不是错误）：如“上游只返回 537/843 条，差额多为已删除/折叠” */
+  note?: string
   target_kind: string
   target_id: string
   title: string

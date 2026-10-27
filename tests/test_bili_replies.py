@@ -97,3 +97,25 @@ def test_scan_snapshot_roundtrip(tmp_path: Path) -> None:
     assert snap["scan_id"] == "abc123"
     assert snap["users"][0]["cnt"] == 2
     assert br.load("nope", tmp_path) is None
+
+
+def test_partial_upstream_gap_explains_itself(monkeypatch) -> None:
+    """上游 `all_count` 比实际能翻到的多时，要给出**可读说明**（2026-10-28）。
+
+    实测某动态：`all_count=843`，翻到 `is_end` 只有 537 条
+    （差额是已删除/折叠/审核中的评论，接口根本不给）。
+    """
+    async def fake_get(client, url, params=None, **kw):
+        if url.endswith("/x/v2/reply/main"):
+            return {"data": {"cursor": {"all_count": 843, "is_end": True, "next": 0},
+                             "replies": [_reply(1, "甲", 1700000000, 11)]}}
+        return None
+
+    monkeypatch.setattr(br, "_get", fake_get)
+    monkeypatch.setattr(br, "GAP_S", 0)
+    st = br.ScanState(scan_id="gap")
+    asyncio.run(br.fetch_users(None, "dynamic", "412829193", with_sub=False, state=st))
+
+    assert st.partial is True
+    assert "537" not in st.note and "/" in st.note
+    assert "已删除" in st.note or "折叠" in st.note

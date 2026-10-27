@@ -148,6 +148,9 @@ export default function CommentComparePane({ vtuber, window, since, until }: Pro
               <span className="wb-bar-fill" style={{ width: `${pct}%` }} />
             </div>
           )}
+          {scan.note && (
+            <p className="wb-hint" data-testid="comment-note">{scan.note}</p>
+          )}
           {(scan.title || scan.up_name) && (
             <p className="wb-hint" data-testid="comment-target">
               {scan.up_name ? `${scan.up_name} · ` : ''}{scan.title || scan.target_id}

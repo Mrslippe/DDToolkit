@@ -66,6 +66,8 @@ class ScanState:
     expected: int = 0
     partial: bool = False
     error: str = ""
+    #: 说明性提示（不是错误）：例如上游只给了一部分、"其余多为已删除/折叠"
+    note: str = ""
     target_kind: str = ""
     target_id: str = ""
     title: str = ""
@@ -84,7 +86,7 @@ class ScanState:
             k: getattr(self, k)
             for k in (
                 "scan_id", "input", "state", "phase", "page", "pages", "fetched",
-                "expected", "partial", "error", "target_kind", "target_id",
+                "expected", "partial", "error", "note", "target_kind", "target_id",
                 "title", "up_name", "cover",
             )
         }
@@ -363,6 +365,10 @@ async def fetch_users(
 
     if state.expected and state.fetched < state.expected:
         state.partial = True
+        if not state.note:
+            state.note = (
+                f"上游只返回 {state.fetched}/{state.expected} 条："
+                "差额多为已删除、被折叠或审核中的评论（接口翻到 is_end 也拿不到）")
         if not state.error and page > max_pages:
             state.error = f"只抓到前 {max_pages} 页（{state.fetched}/{state.expected} 条），已标为部分数据"
     state.users = sorted(seen.values(), key=lambda u: (-u["cnt"], -u["sub_cnt"]))
