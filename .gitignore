@@ -116,3 +116,8 @@ _dsh_uninstall_backup/
 
 # Obsidian 本地配置（用户本地编辑器状态，不入库）
 docs/.obsidian/
+
+# 发版/测试临时目录（TMP 指到工作区时产生）
+.tmp/
+.uv-cache/
+

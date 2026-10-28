@@ -32,10 +32,9 @@ from app.services import wbi
 logger = logging.getLogger(__name__)
 
 API = "https://api.bilibili.com"
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+#: UA 只允许在 `app/core/useragent.py` 里写字面量（`tests/test_user_agent.py` 会守）；
+#: 这里复用同一个来源，避免各抓取器 UA 漂移。
+from app.core.useragent import UA_CHROME as UA
 
 #: 主楼最多翻多少页（20 条/页）。大帖（8 万条）按 1 页/秒要跑几小时，
 #: 默认封在 150 页 = 3000 条，够做名单重叠；超出标 partial 并提示。
