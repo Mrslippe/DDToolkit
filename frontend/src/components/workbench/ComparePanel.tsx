@@ -3,15 +3,23 @@ import { Users, MessageSquare, Plus, X } from 'lucide-react'
 import { api } from '../../api/api'
 import type { FanCompareMulti } from '../../api/types'
 import CommentComparePane from './CommentComparePane'
+import { EMPTY_TEXT } from './ResultCharts'
 
 /**
- * 对比页（2026-10-28，P2：多主播重叠）。
+ * 对比页（2026-10-28，P2：多主播重叠；同日按用户口径**改成卡片布局**）。
  *
  * 设计取向：
  * - **同步当前分析**：`current` 是本次分析的主播，窗口/区间也来自主分析 ——
  *   用户先分析出核心名单，再看它和别的名单怎么重叠；
  * - 矩阵是入口、不是终点：点格子下钻到该配对的详情（份额、层级迁移、读数）；
  * - 帖子评论模式留给 P3/P4，这里先占位，避免页签空着像坏了。
+ *
+ * 2026-10-28 卡片化重排（用户第 4 条，允许重排信息层级）：
+ *   ① 选择主播（模式切换 + chips + 缺数据警示）
+ *   ② 重叠矩阵（格子 = Jaccard）
+ *   ③ 配对详情（Venn + KPI + 层级迁移）
+ *   ④ 帖子评论（整块抓取与重叠）
+ * 每张卡都有自己的空态 —— 与结果区同一套"先画卡框、再填内容"的口径（`devlog/715`）。
  */
 interface Props {
   /** 本次分析的主播（显示名） */
@@ -43,6 +51,16 @@ function Venn({ a, b, inter, sizeA, sizeB }: { a: string; b: string; inter: numb
       <text x={cxB + 26} y={cy + 4} className="wb-venn-t" textAnchor="end">{b}</text>
       <text x={w / 2} y={cy + 5} className="wb-venn-inter" textAnchor="middle">{inter}</text>
     </svg>
+  )
+}
+
+/** 卡片空态（与结果区同一句文案：`ResultCharts.EMPTY_TEXT`） */
+function CardEmpty({ hint, testId }: { hint: string; testId: string }) {
+  return (
+    <div className="wb-empty wb-empty-card" data-testid={testId}>
+      <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
+      <p>{hint}</p>
+    </div>
   )
 }
 
@@ -82,109 +100,152 @@ export default function ComparePanel({ current, options, window, since, until, o
 
   const pair = data && pairIdx != null ? data.pairs[pairIdx] : null
   const maxJ = useMemo(() => Math.max(0.0001, ...(data?.pairs.map((p) => p.jaccard) ?? [0])), [data])
+  const hasMatrix = !!data && data.matrix.length === data.vtubers.length && data.matrix.length > 0
 
   return (
-    <section className="wb-compare" data-testid="compare-panel">
-      <div className="wb-compare-head">
-        <div className="wb-seg" role="tablist" aria-label="对比模式">
-          <button type="button" role="tab" aria-selected={mode === 'multi'}
-                  className={`wb-seg-btn${mode === 'multi' ? ' is-active' : ''}`}
-                  data-testid="compare-mode-multi" onClick={() => setMode('multi')}>
-            <Users className="size-4" /> 多主播
-          </button>
-          <button type="button" role="tab" aria-selected={mode === 'comment'}
-                  className={`wb-seg-btn${mode === 'comment' ? ' is-active' : ''}`}
-                  data-testid="compare-mode-comment" onClick={() => setMode('comment')}>
-            <MessageSquare className="size-4" /> 帖子评论
-          </button>
-        </div>
-        <span className="wb-card-note">基于：{current} · {window} 场 · {since || '不限'} ~ {until || '至今'}</span>
-      </div>
-
-      {mode === 'comment' ? (
-        <CommentComparePane vtuber={current} window={window} since={since} until={until} />
-      ) : (
-        <>
-          <div className="wb-chips" data-testid="compare-chips">
-            {picked.map((name) => (
-              <span key={name} className="wb-chip">
-                {name}
-                {name !== current && (
-                  <button type="button" aria-label={`移除 ${name}`} onClick={() => toggle(name)}>
-                    <X className="size-3" />
-                  </button>
-                )}
-              </span>
-            ))}
-            {options.filter((o) => !picked.includes(o.name)).slice(0, 6).map((o) => (
-              <button key={o.name} type="button" className="wb-chip wb-chip-add" onClick={() => toggle(o.name)}>
-                <Plus className="size-3" /> {o.short}
-              </button>
-            ))}
+    <div className="wb-compare" data-testid="compare-panel">
+      {/* ① 选择主播：模式切换 + 已选 + 缺数据警示 */}
+      <section className="wb-card" data-testid="compare-card-pick">
+        <div className="wb-card-head">
+          <h3 className="wb-card-title">
+            {mode === 'multi' ? '选择主播' : '帖子评论'}
+            <span className="wb-card-note" style={{ marginLeft: 8 }}>
+              基于：{current} · {window} 场 · {since || '不限'} ~ {until || '至今'}
+            </span>
+          </h3>
+          <div className="wb-seg" role="tablist" aria-label="对比模式">
+            <button type="button" role="tab" aria-selected={mode === 'multi'}
+                    className={`wb-seg-btn${mode === 'multi' ? ' is-active' : ''}`}
+                    data-testid="compare-mode-multi" onClick={() => setMode('multi')}>
+              <Users className="size-4" /> 多主播
+            </button>
+            <button type="button" role="tab" aria-selected={mode === 'comment'}
+                    className={`wb-seg-btn${mode === 'comment' ? ' is-active' : ''}`}
+                    data-testid="compare-mode-comment" onClick={() => setMode('comment')}>
+              <MessageSquare className="size-4" /> 帖子评论
+            </button>
           </div>
+        </div>
 
-          {(data?.needs_analysis?.length ?? 0) > 0 && (
-            <div className="wb-missing" role="alert" data-testid="compare-missing">
-              <b>这些主播还没有分析结果：</b>
-              {data!.needs_analysis!.map((n) => (
-                <span key={n} className="wb-chip wb-chip-warn">
-                  {n}
-                  {onRequestAnalysis && (
-                    <button type="button" onClick={() => onRequestAnalysis(n)}>采集并分析</button>
+        {mode === 'multi' ? (
+          <>
+            <div className="wb-chips" data-testid="compare-chips">
+              {picked.map((name) => (
+                <span key={name} className="wb-chip">
+                  {name}
+                  {name !== current && (
+                    <button type="button" aria-label={`移除 ${name}`} onClick={() => toggle(name)}>
+                      <X className="size-3" />
+                    </button>
                   )}
                 </span>
               ))}
+              {options.filter((o) => !picked.includes(o.name)).slice(0, 6).map((o) => (
+                <button key={o.name} type="button" className="wb-chip wb-chip-add" onClick={() => toggle(o.name)}>
+                  <Plus className="size-3" /> {o.short}
+                </button>
+              ))}
             </div>
-          )}
-          {error && <p className="wb-hint" role="alert" data-testid="compare-error">加载失败：{error}</p>}
-          {loading && <p className="wb-hint">正在计算两两重叠…</p>}
 
-          {data && (
-            <div className="wb-compare-grid">
-              {data.matrix.length === data.vtubers.length && data.matrix.length > 0 && (
-              <table className="wb-matrix" data-testid="compare-matrix">
-                <thead>
-                  <tr>
-                    <th />
-                    {data.vtubers.map((v) => <th key={v.short}>{v.short}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.vtubers.map((row, i) => (
-                    <tr key={row.short}>
-                      <th>{row.short}</th>
-                      {(data.matrix[i] ?? []).map((cell, j) => (
-                        <td key={j}>
-                          {cell === null ? <span className="wb-matrix-diag">—</span> : (
-                            <button type="button"
-                                    className={`wb-matrix-cell${pairIdx === cell.pair ? ' is-active' : ''}`}
-                                    style={{ background: `rgba(201,64,111,${0.08 + 0.55 * (cell.jaccard / maxJ)})` }}
-                                    onClick={() => setPairIdx(cell.pair)}
-                                    title={`共享 ${cell.shared} 人 · lift ${cell.lift}`}>
-                              {(cell.jaccard * 100).toFixed(1)}%
-                            </button>
-                          )}
-                        </td>
-                      ))}
+            {(data?.needs_analysis?.length ?? 0) > 0 && (
+              <div className="wb-missing" role="alert" data-testid="compare-missing">
+                <b>这些主播还没有分析结果：</b>
+                {data!.needs_analysis!.map((n) => (
+                  <span key={n} className="wb-chip wb-chip-warn">
+                    {n}
+                    {onRequestAnalysis && (
+                      <button type="button" onClick={() => onRequestAnalysis(n)}>采集并分析</button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+            {error && <p className="wb-hint" role="alert" data-testid="compare-error">加载失败：{error}</p>}
+            {loading && <p className="wb-hint">正在计算两两重叠…</p>}
+          </>
+        ) : (
+          <p className="wb-hint">
+            粘贴一条视频 / 动态的链接或 BV 号，抓它的评论区，再和当前主播的核心名单比重叠。
+          </p>
+        )}
+      </section>
+
+      {mode === 'comment' ? (
+        /* ④ 帖子评论：抓取 + 覆盖 + 分层 + 交集（内部自带分块，这里只给卡壳） */
+        <section className="wb-card" data-testid="compare-card-comment">
+          <div className="wb-card-head">
+            <h3 className="wb-card-title">
+              评论交集
+              <span className="wb-card-note" style={{ marginLeft: 8 }}>
+                评论名单 vs 当前核心名单
+              </span>
+            </h3>
+          </div>
+          <CommentComparePane vtuber={current} window={window} since={since} until={until} />
+        </section>
+      ) : (
+        <>
+          {/* ② 重叠矩阵 */}
+          <section className="wb-card" data-testid="compare-card-matrix">
+            <div className="wb-card-head">
+              <h3 className="wb-card-title">
+                重叠矩阵
+                <span className="wb-card-note" style={{ marginLeft: 8 }}>
+                  格子 = 两份名单的 Jaccard 重叠率 · 点一格看配对详情
+                </span>
+              </h3>
+            </div>
+            {hasMatrix ? (
+              <div className="wb-table-wrap">
+                <table className="wb-matrix" data-testid="compare-matrix">
+                  <thead>
+                    <tr>
+                      <th />
+                      {data!.vtubers.map((v) => <th key={v.short}>{v.short}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              )}
+                  </thead>
+                  <tbody>
+                    {data!.vtubers.map((row, i) => (
+                      <tr key={row.short}>
+                        <th>{row.short}</th>
+                        {(data!.matrix[i] ?? []).map((cell, j) => (
+                          <td key={j}>
+                            {cell === null ? <span className="wb-matrix-diag">—</span> : (
+                              <button type="button"
+                                      className={`wb-matrix-cell${pairIdx === cell.pair ? ' is-active' : ''}`}
+                                      style={{ background: `rgba(201,64,111,${0.08 + 0.55 * (cell.jaccard / maxJ)})` }}
+                                      onClick={() => setPairIdx(cell.pair)}
+                                      title={`共享 ${cell.shared} 人 · lift ${cell.lift}`}>
+                                {(cell.jaccard * 100).toFixed(1)}%
+                              </button>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <CardEmpty testId="compare-matrix-empty" hint="再选一位主播就能看到重叠率" />
+            )}
+          </section>
 
-              {pair && (
+          {/* ③ 配对详情 */}
+          <section className="wb-card" data-testid="compare-card-pair">
+            <div className="wb-card-head">
+              <h3 className="wb-card-title">配对详情</h3>
+            </div>
+            {pair ? (
+              <div className="wb-compare-grid">
                 <Venn a={pair.a} b={pair.b} inter={pair.intersection}
                       sizeA={pair.size_a} sizeB={pair.size_b} />
-              )}
-
-              {pair && (
                 <div className="wb-pair" data-testid="compare-pair">
-                  <h3 className="wb-card-title">
-                    {pair.a} × {pair.b}
-                    <span className="wb-card-note" style={{ marginLeft: 8 }}>
-                      共享 {pair.intersection} 人 · Jaccard {(pair.jaccard * 100).toFixed(2)}% · lift {pair.lift}
-                    </span>
-                  </h3>
+                  <h4 className="wb-card-title" style={{ fontSize: 14 }}>{pair.a} × {pair.b}</h4>
+                  <p className="wb-hint" data-testid="compare-pair-kpi">
+                    共享 {pair.intersection} 人 · Jaccard {(pair.jaccard * 100).toFixed(2)}%
+                    · lift {pair.lift}
+                  </p>
                   <p className="wb-hint">
                     p（BH 校正）= {pair.p_adjusted.toExponential(2)}
                     {pair.is_enriched ? ' · 显著富集' : pair.is_depleted ? ' · 显著贫化' : ' · 不显著'}
@@ -201,11 +262,13 @@ export default function ComparePanel({ current, options, window, since, until, o
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            ) : (
+              <CardEmpty testId="compare-pair-empty" hint="点矩阵里的任意一格，这里会显示那一对的详情" />
+            )}
+          </section>
         </>
       )}
-    </section>
+    </div>
   )
 }
