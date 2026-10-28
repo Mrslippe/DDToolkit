@@ -83,6 +83,8 @@ interface Props {
    * 只影响渲染分支，不碰任何取数逻辑。
    */
   empty?: boolean
+  /** 空态正文的提示语（由页面按当前状态给"下一步该点哪个按钮"） */
+  emptyHint?: string
 }
 
 interface Card {
@@ -241,7 +243,7 @@ const axisBase = (labels: string[], values: number[], name: string): EChartsCore
  * - **饼图永远排第一**（用户口径）；
  * - 每张图都是独立 `EChart`，宿主或 option 变化都会重建实例。
  */
-export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp, empty }: Props) {
+export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp, empty, emptyHint }: Props) {
   const [page, setPage] = useState(0)
 
   /** 「隐藏昵称」（2026-10-28）：贡献榜那两张图的图例/饼图扇区文字换成 uid */
@@ -546,7 +548,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
                 </h3>
                 <div className="wb-empty wb-empty-card">
                   <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
-                  <p>{EMPTY_TEXT.hint}</p>
+                  <p>{emptyHint ?? EMPTY_TEXT.hint}</p>
                 </div>
               </section>
             </div>

@@ -272,6 +272,17 @@ export default function WorkbenchPage() {
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
+  /**
+   * 「用户是否已经发起过一次分析」（2026-10-28）。
+   *
+   * 为什么需要它：切页签与改标签筛选原本都会调 `loadRanked`，于是**一进工作台就自动
+   * 跑一次完整计算**（冷启动 20–40 秒），用户看到的是"我没点分析，它自己在分析"
+   * （用户实测截图：正在分析… 已用 25 秒）。
+   * 现在只有**用户主动发起过**（点「分析」/ 浮窗「分析」/ 大窗口确认）之后，
+   * 切页签与改标签才跟着刷新；否则只切 UI、不碰后端。
+   */
+  const analyzedRef = useRef(false)
+
   const loadRanked = useCallback(async (
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
@@ -279,6 +290,7 @@ export default function WorkbenchPage() {
     tags?: string[],
   ): Promise<void> => {
     if (!picked || !since || !until) return
+    analyzedRef.current = true      // 从这一刻起，切页签/改标签才允许跟着刷新
     setBusy(true)
     try {
       setRankedStale(false)
@@ -309,15 +321,17 @@ export default function WorkbenchPage() {
   useEffect(() => {
     tagFilterRef.current = tagFilter
     setHasMore(false)
-    void loadRanked(byOf(tab), 0, false, tagFilter)
+    /* ⚠️ 只有**用户主动发起过分析**之后，改标签才跟着重拉（2026-10-28）。
+       否则这段会在**挂载时**就触发一次完整计算 —— 用户看到的就是"我没点分析，它在分析"。 */
+    if (analyzedRef.current) void loadRanked(byOf(tab), 0, false, tagFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tagFilter.join('|')])
 
-  /** 切页签：清空已加载行，按新口径从头拉 */
+  /** 切页签：**没分析过就只切 UI**（2026-10-28），分析过才按新口径取数（命中缓存，很快） */
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
     setHasMore(false)
-    void loadRanked(byOf(t), 0, false, tagFilterRef.current)
+    if (analyzedRef.current) void loadRanked(byOf(t), 0, false, tagFilterRef.current)
   }, [loadRanked])
 
   // 标签目录随 /ranked 一起返回（2026-10-25）：不再单独发请求 ——
@@ -381,6 +395,11 @@ export default function WorkbenchPage() {
   }, [])
 
   const running = task.state === 'running'
+  /** 分析任务在跑（与"取数中"是两件事，文案必须分开，2026-10-28） */
+  const taskAnalyzing = task.kind === 'analyze' && task.state === 'running'
+  const analyzePct = taskAnalyzing && (task.progress?.total ?? 0) > 0
+    ? Math.min(100, Math.round(((task.progress!.done) / task.progress!.total) * 100))
+    : null
   /* ★ **窗口内的场次以"切片"为准，不以日期区间为准**（2026-10-19 用户发现
      「窗口 75 场 / 已有 77 场」）。
      窗口是**按场次**切的 75 条，但换成日期区间去库里数，会把**边界那两天整天**都算进去 ——
@@ -392,6 +411,17 @@ export default function WorkbenchPage() {
   const pct = progress && progress.total > 0
     ? Math.min(100, Math.round((progress.done / progress.total) * 100))
     : 0
+
+  /**
+   * 空态卡的正文提示（2026-10-28）：**按当前状态给下一步动作** ——
+   * 原来永远写"请先进行采集"，可界面明明显示"已有 24 / 待采 1"，自相矛盾。
+   */
+  const emptyHint = running ? '采集完成后点「分析」'
+    : taskAnalyzing ? '分析进行中，算完后这里会直接显示结果'
+      : busy ? '正在读取结果…'
+        : toCollect === null ? '先选一个场次窗口'
+          : toCollect > 0 ? `当前窗口还有 ${toCollect} 场没采集 —— 先点「采集」`
+            : '点「分析」生成名单与图表'
 
   /**
    * 结果区的三枚读数胶囊（2026-10-28 第 1 条修订）：**空态也要显示** ——
@@ -653,8 +683,10 @@ export default function WorkbenchPage() {
                   分析结果
                   <span className="wb-card-note" style={{ marginLeft: 8 }}>
                     {running ? '正在采集弹幕…'
-                      : busy ? `正在分析… 已用 ${busySecs} 秒 / 预计 ${estimateSecs(slice.length)} 秒`
-                        : '尚未分析'}
+                      : taskAnalyzing
+                        ? `正在分析… ${task.progress?.done ?? 0}/${task.progress?.total || '?'} 场`
+                        : busy ? `正在读取结果… 已用 ${busySecs} 秒`
+                          : '尚未分析'}
                   </span>
                 </h2>
                 {/* 空态也显示三枚采集读数（2026-10-28 用户口径：跟随图二的骨架）。
@@ -664,13 +696,18 @@ export default function WorkbenchPage() {
               <ResultTabs value={tab} onChange={onTab} />
               {/* 进行中**不换面板**（用户口径：即使正在采集也不改变布局），
                   只在这一条细线上表示"在动"；细节去弹窗/顶栏看。 */}
-              {(running || busy) && (
+              {(running || busy || taskAnalyzing) && (
                 <div className="wb-bar wb-bar-thin" role="progressbar"
                      aria-valuemin={0} aria-valuemax={100}
-                     aria-valuenow={running && (progress?.total ?? 0) > 0 ? pct : undefined}
+                     aria-valuenow={running && (progress?.total ?? 0) > 0 ? pct
+                       : taskAnalyzing && analyzePct != null ? analyzePct : undefined}
                      data-testid="result-thin-progress">
                   <span className="wb-bar-fill"
-                        style={{ width: running && (progress?.total ?? 0) > 0 ? `${pct}%` : '100%' }} />
+                        style={{
+                          width: running && (progress?.total ?? 0) > 0 ? `${pct}%`
+                            : taskAnalyzing && analyzePct != null ? `${analyzePct}%`
+                              : '100%',
+                        }} />
                 </div>
               )}
               {tab === 'compare' ? (
@@ -683,7 +720,7 @@ export default function WorkbenchPage() {
                 </section>
               ) : (
                 <>
-                  <ResultCharts items={[]} pool={null} tab={tab} empty />
+                  <ResultCharts items={[]} pool={null} tab={tab} empty emptyHint={emptyHint} />
                   <RankedTable
                     rows={[]} total={0} hasMore={false} loading={false}
                     onLoadMore={() => {}}
@@ -692,7 +729,7 @@ export default function WorkbenchPage() {
                       .filter(Boolean)}
                     onOpenMember={setMemberUid}
                     tagOptions={[]} tagFilter={[]} onTagFilter={() => {}}
-                    sessionMeta={[]} tab={tab} empty
+                    sessionMeta={[]} tab={tab} empty emptyHint={emptyHint}
                   />
                 </>
               )}

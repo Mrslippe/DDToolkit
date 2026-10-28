@@ -43,6 +43,8 @@ interface Props {
    * 正文换成空态文本，并且**不渲染**搜索/标签/导出（没数据时它们没有意义）。
    */
   empty?: boolean
+  /** 空态正文的提示语（页面按当前状态给"下一步"） */
+  emptyHint?: string
 }
 
 /** 头像失败时退回昵称/uid 首字（开了「隐藏昵称」就只退回 uid 首位 —— 否则那一个
@@ -150,7 +152,7 @@ export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview', by,
   vtuber, since, until, ids, onOpenMember,
   tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta, lagRef,
-  empty,
+  empty, emptyHint,
 }: Props) {
   /** 导出 CSV：走后端拿全量，与页面口径一致（2026-10-28） */
   const [exporting, setExporting] = useState(false)
@@ -206,7 +208,7 @@ export default function RankedTable({
         </div>
         <div className="wb-empty wb-empty-card" data-testid="ranked-empty">
           <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
-          <p>{EMPTY_TEXT.hint}</p>
+          <p>{emptyHint ?? EMPTY_TEXT.hint}</p>
         </div>
       </section>
     )

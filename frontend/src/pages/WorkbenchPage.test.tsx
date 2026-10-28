@@ -397,11 +397,11 @@ describe('空态与页签（2026-10-23）', () => {
     expect(q('[data-testid="chart-empty"]')).toBeTruthy()          // **只保留一张**卡
     expect(q('[data-testid="ranked-table-card"]')).toBeTruthy()
     expect(q('[data-testid="ranked-empty"]')).toBeTruthy()
-    // 内容换成空态文本；标题跟随页签（总览 → 核心度分层）
+    // 正文提示**按状态给下一步动作**（2026-10-28）：这一档还有待采场次 ⇒ 提示先采集
     const text = empty!.textContent ?? ''
     expect(text).toContain('核心度分层')
     expect(text).toContain('暂无数据')
-    expect(text).toContain('请先进行采集')
+    expect(text).toContain('先点「采集」')
     // 空态下没有表格行，也没有搜索/导出这些"点了没反应"的按钮
     expect(q('[data-testid="ranked-table"]')).toBeNull()
     expect(q('[data-testid="export-csv"]')).toBeNull()
