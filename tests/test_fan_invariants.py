@@ -1,16 +1,24 @@
-"""L3：**不变量告警**（2026-10-27）。
+"""L3：**不变量告警**（2026-10-27 起；⑧⑨ 为 2026-10-28 新增）。
 
-与黄金值（钉死具体数字、重采必重录）不同，这里只断言**关系**，因此：
+与"钉死具体数字"的黄金值不同，这里只断言**关系**，因此：
 
 - 数据换了、场次多了，**不需要重录**；
 - 但"采集静默丢数据 / 口径写坏 / 恒等式被破坏"这类问题会被抓住。
+
+⚠️ 2026-10-28：`test_fan_compose.py` 的绝对值黄金值已删（分位是**窗口内**相对的，
+窗口一滑绝对值就变，钉它只能证明"窗口动过"）。它原来覆盖的两件事由这里的 ⑧⑨ 接手 ——
+**只钉关系，不钉数值**。
 
 覆盖：
 1. 每场 C1 内部恒等式（raw 现算 vs stats 声称）；
 2. 全局 Σ 一致性（各用户聚合之和 vs 各场求和）；
 3. 池占比落在合理区间（防止 ACV 或分位算法写崩）；
 4. 每场覆盖率 ≥ 95%（采集完整性的最后一道闸）；
-5. 类型分布不被单一标签吞掉（> 85% 视为判据失效）。
+5. 类型分布不被单一标签吞掉（> 85% 视为判据失效）；
+6. 付费类型存在（付费轴不能整段失效）；
+7. 每个用户的 `pay` == 舰长 + SC + 礼物（不漏加/多加一路）；
+8. 类型判定**不漏也不重**（四档之和 == 池人数，轴表的池人数 == `pool_size_for`）；
+9. 强度与次序自洽（覆盖全池、落在 [0,1]、`rank()` 是池的排列且与强度同序）。
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ import pytest
 from app.services.fan import load_window, resolve_data_dir
 from app.services.fan.axes import build_axis_table
 from app.services.fan.checks import check_identity
-from app.services.fan.compose import type_label
+from app.services.fan.compose import participation_strength, rank, type_label
 from app.services.fan.pool import pool_size_for
 
 VSHORTS = ["弥月", "明前奶绿", "星瞳", "七海"]
@@ -113,3 +121,42 @@ def test_pay_equals_three_components(short: str) -> None:
     bad = [u for u, f in w.users.items()
            if abs(f.pay - (f.gift_amt + f.guard_amt + f.sc_amt)) > 1e-6]
     assert not bad, f"{short} 有 {len(bad)} 人 pay 与三路求和不符：{bad[:3]}"
+
+
+@pytest.mark.parametrize("short", VSHORTS)
+def test_type_labels_cover_pool_exactly_once(short: str) -> None:
+    """⑧ 类型判定**不漏也不重**（2026-10-28 新增，接手原 L2 黄金值里"类型分布"那一行）。
+
+    绝对值不能钉（窗口一滑就变），但"每个进池的人恰好有一个类型"与数据无关：
+    判据写坏（某分支漏 `return`、四档阈值不再互斥）时会当场红。
+    顺带钉住 ACV 池裁剪的**接线**：轴表的池人数必须真的等于 `pool_size_for(w)`。
+    """
+    w = _window(short)
+    pool = pool_size_for(w)
+    t = build_axis_table(w, pool_size=pool)
+    assert len(t) == pool, f"{short} 轴表 {len(t)} 人，与 pool_size_for 的 {pool} 不一致"
+    labels = type_label(t)
+    assert set(labels) == set(t.uids), f"{short} 有进池的人没有类型标签"
+    counts = {k: list(labels.values()).count(k) for k in ("出勤", "互动", "付费", "综合")}
+    assert sum(counts.values()) == pool, f"{short} 四档之和 {sum(counts.values())} ≠ 池 {pool}"
+
+
+@pytest.mark.parametrize("short", VSHORTS)
+def test_strength_and_order_are_self_consistent(short: str) -> None:
+    """⑨ 强度与次序自洽（2026-10-28 新增，接手原 L2 黄金值里"强度前 3"那一行）。
+
+    同样只钉关系：强度覆盖全池且落在 [0,1]；`rank()` 是池的一个**排列**；
+    次序与强度**同序**（不增）—— 最后一条专防"算一套、排另一套"。
+    """
+    w = _window(short)
+    pool = pool_size_for(w)
+    t = build_axis_table(w, pool_size=pool)
+    s = participation_strength(t)
+    assert set(s) == set(t.uids), f"{short} 有进池的人没有强度"
+    assert all(0.0 <= v <= 1.0 for v in s.values()), f"{short} 强度越界（应在 [0,1]）"
+    order = rank(t, s)
+    assert len(order) == pool, f"{short} 次序长度 {len(order)} ≠ 池 {pool}"
+    assert len(set(order)) == pool, f"{short} 次序里有重复 uid"
+    assert set(order) == set(t.uids), f"{short} 次序与池不是同一批人"
+    vals = [s[uid] for uid in order]
+    assert vals == sorted(vals, reverse=True), f"{short} 次序与强度不同序"

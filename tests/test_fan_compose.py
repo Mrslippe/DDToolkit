@@ -2,7 +2,10 @@
 
 覆盖施工计划 §2 P1 的四条验收判据：
 
-- **P1-1 与探针一致**：三 V 的入选池、类型分布、强度前 3 名与冻结的黄金值相等。
+- **P1-1 与探针一致**：~~冻结的黄金值~~ —— **2026-10-28 起这里不再钉绝对值**（理由见下方
+  长注释与 `docs/analysis-model/04-validation.md` §7.2）：分位是**窗口内**相对的，池 / 类型分布 /
+  强度前 3 会随「最近 75 场」的滑动而变，钉住它们只能证明"窗口动过"，证明不了模型没坏。
+  接线正确性改由 L3 不变量（`test_fan_invariants.py` ⑧⑨）与 L1 合成夹具覆盖。
 - **P1-2 分位变换的四条性质**：尺度自由 / 抗异常 / 并列 / 样本内。
 - **P1-3 次序键确定性**：同一输入两次排序逐行相同，且并列处按次级键分开。
 - **P1-4 效标加权防退化**：效标无方差时报错（这是"用错窗口"的信号）。
@@ -16,13 +19,10 @@ import math
 
 import pytest
 
-from app.services.fan import load_window, resolve_data_dir
-from app.services.fan.pool import pool_size_for
 from app.services.fan.axes import (
     AXES,
     AxisError,
     AxisTable,
-    build_axis_table,
     empirical_percentile,
 )
 from app.services.fan.compose import (
@@ -36,64 +36,28 @@ from app.services.fan.compose import (
     value_under_criterion,
 )
 
-# ── P1-1 黄金值（规格口径：**全窗口**入选池；2026-10-20 重录）────────────────
-# 重录原因（两项都要写清，否则以后没人知道为什么变）：
-#   1. 数据回填：`stats` 的场次跨度此前混用本地时间，227 场中 76 场偏 +8h，
-#      按天筛选与"最近 75 场"的取法因此改变；
-#   2. 模型改动：出勤轴由「出席率」改为「出席场次 + 档内首次出场时机」的字典序
-#      —— 见 `axes.build_axis_table` 与 docs/analysis-model/README.md §2.1′。
-GOLDEN = {
-    #            入选池   类型分布                                        强度前 3（uid, S）
-    # 2026-10-27 全量重采后重录：此前数据里混有约 17 场严重污染（弹幕量偏高、时滞基准错）+
-    # 每场最多缺 5,000 条（上游 `hasMore` 提前 false）。这次清空重采、并修掉分页缺口，
-    # 所以三个主播的池与类型分布全部变化 —— **数据侧变化，非模型改动**。
-    "弥月": (1_880,
-             {"出勤": 314, "互动": 218, "付费": 336, "综合": 1_012},
-             [("19871", 0.9988), ("1464721816", 0.9987), ("291150514", 0.9941)]),
-    "明前奶绿": (5_305,
-             {"出勤": 904, "互动": 783, "付费": 1_181, "综合": 2_437},
-             [("13892390", 0.9994), ("431410658", 0.9993), ("259217653", 0.9946)]),
-    "星瞳": (5_577,
-             {"出勤": 850, "互动": 1_077, "付费": 1_084, "综合": 2_566},
-             [("44947708", 0.999), ("47844811", 0.9947), ("38025900", 0.9935)]),
-    # 2026-10-27 新纳入：七海的数据目录是 `bili-434334701`（按 mid 生成），
-    # 之前不在样本清单里、`load_window` 解析不到；已登记进 `LEGACY_VTUBERS`。
-    "七海": (3_664,
-             {"出勤": 601, "互动": 481, "付费": 717, "综合": 1_865},
-             [("7261663", 0.9991), ("611821", 0.9987), ("22931270", 0.998)]),
-}
-
-
-def _require_data() -> None:
-    try:
-        resolve_data_dir()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"没有真实数据，跳过：{exc}")
-
-
-@pytest.mark.parametrize("short", list(GOLDEN))
-def test_outputs_match_golden(short: str) -> None:
-    """P1-1：入选池 / 类型分布 / 强度前 3 与冻结值一致。"""
-    _require_data()
-    try:
-        w = load_window(short, 75)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"{short} 数据不可用：{exc}")
-    if not w.users:
-        pytest.skip(f"{short} 无数据")
-    t = build_axis_table(w, pool_size=pool_size_for(w))
-    assert len(t) == GOLDEN[short][0]
-
-    labels = type_label(t)
-    got = {k: list(labels.values()).count(k) for k in ("出勤", "互动", "付费", "综合")}
-    assert got == GOLDEN[short][1]
-
-    s = participation_strength(t)
-    order = rank(t, s)
-    top3 = [(order[i], round(s[order[i]], 4)) for i in range(3)]
-    for (uid_g, val_g), (uid_w, val_w) in zip(top3, GOLDEN[short][2]):
-        assert uid_g == uid_w
-        assert abs(val_g - val_w) < 1e-3
+# ── 为什么这里**没有**黄金值（2026-10-28）──────────────────────────────────
+# 原先这里是 `GOLDEN = {V: (池, 类型分布, 强度前 3)}`，按 `load_window(V, 75)` 冻结。
+# 删掉的原因不是"懒得维护"，而是**它钉的东西不自洽**：
+#
+#   分位是**窗口内**的经验分位、池是**窗口内**的 3×ACV ⇒ 输出本来就是窗口的函数。
+#   而 `load_window(V, 75)` 每次都会重新解析"最近 75 场"，用户点一次采集窗口就滑一位，
+#   门槛附近几十个人换档（2026-10-28 明前奶绿：出勤/互动/付费/综合 +7/−10/−16/+19，
+#   净 0、池 5305 未变）。于是断言的含义变成"这个随输入滑动的函数，输出必须等于上次
+#   的常数"——它每天红一次，红的时候没有信息量；而唯一的修复办法是"更新数字"，
+#   等于训练大家别去看它，真正的模型回归反而会被淹掉。
+#
+# 谁接了它的活：
+#   - **模型侧**（`Window` → 输出）：L1 合成夹具 `test_fan_fixture_golden.py` —— 夹具
+#     **自带窗口**（显式 `pool_size`），输入真的冻结了，钉绝对值才成立；
+#   - **接线侧**（ACV 池裁剪有没有接上、类型四档之和、强度序）：`test_fan_invariants.py`
+#     的 ⑧⑨，只断言关系，数据怎么变都不用重录；
+#   - **数据侧**（"当前数据算出来是多少"）：`scripts/validate_fan_model.py` 的报告，
+#     带日期、给人看，**不当 CI 断言**。
+#
+# ⚠️ 不要再把绝对值加回来 —— 除非**同时**把窗口身份（`until` / `live_ids`）钉进断言。
+#   仓库里 `tests/test_fan_loader.py` 的 `FROZEN_UNTIL = "2026-10-26"` 就是那个正确做法：
+#   它同样钉绝对值，但窗口用截止日锁死 ⇒ 新采的场次不会移动它。**差额就在那一个参数上。**
 
 
 # ── P1-2 分位变换的四条性质 ────────────────────────────────────────────────
