@@ -109,6 +109,9 @@ class SessionPlan:
     live_id: str
     start_at: str
     stop_at: str | None = None
+    #: 场次标题（2026-10-28，D/C 批的"最细进度"要用它：任务浮窗里显示"读的是哪一场"）。
+    #: 来自本地 `live_sessions.title`；DB 里没有就留空串（前端退回显示开播时间）。
+    title: str = ""
     #: 平台自己报的弹幕总量与收入（质量闸 L2 用；缺省 0 = 平台没给）
     danmakus_count: int = 0
     income: float = 0.0
@@ -838,7 +841,7 @@ def list_sessions_from_db(
 
     try:
         stmt = (
-            select(LiveSession.live_id, LiveSession.start_at)
+            select(LiveSession.live_id, LiveSession.start_at, LiveSession.title)
             .join(Account, Account.id == LiveSession.account_id)
             .where(
                 and_(
@@ -853,14 +856,15 @@ def list_sessions_from_db(
         return []
 
     out: list[SessionPlan] = []
-    for live_id, start_at in rows:
+    for live_id, start_at, title in rows:
         lid = str(live_id or "")
         if len(lid) <= 20:          # 过滤非 uuid（老数据里有别种形态）
             continue
         day = start_at.strftime("%Y-%m-%d") if start_at else ""
         if not day or day < since or day > until:
             continue
-        out.append(SessionPlan(lid, start_at.strftime("%Y-%m-%d %H:%M:%S")))
+        out.append(SessionPlan(lid, start_at.strftime("%Y-%m-%d %H:%M:%S"),
+                               title=str(title or "")))
     out.sort(key=lambda s: s.start_at)
     return out
 
@@ -940,6 +944,7 @@ async def collect(
                 p.phase = "fetch"
                 p.page = p.pages = 0
                 p.sessions_detail.append({"live_id": s.live_id, "start_at": s.start_at,
+                                          "title": s.title,
                                           "state": "running", "records": 0, "reason": ""})
                 def _on_page(pg: int, pgs: int, _p: CollectProgress = p) -> None:
                     _p.page, _p.pages = pg, pgs
