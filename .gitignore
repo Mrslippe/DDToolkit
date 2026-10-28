@@ -130,3 +130,6 @@ _*.log
 .tmp/
 .uv-cache/
 dist-release/
+
+# 结果包（运行期缓存，2026-10-29）：每个 V 一份分析结果，属用户数据，不进仓库
+/datasets/fan-structure/_packages/
