@@ -710,6 +710,12 @@ async def start_analyze(
     since: str | None = Query(None),
     until: str | None = Query(None),
     _: None = Depends(require_module),
+    ids: str | None = Query(
+        None,
+        description="窗口清单（逗号分隔 live_id）。**必须与前端随后 /ranked 的 ids 一致** —— "
+                    "`_compute` 的缓存键含 `live_ids`，不一致就会把同一份数据算两遍"
+                    "（用户实测：分析完成后还要再等十秒「读取结果」）。",
+    ),
 ) -> dict[str, Any]:
     """后台跑一次分析（任务浮窗要看**逐场进度**才有意义）。
 
@@ -730,6 +736,7 @@ async def start_analyze(
         "state": "running", "phase": "load", "done": 0, "total": 0, "current": "",
         "error": "", "started_at": time.time(), "finished_at": None,
     }
+    live_ids = [x.strip() for x in (ids or "").split(",") if x.strip()] or None
     _ANALYZE[v.subdir] = prog
 
     def _on_prog(i: int, n: int, label: str) -> None:
@@ -739,7 +746,9 @@ async def start_analyze(
 
     async def run() -> None:
         try:
-            await asyncio.to_thread(_compute, v.name, window, since, until, None, _on_prog)
+            # ⚠️ 传 `live_ids`：与页面 `/ranked` 的 `ids` 保持一致 ⇒ 缓存键相同，
+            # 分析完页面取结果时是**命中缓存**（毫秒级），不会把同一份数据再算一遍。
+            await asyncio.to_thread(_compute, v.name, window, since, until, live_ids, _on_prog)
             prog.update(state="done", phase="", finished_at=time.time())
         except HTTPException as exc:
             prog.update(state="failed", error=str(exc.detail), finished_at=time.time())

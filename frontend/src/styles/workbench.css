@@ -245,9 +245,41 @@
    页面布局保持空态不动，只用这条 4px 的线表示"在动"。细节在弹窗与顶栏，
    所以它不占竖向空间、也不带文字。 */
 .wb-bar-thin {
-  flex: none;
+  flex: 1;
   height: 4px;
-  margin: 2px 0 4px;
+  margin: 0;
+}
+
+/* 细进度条那一行（2026-10-28）：左标"这是什么进度"、右标数字，
+   与上下卡片留出间距；结束时**渐隐 + 收起高度**，下方卡片平滑顶上（不跳变）。 */
+.wb-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 14px;
+  max-height: 24px;
+  overflow: hidden;
+  transition: opacity 300ms ease, max-height 300ms ease,
+              margin 300ms ease;
+}
+.wb-progress-row.is-leaving {
+  opacity: 0;
+  max-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.wb-progress-label {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+.wb-progress-num {
+  flex: none;
+  min-width: 38px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── 名单表 ───────────────────────────────────────────────────────────── */

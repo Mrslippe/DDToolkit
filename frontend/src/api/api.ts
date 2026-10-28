@@ -1099,11 +1099,15 @@ export const api = {
    * 后台跑一次分析（2026-10-28）：任务浮窗要看**逐场进度**才需要它。
    * `/ranked` 照旧同步可用；这条跑完结果也落进后端 `_CACHE` ⇒ 回工作台直接命中缓存。
    */
-  fanAnalyzeStart: (name: string, opts: { window?: number; since?: string; until?: string }) => {
+  fanAnalyzeStart: (name: string, opts: {
+    window?: number; since?: string; until?: string; ids?: string[]
+  }) => {
     const qs = new URLSearchParams()
     if (opts.window) qs.set('window', String(opts.window))
     if (opts.since) qs.set('since', opts.since)
     if (opts.until) qs.set('until', opts.until)
+    // ⚠️ 窗口清单必须与随后 `/ranked` 的 `ids` 一致，否则后端缓存键不同、要重算一遍
+    if (opts.ids?.length) qs.set('ids', opts.ids.join(','))
     const tail = qs.toString() ? `?${qs.toString()}` : ''
     return request<{ ok: boolean; vtuber: string; window: number; state: string }>(
       `/fan/${encodeURIComponent(name)}/analyze${tail}`, { method: 'POST' })

@@ -249,6 +249,8 @@ export async function startAnalyze(opts: {
   window: number
   since: string
   until: string
+  /** 窗口清单：**必须与页面随后 `/ranked` 的 ids 一致**，否则缓存键不同、结果要重算一遍 */
+  liveIds?: string[]
 }): Promise<void> {
   if (snap.state === 'running') throw new Error('已有任务正在运行，等它结束或先取消')
   stopPolling()
@@ -262,8 +264,12 @@ export async function startAnalyze(opts: {
     state: 'running', progress: stub, error: null, finishedAt: null, result: null,
   })
   try {
-    await api.fanAnalyzeStart(opts.vtuber,
-      { window: opts.window, since: opts.since || undefined, until: opts.until || undefined })
+    await api.fanAnalyzeStart(opts.vtuber, {
+      window: opts.window,
+      since: opts.since || undefined,
+      until: opts.until || undefined,
+      ids: opts.liveIds?.length ? opts.liveIds : undefined,
+    })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     emit({ state: 'failed', error: msg, finishedAt: Date.now() })

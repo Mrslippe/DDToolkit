@@ -413,9 +413,32 @@ export default function WorkbenchPage() {
     : 0
 
   /**
-   * 空态卡的正文提示（2026-10-28）：**按当前状态给下一步动作** ——
-   * 原来永远写"请先进行采集"，可界面明明显示"已有 24 / 待采 1"，自相矛盾。
+   * 细进度条（2026-10-28 用户口径）：**左边写明这是什么进度、右边给数字**，
+   * 与上下卡片留出间距；任务结束后**渐隐并收起高度**，让下方卡片平滑顶上来
+   * （不能瞬间消失 —— 那会让卡片"跳"一下）。
    */
+  const barActive = running || busy || taskAnalyzing
+  const barPct: number | null = running && (progress?.total ?? 0) > 0 ? pct
+    : taskAnalyzing && analyzePct != null ? analyzePct
+      : null
+  const barLabel = running ? '采集进度' : taskAnalyzing ? '分析进度' : '读取进度'
+  const [barLeaving, setBarLeaving] = useState(false)
+  const barWasActive = useRef(false)
+  useEffect(() => {
+    if (barActive) {
+      barWasActive.current = true
+      setBarLeaving(false)
+      return
+    }
+    if (!barWasActive.current) return      // 从没出现过 ⇒ 连退场都不播
+    setBarLeaving(true)
+    const t = window.setTimeout(() => {
+      setBarLeaving(false)
+      barWasActive.current = false
+    }, 320)                                 // 与 CSS 过渡时长一致
+    return () => window.clearTimeout(t)
+  }, [barActive])
+  /** 空态卡的正文提示：**按当前状态给下一步动作**（2026-10-28） */
   const emptyHint = running ? '采集完成后点「分析」'
     : taskAnalyzing ? '分析进行中，算完后这里会直接显示结果'
       : busy ? '正在读取结果…'
@@ -551,6 +574,10 @@ export default function WorkbenchPage() {
             setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
             void startAnalyzeTask({
               vtuber: picked, window: win?.size ?? 75, since, until,
+              // 把窗口清单一起发过去：后端 `_compute` 的缓存键含 `live_ids`，
+              // 与这里随后 `loadRanked` 发的 `ids` 一致才会命中缓存（否则等于算两遍）
+              liveIds: slice.map((s) => String((s as { live_id?: string }).live_id ?? ''))
+                .filter(Boolean),
             }).catch((e: Error) => setErr(friendly(e)))
           }}
                              data-testid="workbench-load">
@@ -696,18 +723,20 @@ export default function WorkbenchPage() {
               <ResultTabs value={tab} onChange={onTab} />
               {/* 进行中**不换面板**（用户口径：即使正在采集也不改变布局），
                   只在这一条细线上表示"在动"；细节去弹窗/顶栏看。 */}
-              {(running || busy || taskAnalyzing) && (
-                <div className="wb-bar wb-bar-thin" role="progressbar"
-                     aria-valuemin={0} aria-valuemax={100}
-                     aria-valuenow={running && (progress?.total ?? 0) > 0 ? pct
-                       : taskAnalyzing && analyzePct != null ? analyzePct : undefined}
+              {(barActive || barLeaving) && (
+                <div className={`wb-progress-row${barActive ? '' : ' is-leaving'}`}
                      data-testid="result-thin-progress">
-                  <span className="wb-bar-fill"
-                        style={{
-                          width: running && (progress?.total ?? 0) > 0 ? `${pct}%`
-                            : taskAnalyzing && analyzePct != null ? `${analyzePct}%`
-                              : '100%',
-                        }} />
+                  <span className="wb-progress-label">{barLabel}</span>
+                  <div className="wb-bar wb-bar-thin" role="progressbar"
+                       aria-label={barLabel}
+                       aria-valuemin={0} aria-valuemax={100}
+                       aria-valuenow={barPct ?? undefined}>
+                    <span className="wb-bar-fill"
+                          style={{ width: barPct != null ? `${barPct}%` : '100%' }} />
+                  </div>
+                  <span className="wb-progress-num">
+                    {barPct != null ? `${barPct}%` : '—'}
+                  </span>
                 </div>
               )}
               {tab === 'compare' ? (
