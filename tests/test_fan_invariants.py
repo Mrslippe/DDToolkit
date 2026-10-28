@@ -23,54 +23,19 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from app.services.fan import load_window, resolve_data_dir
 from app.services.fan.axes import build_axis_table
 from app.services.fan.checks import check_identity
 from app.services.fan.compose import participation_strength, rank, type_label
-from app.services.fan.loader import Window
 from app.services.fan.pool import pool_size_for
 
+# 窗口缓存（`(主播, n, until, …)` 为键，容量 4 + LRU）：
+# 9 条用例 × 4 个 V = 36 次加载，而它们只需要 4 个窗口；不缓存实测 879 s、缓存后 119 s
+# （每 V 约 24 s，其中 99% 是读盘解析，计算只占 1–4 s）。细节与内存代价见该模块 docstring。
+from tests.fan_window_cache import window as _window
+
 VSHORTS = ["弥月", "明前奶绿", "星瞳", "七海"]
-
-# ── 窗口缓存（2026-10-28）──────────────────────────────────────────────────
-# 9 条用例 × 4 个 V = 36 次 `load_window(75)`，而它们其实只需要 **4 个窗口**。
-# 实测一次全量 879 s，其中 **99% 是重复读盘**（每 V 一次约 24 s；纯计算只有 1–4 s/窗口）。
-#
-# 缓存全部 4 个的代价是常驻内存（`tracemalloc` 实测累计：弥月 108 MiB / 明前 413 /
-# 星瞳 738 / 七海 1172 MiB）。接受它，理由三条：
-#   ① 这是**开发期**测试进程，跑完即退；发版门禁里 pytest 与 Rust 构建是**顺序**跑的，
-#      不会叠加；
-#   ② 换来 36 次加载 → 4 次（879 s → 约 2 min），而门禁是每次发版都要跑的；
-#   ③ 用例**只读**窗口（`checks.check_identity` / `build_axis_table` /
-#      `type_label` / `rank` 都不改 `Window`，已逐个核对），共享同一个对象不会串味。
-# 若机器内存紧：`DDTOOLKIT_FAN_TEST_NO_CACHE=1` 关掉缓存，回到逐条重载（慢但省内存）。
-_WINDOW_CACHE: dict[tuple[str, int], Window] = {}
-_NO_CACHE = os.getenv("DDTOOLKIT_FAN_TEST_NO_CACHE") == "1"
-
-
-def _window(short: str, n: int = 75) -> Window:
-    """加载最近 `n` 场的窗口（同一个 `(主播, n)` **只读一次盘**）。"""
-    key = (short, n)
-    hit = None if _NO_CACHE else _WINDOW_CACHE.get(key)
-    if hit is not None:
-        return hit
-    try:
-        resolve_data_dir()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"没有真实数据：{exc}")
-    try:
-        w = load_window(short, n)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"{short} 数据不可用：{exc}")
-    if not w.users:
-        pytest.skip(f"{short} 无数据")
-    if not _NO_CACHE:
-        _WINDOW_CACHE[key] = w
-    return w
 
 
 @pytest.mark.parametrize("short", VSHORTS)

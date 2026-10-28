@@ -13,9 +13,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from app.services.fan import VTUBERS, load_window, resolve_data_dir
+from app.services.fan import VTUBERS, resolve_data_dir
 from app.services.fan.checks import (
     COVERAGE_FLOOR,
     STATUS_DEGRADED,
@@ -32,7 +34,8 @@ from app.services.fan.checks import (
     summarize,
     verdict,
 )
-from app.services.fan.loader import SessionRef
+from app.services.fan.loader import SessionRef, get_vtuber
+from tests.fan_window_cache import window as _window
 
 
 def _session(*, type0: int = 1000, price: float = 100.0, records: int = 2000,
@@ -197,10 +200,7 @@ def test_real_data_c1_never_drops() -> None:
     total = 0
     session_count = 0
     for v in VTUBERS:
-        try:
-            w = load_window(v, 75)
-        except Exception as exc:  # noqa: BLE001
-            pytest.skip(str(exc))
+        w = _window(v)          # 缓存：本文件与 invariants/loader 共享同一批窗口
         if not w.sessions:
             continue
         session_count += len(w.sessions)
@@ -215,7 +215,7 @@ def test_real_data_c1_never_drops() -> None:
 def test_real_data_undated_flag_without_external() -> None:
     """真实数据不传外部源 ⇒ 全部 UNVERIFIED，但**没有一场被弃**。"""
     _require_data()
-    w = load_window("弥月", 75)
+    w = _window("弥月")
     if not w.sessions:
         pytest.skip("无数据")
     vs = check_window(w)
@@ -223,15 +223,36 @@ def test_real_data_undated_flag_without_external() -> None:
     assert all(v.usable for v in vs)
 
 
+def _stats_have_tiny_records(subdir: str, floor: int = 150) -> bool:
+    """**先便宜地问一句**：数据集里到底有没有「记录数很少」的场次（`devlog/714`）。
+
+    原来这个判断发生在 `load_window("明前奶绿", 400, …)` **之后** —— 而那次加载要把该 V
+    四百场的 raw 全解析一遍（实测约 50 s），然后才发现"前提不成立"、`skip` 掉。
+    读 400 个小 `stats/*.json` 只要几十毫秒，所以把前置检查提到加载之前。
+
+    ⚠️ `floor` 故意比断言用的 100 宽（150）：宁可多跑一次昂贵加载，
+    也不要因为字段口径差一点就**跳过一条本该跑的断言**。
+    """
+    stats_dir = resolve_data_dir() / subdir / "stats"
+    for p in stats_dir.glob("*.json"):
+        try:
+            rec = json.loads(p.read_text(encoding="utf-8")).get("records")
+        except Exception:  # noqa: BLE001  — 坏文件交给 loader 的 C1/告警去管
+            continue
+        if isinstance(rec, int) and rec < floor:
+            return True
+    return False
+
+
 def test_real_data_tiny_session_dropped_when_not_prefiltered() -> None:
     """把 loader 的两道预筛关掉，那场只有 2 条记录的场次必须被 C1 判死。"""
     _require_data()
-    try:
-        # 用足够大的 n 把该 V 的全部场次都拿进来：2026-10-20 的场次跨度回填
-        # 改变了"最近 75 场"的成员，那场 2 条记录的场次已不在其中。
-        w = load_window("明前奶绿", 400, require_entry=False, min_records=0)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(str(exc))
+    # 前置检查要在**昂贵加载之前**（见 `_stats_have_tiny_records` 的注释）
+    if not _stats_have_tiny_records(get_vtuber("明前奶绿").subdir):
+        pytest.skip("当前数据集里没有 records<100 的场次（前置检查，未加载窗口）")
+    # 用足够大的 n 把该 V 的全部场次都拿进来：2026-10-20 的场次跨度回填
+    # 改变了"最近 75 场"的成员，那场 2 条记录的场次已不在其中。
+    w = _window("明前奶绿", 400, require_entry=False, min_records=0)
     if not w.sessions:
         pytest.skip("无数据")
     vs = check_window(w)

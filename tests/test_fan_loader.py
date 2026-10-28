@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from app.services.fan import FanDataError, load_window, resolve_data_dir, summary
+from tests.fan_window_cache import window as _window
 from app.services.fan.loader import VTUBERS, get_vtuber
 
 # ── P0-1 与探针一致 ─────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ def test_matches_probe_golden_values(v) -> None:
     _data_dir_or_skip()
     if not (resolve_data_dir() / v.subdir / "stats").is_dir():
         pytest.skip(f"{v.short} 的数据目录不存在")
-    s = summary(load_window(v, 75, until=FROZEN_UNTIL))
+    s = summary(_window(v, 75, until=FROZEN_UNTIL))
     got = (s["sessions"], s["users"], s["att_total"], s["m_total"],
            s["sc_total"], s["pay_total"])
     want = GOLDEN[v.subdir]
@@ -67,7 +68,7 @@ def test_matches_probe_golden_values(v) -> None:
 def test_matches_probe_users_with_zero_attendance_flags() -> None:
     """P0-1 补充：探针从不对没有 raw 的场次计出席 —— 每个用户 `att_n` 必须 ≥ 1。"""
     _data_dir_or_skip()
-    w = load_window("弥月", 75)
+    w = _window("弥月")
     if not w.users:
         pytest.skip("无数据")
     assert all(u.att_n >= 1 for u in w.users.values())
