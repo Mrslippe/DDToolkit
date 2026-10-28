@@ -586,7 +586,12 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
 
       <div className="wb-charts-viewport">
         <div className="wb-charts-pages" data-page={cur}>
-          <div className="wb-charts-page" key={`${tab}-${cur}-${dataStamp ?? ''}`}>
+          {/* key 只跟**数据指纹**走（2026-10-29）：
+              · 不能再带 `tab` —— 切页签时 tab 变了会重挂载一次，随后请求回来 `by` 又变
+                再重挂载一次 ⇒ 用户看到"卡片快速闪动两次"；
+              · 也不能带 `by`（同上）。
+              数据变了 ⇒ 重挂载 ⇒ 播入场动画；只换排序 ⇒ 图表原地不动（它本来就不依赖 `by`）。 */}
+          <div className="wb-charts-page" key={`${cur}-${dataStamp ?? ''}`}>
             {pages[cur]?.map((c) => (
               <section
                 className="wb-card wb-chart-card" key={c.key}

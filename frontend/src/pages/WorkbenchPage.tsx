@@ -382,10 +382,14 @@ export default function WorkbenchPage() {
     off = 0,
     append = false,
     tags?: string[],
+    /** `quiet` = 只换排序口径（切页签）：**不翻 `busy`**
+     *  —— 否则采集/分析那两枚按钮会跟着灰一下再亮回来，看起来就是"闪了两次"
+     *  （2026-10-29 用户报）。 */
+    opts?: { quiet?: boolean },
   ): Promise<void> => {
     if (!picked || !since || !until) return
     analyzedRef.current = true      // 从这一刻起，切页签/改标签才允许跟着刷新
-    setBusy(true)
+    if (!opts?.quiet) setBusy(true)
     const ids = slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)
     try {
       setRankedStale(false)
@@ -412,7 +416,7 @@ export default function WorkbenchPage() {
       setErr(friendly(e as Error))
       if (!append) setRanked(null)
     } finally {
-      setBusy(false)
+      if (!opts?.quiet) setBusy(false)
     }
   }, [picked, since, until, slice, winSize])
 
@@ -440,7 +444,8 @@ export default function WorkbenchPage() {
     const ids = slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)
     const cur = `${winSize}|${since}|${until}|${ids.join(',')}`
     if (analyzedRef.current && cur === rankedBasisRef.current) {
-      void loadRanked(byOf(t), 0, false, tagFilterRef.current)
+      // `quiet`：切页签只是换排序口径 ⇒ 不翻 busy（按钮不闪）、不重挂载图表
+      void loadRanked(byOf(t), 0, false, tagFilterRef.current, { quiet: true })
     } else if (analyzedRef.current) {
       setRankedStale(true)      // 结果基于旧参数：明确标出来，不偷算
     }
@@ -812,10 +817,11 @@ export default function WorkbenchPage() {
                      表格另有一条 stale 标注说明"结果基于旧区间"。 */
                   <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
                                 attBins={ranked.att_bins} charts={ranked.charts}
-                                /* `dataStamp` 决定卡片**重挂载**，而重挂载是入场动画的唯一触发点
-                                   （2026-10-28：别把 `by` 从这里去掉 —— 去掉后切页签不再重挂载，
-                                   用户看到的就是"动画不见了"）。 */
-                                dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
+                                /* `dataStamp` 决定卡片**重挂载**，而重挂载是入场动画的唯一触发点。
+                                   ⚠️ 只放**数据**指纹（场次 + 入池人数）：
+                                   带上 `by` 时切页签会先因 `tab` 换 key、响应回来又因 `by` 换 key
+                                   ⇒ 连播两次动画（2026-10-29 用户报"卡片快速闪动两次"）。 */
+                                dataStamp={`${ranked.sessions}-${ranked.total_in_pool}`} />
                 )}
                 {tab !== 'compare' && <RankedTable
                   vtuber={picked}

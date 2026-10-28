@@ -549,6 +549,18 @@ describe('空态与页签（2026-10-23）', () => {
     expect(q('[data-testid="ranked-table"]')).toBeTruthy()
   })
 
+  it('★ 切页签不该翻 busy（否则采集/分析按钮会闪一下，2026-10-29 用户报）', async () => {
+    await analyse()
+    fanRanked.mockReturnValue(new Promise(() => {}))     // 让请求停在途中
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="tab-payment"]')!.click()
+    })
+    await act(async () => { await Promise.resolve() })
+    // 请求在途，但页面**不进入忙态**：没有细进度线，按钮也不该被禁
+    expect(q('[data-testid="result-thin-progress"]')).toBeNull()
+    expect(q<HTMLButtonElement>('[data-testid="workbench-load"]')!.disabled).toBe(false)
+  })
+
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
     await analyse()
     const more = q<HTMLButtonElement>('[data-testid="ranked-more"]')!
