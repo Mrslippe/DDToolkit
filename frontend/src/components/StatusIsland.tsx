@@ -791,7 +791,14 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
            顺手把通知消掉会让人回头找不到（例如受限项要反复对照）。
            ⚠️ `sliding` 起就不再接受点击（与 CSS 的 `pointer-events:none` 同一口径）：
            否则"滑出中再点一下"会在动画里又触发一次已读。 */
-        onClick={canAck && !n.sliding && !n.leaving ? () => onAction('dismiss', n) : undefined}
+        onClick={
+          /* 工作台采集（2026-10-28，D 批）：这条**不是**"可已读的通知"，而是
+             "现在正在发生的事" ⇒ 点它要**打开任务浮窗**看细节，而不是把进度顺手消掉
+             （消掉了就找不回来 —— 它也压根不在可 ack 之列）。 */
+          n.id === 'progress-fan' && !n.sliding && !n.leaving
+            ? () => onAction('open-task', n)
+            : canAck && !n.sliding && !n.leaving ? () => onAction('dismiss', n) : undefined
+        }
       >
         <span className={`si-item-icon k-${n.kind}`}>{iconFor(n)}</span>
         <span className="si-item-main">

@@ -325,6 +325,30 @@ def compose_task_text(task_label: str, who: str | None = None,
     return " - ".join(parts)
 
 
+def _fan_progress() -> dict | None:
+    """运行中的**粉丝采集**任务（2026-10-28，D 批）。
+
+    ⚠️ 懒导入：`routers/fan.py` 在导入期会拉起整条 fan 服务链，而 notices 被
+    `routers/vtuber.py` 在模块级导入 —— 写成顶层 import 就是一条循环依赖。
+    导入失败一律当"没有任务"（顶栏少一条进度，好过整个壳起不来）。
+    """
+    try:
+        from app.routers import fan as fan_router
+
+        return fan_router.tasks_snapshot()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _any_manual_running(status: dict) -> bool:
+    """有**用户手动发起**的任务在跑吗（关窗二次确认 / 忙按钮都读它）。
+
+    2026-10-28：把 fan 采集也算进来 —— 正在采几百场弹幕时关窗，和正在抓帖子一样该拦一下。
+    ⚠️ 只算**采集**：分析是纯计算、断了可重来，不值得拦关窗。
+    """
+    return bool(status.get("manual_running")) or _fan_progress() is not None
+
+
 def _progress_notices(status: dict, now_ms: int) -> list[dict]:
     out: list[dict] = []
     for key, label_key in (("post", "task"), ("account", "task")):
@@ -353,6 +377,17 @@ def _progress_notices(status: dict, now_ms: int) -> list[dict]:
             "source": "第三方同步",
             "text": f"正在同步{ext.get('label') or '第三方数据'}",
             "createdAt": int(ext.get("started_at") or now_ms),
+        })
+    # 粉丝采集（2026-10-28）：与上面几条同属 `progress` 状态类，随任务存活、不许 ack。
+    # 前端的浮窗入口就挂在这个 id 上（点胶囊 → 打开任务浮窗）。
+    fan = _fan_progress()
+    if fan:
+        out.append({
+            "id": "progress-fan", "kind": "progress", "form": FORM_STATE,
+            "source": "工作台采集",
+            "text": compose_task_text(str(fan.get("label") or "采集弹幕"),
+                                      fan.get("who") or None),
+            "createdAt": int(fan.get("started_at") or now_ms),
         })
     return out
 
@@ -516,5 +551,5 @@ def build_notices(db: Session, *, status: dict | None = None,
 
     notices = [_normalize(n) for n in notices]
     notices.sort(key=lambda n: -KIND_PRIORITY.get(n["kind"], 0))
-    manual_running = bool(st.get("manual_running"))
+    manual_running = _any_manual_running(st)
     return {"now": now, "notices": notices, "manual_running": manual_running}

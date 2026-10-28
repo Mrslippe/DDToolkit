@@ -21,6 +21,7 @@ import { useIsMaximized } from '../hooks/useIsMaximized'
 import { useShellHidden } from '../hooks/useShellHidden'
 import { useTrayStatus } from '../hooks/useTrayStatus'
 import { useLowSpaceNotice } from '../hooks/useLowSpaceNotice'
+import { openTaskWindow } from '../hooks/useFanTask'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
@@ -529,6 +530,9 @@ export default function TopBar() {
       return
     }
     if (kind === 'login') { setLoginOpen(true); return }
+    /* 工作台采集那条进度（2026-10-28，D 批）：点它就打开任务浮窗。
+       ⚠️ 不是"已读"语义 —— 任务还在跑，进度会继续更新。 */
+    if (kind === 'open-task') { openTaskWindow(); return }
     if (kind === 'dismiss') {
       ackNotice(notice)
       return

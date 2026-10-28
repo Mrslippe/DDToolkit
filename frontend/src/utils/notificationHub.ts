@@ -19,6 +19,8 @@ export type NoticeKind = 'alert' | 'progress' | 'report' | 'message'
  *
  *  `ack-all`（L1）：「一键已读」—— 只清「需要处理」那一组（面板里那一组标题右侧的按钮）。 */
 export type NoticeActionKind = 'open-report' | 'open-limits' | 'login' | 'dismiss' | 'ack-all'
+  /** 点「工作台采集」那条进度 → 打开任务浮窗（2026-10-28，D 批） */
+  | 'open-task'
 
 export interface NoticeAction {
   label: string

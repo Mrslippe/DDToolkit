@@ -630,6 +630,27 @@ async def start_collect(
             "state": prog.state, "planned": len(sessions), "source": source}
 
 
+def tasks_snapshot() -> dict[str, Any] | None:
+    """给顶栏 `notices` 用：当前**运行中**的 fan 任务一行摘要（2026-10-28，D 批）。
+
+    没有运行中的任务 ⇒ `None`（**不占顶栏**：顶栏只放"现在正在发生的事"）。
+    ⚠️ 为什么不复用 `/fan/collect/status` 端点：那个要过 `require_module` 与 token，
+    而 notices 是**服务端内部**合成，走函数调用更直接、也不需要再绕一次 HTTP。
+    """
+    for prog in list(_TASKS.values()):
+        if getattr(prog, "state", "") != "running":
+            continue
+        total = int(getattr(prog, "total", 0) or 0)
+        done = int(getattr(prog, "done", 0) or 0)
+        tail = f"{done}/{total} 场" if total > 0 else (getattr(prog, "current", "") or "")
+        return {
+            "label": "采集弹幕",
+            "who": f"{prog.vtuber} {tail}".strip(),
+            "started_at": float(getattr(prog, "started_at", 0) or 0),
+        }
+    return None
+
+
 @router.get("/fan/collect/status")
 def collect_status(
     vtuber: str | None = Query(None),
