@@ -29,6 +29,7 @@ export function usePrefs() {
     theme: 'light', close_action: 'ask', widget_enabled: 'off', fan_workbench: 'off',
     widget_click_through: 'off', widget_hide_fullscreen: 'on',
     vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
+    hide_nicknames: 'off',
   })
   const [specs, setSpecs] = useState<PrefsSpec[]>([])
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -53,7 +54,8 @@ export function usePrefs() {
       setValues({
         theme: 'light', close_action: 'ask',
         widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
-        vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT), fan_workbench: 'off',
+        vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
+        fan_workbench: 'off', hide_nicknames: 'off',
         group_badge: GROUP_BADGE_DEFAULT,
         ...r.values,
       })

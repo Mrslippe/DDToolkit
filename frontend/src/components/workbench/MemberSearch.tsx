@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { api, resolveAsset } from '../../api/api'
 import type { FanSearchHit } from '../../api/types'
+import { shownName, useHideNicknames } from '../../utils/hideNicknames'
 
 interface Props {
   vtuber: string
@@ -22,6 +23,10 @@ export default function MemberSearch({ vtuber, since, until, ids, onPick }: Prop
   const [hits, setHits] = useState<FanSearchHit[]>([])
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement | null>(null)
+
+  /** 「隐藏昵称」（2026-10-28）：下拉条目只显示 uid（**仍可按昵称搜** ——
+   *  搜的是后端，隐藏的只是显示；把搜索也禁掉会让人找不到人） */
+  const hide = useHideNicknames()
 
   useEffect(() => {
     const needle = q.trim()
@@ -50,7 +55,7 @@ export default function MemberSearch({ vtuber, since, until, ids, onPick }: Prop
       <Search className="search-float-icon" />
       <input
         data-testid="ranked-search"
-        placeholder="搜索 uid 或昵称"
+        placeholder={hide ? '搜索 uid' : '搜索 uid 或昵称'}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => q.trim() && setOpen(true)}
@@ -69,7 +74,7 @@ export default function MemberSearch({ vtuber, since, until, ids, onPick }: Prop
               >
                 <img className="wb-avatar" src={resolveAsset(h.avatar) ?? ''} alt=""
                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }} />
-                <span className="wb-search-name">{(h.name || h.uid).slice(0, 14)}</span>
+                <span className="wb-search-name">{shownName(h.uid, h.name, hide).slice(0, 14)}</span>
                 <span className="wb-search-meta">{h.type} · {h.strength.toFixed(3)}</span>
               </button>
             </li>

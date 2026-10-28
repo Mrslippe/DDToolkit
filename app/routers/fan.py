@@ -290,11 +290,16 @@ def _chart_data(win, table, payload: dict) -> dict[str, Any]:
         # ⚠️ 不要在这里截断：图例的截断交给前端 CSS（可换行）。
         # 之前 `[:8]` 把 "AoineKo青猫" 截成 "AoineKo青"，看起来像"昵称被裁"（2026-10-27）。
         labels = [f"{(users[u].name or u)}" for u, _ in head]
+        # `uids` 与 `labels` **等长同序**（2026-10-28）：前端在设置里开了「隐藏昵称」时
+        # 直接拿它替换图例/饼图上的文字。`其他 N 人` 那条没有对应的人 ⇒ 补 `None`，
+        # 保持下标对齐（前端按下标取，错一位就会张冠李戴）。
+        uids: list[str | None] = [u for u, _ in head]
         values = [round(v, 2) for _, v in head]
         if tail > 0:
             labels.append(f"其他 {len(items) - top} 人")
+            uids.append(None)
             values.append(round(tail, 2))
-        return {"labels": labels, "values": values}
+        return {"labels": labels, "values": values, "uids": uids}
 
     pay_split_top = _top_split({uid: float(users[uid].pay) for uid in pool_set})
     msg_split_top = _top_split({uid: float(users[uid].m) for uid in pool_set})

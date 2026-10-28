@@ -7,6 +7,7 @@ import MemberSearch from './MemberSearch'
 import TagFilter from './TagFilter'
 import TagPills from './TagPills'
 import AttendanceBits from './AttendanceBits'
+import { shownInitial, shownName, useHideNicknames } from '../../utils/hideNicknames'
 
 interface Props {
   rows: FanRankedRow[]
@@ -38,10 +39,11 @@ interface Props {
   lagRef?: number[]
 }
 
-/** 头像失败时退回昵称/uid 首字 */
-function Avatar({ row }: { row: FanRankedRow }) {
+/** 头像失败时退回昵称/uid 首字（开了「隐藏昵称」就只退回 uid 首位 —— 否则那一个
+ *  汉字照样把真人昵称漏出来，开关等于没用） */
+function Avatar({ row, hide }: { row: FanRankedRow; hide: boolean }) {
   const [bad, setBad] = useState(false)
-  const label = (row.name || row.uid).slice(0, 1).toUpperCase()
+  const label = shownInitial(row.uid, row.name, hide)
   // ⚠️ 必须用 resolveAsset 拼 apiBase：相对路径会落到页面来源（tauri://localhost / 5173）。
   // 也只走本地代理 —— danmakus 的 CDN 在我们这儿 403，先试它只会把错误刷一遍。
   const src = resolveAsset(row.avatar)
@@ -164,6 +166,9 @@ export default function RankedTable({
   }
   const sentinel = useRef<HTMLDivElement | null>(null)
 
+  /** 「隐藏昵称」（2026-10-28）：名单里只显示 uid */
+  const hide = useHideNicknames()
+
   useEffect(() => {
     const el = sentinel.current
     if (!el || !hasMore || typeof IntersectionObserver === 'undefined') return
@@ -266,10 +271,12 @@ export default function RankedTable({
                     style={{ animationDelay: `${Math.min(i, 12) * 18}ms` }}
                     onClick={() => onOpenMember(r.uid)}>
                   <td className="wb-table-rank">{r.rank}</td>
-                  <td><Avatar row={r} /></td>
-                  <td className="wb-table-name" title={r.uid}>
-                    {(r.name || r.uid).slice(0, 18)}
-                    <span className="wb-table-uid-sub">{r.uid}</span>
+                  <td><Avatar row={r} hide={hide} /></td>
+                  <td className="wb-table-name" data-hide-nickname={hide ? '1' : '0'}
+                      title={hide ? r.uid : (r.name || r.uid)}>
+                    {shownName(r.uid, r.name, hide).slice(0, 18)}
+                    {/* 开了隐藏昵称后主文字已经是 uid，副行再写一遍就是重复 */}
+                    {!hide && <span className="wb-table-uid-sub">{r.uid}</span>}
                   </td>
                   <td className="wb-table-strength">{r.strength.toFixed(3)}</td>
                   {tab === 'overview' && <>

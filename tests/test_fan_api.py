@@ -194,6 +194,25 @@ def test_ranked_rows_carry_axes_and_attendance(client: TestClient) -> None:
     assert 0.0 <= row["att_rate"] <= 1.0
 
 
+def test_contribution_split_carries_aligned_uids(client: TestClient) -> None:
+    """贡献榜的 `uids` 必须与 `labels` **等长同序**（2026-10-28，「隐藏昵称」开关的依赖）。
+
+    前端的开关是按下标拿 `uids[i]` 顶掉 `labels[i]` 的 ⇒ 一旦错位，图上就会出现
+    "这个鲸鱼的名字配那个人的金额"。`其他 N 人` 那条没有对应的人，必须是 `None`
+    （不是空串、也不能省略 —— 省略会让长度对不上）。
+    """
+    body = client.get("/fan/弥月/ranked", params={"by": "payment", "window": 12}).json()
+    for key in ("pay_split_top", "msg_split_top"):
+        split = body["charts"][key]
+        assert split["labels"], f"{key}：合成数据里有人有付费/弹幕，贡献榜不该是空的"
+        assert len(split["uids"]) == len(split["labels"]) == len(split["values"]), key
+        for uid, label in zip(split["uids"], split["labels"]):
+            if label.startswith("其他 "):
+                assert uid is None, f"{key}：合计项不该挂 uid（{label}）"
+            else:
+                assert isinstance(uid, str) and uid, f"{key}：{label} 缺 uid"
+
+
 def test_ranked_limit_is_respected(client: TestClient) -> None:
     r = client.get("/fan/弥月/ranked", params={"by": "strength", "window": 12, "limit": 1})
     assert len(r.json()["items"]) == 1

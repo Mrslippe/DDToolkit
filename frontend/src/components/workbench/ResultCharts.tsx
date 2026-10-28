@@ -6,6 +6,7 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import type { FanRankedRow } from '../../api/types'
+import { useHideNicknames } from '../../utils/hideNicknames'
 
 echarts.use([BarChart, LineChart, PieChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -39,8 +40,8 @@ interface Props {
     lag_hist?: { labels: string[]; counts: number[] }
     msg_hist?: { labels: string[]; counts: number[] }
     spam_split?: Record<string, number>
-    pay_split_top?: { labels: string[]; values: number[] }
-    msg_split_top?: { labels: string[]; values: number[] }
+    pay_split_top?: { labels: string[]; values: number[]; uids?: (string | null)[] }
+    msg_split_top?: { labels: string[]; values: number[]; uids?: (string | null)[] }
     msg_pct?: { pcts: number[]; means: number[] }
   }
 }
@@ -167,8 +168,25 @@ const axisBase = (labels: string[], values: number[], name: string): EChartsCore
 export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp }: Props) {
   const [page, setPage] = useState(0)
 
+  /** 「隐藏昵称」（2026-10-28）：贡献榜那两张图的图例/饼图扇区文字换成 uid */
+  const hide = useHideNicknames()
+
   const cards = useMemo<Card[]>(() => {
     const out: Card[] = []
+
+    /**
+     * 贡献榜的显示名（2026-10-28）。
+     *
+     * `labels` 是后端按昵称拼的（`其他 N 人` 那条没有对应的人）；`uids` 与它**等长同序**，
+     * 尾部那条是 `null`。开了「隐藏昵称」就用 uid 顶掉昵称，尾部那条照旧显示
+     * 「其他 N 人」（它不是某个人）。`uids` 缺失（老响应/旧快照）时**退回昵称** ——
+     * 宁可显示昵称，也不要把它渲染成 `undefined`。
+     */
+    const displayLabel = (index: number, labels: string[], uids?: (string | null)[]) => {
+      const name = labels[index] ?? ''
+      if (!hide) return name
+      return uids?.[index] || name
+    }
 
     if (tab === 'overview' && pool) {
       out.push({
@@ -278,10 +296,13 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
       // ① 弹幕量贡献（Top 8 + 其他）：把"互动鲸鱼"单独展示
       const mc = charts?.msg_split_top
       if (mc?.values?.length) {
+        const data = mc.values.map((value, i) => ({
+          name: displayLabel(i, mc.labels, mc.uids), value,
+        }))
         out.push({
           key: 'msgshare', title: '弹幕量贡献', note: 'Top 8 + 其他',
-          option: pieOption(mc.labels.map((name, i) => ({ name, value: mc.values[i] }))),
-          legend: mc.labels.map((name, i) => ({ name, value: mc.values[i] })),
+          option: pieOption(data),
+          legend: data,
         })
       }
       // ② 场均弹幕 vs 分位（折线，横轴取对数）
@@ -335,10 +356,13 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
 
     if (tab === 'payment' && charts?.pay_split_top?.values?.length) {
       const pc = charts.pay_split_top
+      const data = pc.values.map((value, i) => ({
+        name: displayLabel(i, pc.labels, pc.uids), value,
+      }))
       out.push({
         key: 'payshare', title: '付费贡献', note: 'Top 8 + 其他（鲸鱼单列）',
-        option: pieOption(pc.labels.map((name, i) => ({ name, value: pc.values[i] })), true),
-        legend: pc.labels.map((name, i) => ({ name, value: pc.values[i] })),
+        option: pieOption(data, true),
+        legend: data,
         money: true,
       })
     }
@@ -382,7 +406,7 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
       })
     }
     return out
-  }, [items, pool, tab, attBins, charts])
+  }, [items, pool, tab, attBins, charts, hide])
 
   const PER_PAGE = 2
   const pages = useMemo(() => {

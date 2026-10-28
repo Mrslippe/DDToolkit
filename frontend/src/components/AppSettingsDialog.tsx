@@ -30,6 +30,7 @@ import type {
 import { usePrefs } from '../hooks/usePrefs'
 import { applyEmojiBigSize, clampEmojiBig } from '../utils/emojiSize'
 import { GROUP_BADGE_DEFAULT, applyGroupBadge } from '../utils/groupBadgePref'
+import { HIDE_NICKNAMES_DEFAULT, applyHideNicknames } from '../utils/hideNicknames'
 import { PostTextInline, seedEmojiCache } from './common/PostText'
 
 /** 后端 `/emoji/sample` 给的一枚示例表情（`devlog/487`） */
@@ -550,6 +551,27 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /**
+   * 隐藏昵称（2026-10-28，用户口径：「隐藏用户昵称、一律改用 uid 显示，并在设置窗口
+   * 加一个开关控制」）。
+   *
+   * 与 `pickGroupBadge` 同一套路：写进偏好的同时**立刻广播**（`applyHideNicknames`
+   * 通知所有订阅的工作台组件重渲染）—— 因为开关的全部意义就是"现在马上别露昵称"，
+   * 只落库不广播的话，用户得关掉设置窗、再切一次页签才看得到效果。
+   * ⚠️ 落库失败要把开关**退回去**：否则界面显示"开"、重启又变回"关"。
+   */
+  const pickHideNicknames = async (next: string) => {
+    setThemeError(null)
+    const prev = prefs.values.hide_nicknames ?? HIDE_NICKNAMES_DEFAULT
+    applyHideNicknames(next)
+    try {
+      await prefs.setPref('hide_nicknames', next)
+    } catch (e) {
+      applyHideNicknames(prev)
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */  const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
     let next = i
@@ -950,6 +972,40 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             aria-checked={on}
                             aria-label={sp.label}
                             onClick={() => void pickGroupBadge(on ? 'off' : 'on')}
+                          >
+                            <i />
+                            {on ? '开' : '关'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* 隐藏昵称（2026-10-28 用户口径）：「隐藏用户昵称、一律改用 uid 显示，
+                      并在设置窗口加一个开关控制」。与上面企划徽章同一个 `.aps-switch` 形态
+                      （二值偏好），取值仍由后端 `options` 下发，界面不写死 key。
+                      ⚠️ 它改的是**工作台里的文字**（名单/详情/搜索/图例/交集表），
+                      那五处各自订阅 `useHideNicknames()` ⇒ 这里一广播就全部重渲染。 */}
+                  {prefs.specOf('hide_nicknames') && (() => {
+                    const sp = prefs.specOf('hide_nicknames')!
+                    const on = prefs.values.hide_nicknames === 'on'
+                    return (
+                      <div className="aps-row" data-setting="hide_nicknames">
+                        <div className="aps-row-main">
+                          <span className="aps-label">{sp.label}</span>
+                          <span className="aps-note">{sp.note}</span>
+                        </div>
+                        <div className="aps-row-ctl">
+                          <button
+                            type="button"
+                            id="aps-hide_nicknames"
+                            className={`aps-switch${on ? ' on' : ''}`}
+                            data-hide-nicknames-switch="1"
+                            data-value={on ? '1' : '0'}
+                            role="switch"
+                            aria-checked={on}
+                            aria-label={sp.label}
+                            onClick={() => void pickHideNicknames(on ? 'off' : 'on')}
                           >
                             <i />
                             {on ? '开' : '关'}

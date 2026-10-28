@@ -6,6 +6,7 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { api, resolveAsset } from '../../api/api'
+import { shownName, useHideNicknames } from '../../utils/hideNicknames'
 
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 import type { FanMemberDetail } from '../../api/types'
@@ -154,6 +155,9 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
   const [data, setData] = useState<FanMemberDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
+  /** 「隐藏昵称」（2026-10-28）：标题只显示 uid */
+  const hide = useHideNicknames()
+
   useEffect(() => {
     let alive = true
     setData(null); setErr(null)
@@ -167,9 +171,10 @@ export default function MemberDrawer({ vtuber, uid, since, until, ids, onClose }
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="wb-member-dialog" data-testid="member-drawer">
         <DialogHeader>
-          <DialogTitle>
-            {data?.name || uid}
-            <span className="wb-table-uid-sub">{uid}</span>
+          <DialogTitle data-hide-nickname={hide ? '1' : '0'}>
+            {shownName(uid, data?.name, hide)}
+            {/* 隐藏昵称时主文字已经是 uid，不再重复一遍 */}
+            {!hide && <span className="wb-table-uid-sub">{uid}</span>}
           </DialogTitle>
         </DialogHeader>
 

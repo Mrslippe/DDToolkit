@@ -1683,9 +1683,9 @@ export interface FanRanked {
     msg_hist?: { labels: string[]; counts: number[] }
     spam_split?: { confirmed?: number; suspected?: number; none?: number }
     /** 付费贡献榜（Top 8 + 其他） */
-    pay_split_top?: { labels: string[]; values: number[] }
+    pay_split_top?: { labels: string[]; values: number[]; uids?: (string | null)[] }
     /** 弹幕量贡献榜（Top 8 + 其他） */
-    msg_split_top?: { labels: string[]; values: number[] }
+    msg_split_top?: { labels: string[]; values: number[]; uids?: (string | null)[] }
     /** 场均弹幕 vs 分位（折线） */
     msg_pct?: { pcts: number[]; means: number[] }
   }

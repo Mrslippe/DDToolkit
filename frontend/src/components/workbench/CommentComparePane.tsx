@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link2, Play, Square, Download } from 'lucide-react'
 import { api } from '../../api/api'
 import type { FanCommentOverlap, FanCommentScan, FanCommentUser } from '../../api/types'
+import { shownName, useHideNicknames } from '../../utils/hideNicknames'
 
 /**
  * 对比页 · 帖子评论模式（2026-10-28，P4）。
@@ -33,6 +34,10 @@ export default function CommentComparePane({ vtuber, window, since, until }: Pro
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  /** 「隐藏昵称」（2026-10-28）：交集名单里只显示 uid（导出的 CSV 仍按原口径带昵称，
+   *  设置里那条 note 也这么写的 —— 这个开关管的是**界面显示**） */
+  const hide = useHideNicknames()
 
   const stopPolling = useCallback(() => {
     if (timer.current != null) { clearInterval(timer.current); timer.current = null }
@@ -228,7 +233,7 @@ export default function CommentComparePane({ vtuber, window, since, until }: Pro
                 <tbody>
                   {result.shared.slice(0, 50).map((r) => (
                     <tr key={r.uid}>
-                      <td>{r.name || r.uid}</td>
+                      <td data-hide-nickname={hide ? '1' : '0'}>{shownName(r.uid, r.name, hide)}</td>
                       <td>{r.cnt}</td>
                       <td>{r.sub_cnt || ''}</td>
                       <td>{r.s.toFixed(4)}</td>
