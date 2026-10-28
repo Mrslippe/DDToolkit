@@ -192,14 +192,24 @@ class CollectProgress:
         }
 
 
-def _mark(p: CollectProgress, live_id: str, state: str, records: int, reason: str) -> None:
-    """更新逐场状态（同一个 live_id 只保留一条）。"""
+def _mark(p: CollectProgress, live_id: str, state: str, records: int, reason: str,
+          ms: int | None = None) -> None:
+    """更新逐场状态（同一个 live_id 只保留一条）。
+
+    `ms` = 该场耗时（毫秒，2026-10-28）：任务浮窗要显示"这一场花了多久"。
+    没传就不写（跳过/前置失败没有耗时概念），不要写 0 假装花了 0 毫秒。
+    """
     for item in p.sessions_detail:
         if item.get("live_id") == live_id:
             item.update({"state": state, "records": records, "reason": reason})
+            if ms is not None:
+                item["ms"] = ms
             return
-    p.sessions_detail.append({"live_id": live_id, "start_at": "", "state": state,
-                              "records": records, "reason": reason})
+    entry: dict[str, object] = {"live_id": live_id, "start_at": "", "state": state,
+                                "records": records, "reason": reason}
+    if ms is not None:
+        entry["ms"] = ms
+    p.sessions_detail.append(entry)
 
 class CollectError(Exception):
     """采集失败（可展示给用户）。"""
@@ -948,22 +958,24 @@ async def collect(
                                           "state": "running", "records": 0, "reason": ""})
                 def _on_page(pg: int, pgs: int, _p: CollectProgress = p) -> None:
                     _p.page, _p.pages = pg, pgs
+                _t0 = time.monotonic()          # 单场耗时（2026-10-28，浮窗要显示）
                 _got = await fetch_records(client, s.live_id, with_extra=True,
                                            on_page=_on_page)
                 if _got is None:
                     recs, _extra = None, {}
                 else:
                     recs, _extra = _got
+                _elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 if recs is None:
                     p.failed += 1
-                    _mark(p, s.live_id, "failed", 0, "上游没有返回该场的弹幕")
+                    _mark(p, s.live_id, "failed", 0, "上游没有返回该场的弹幕", _elapsed_ms)
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": "上游没有返回该场的弹幕（可能已下架或接口无数据）"})
                     return
                 if len(recs) < MIN_RECORDS:
                     p.failed += 1
                     _mark(p, s.live_id, "failed", len(recs),
-                          f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）")
+                          f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）", _elapsed_ms)
                     p.failures.append({"live_id": s.live_id, "start_at": s.start_at,
                                        "reason": f"记录太少（{len(recs)} 条，低于下限 {MIN_RECORDS}）"})
                     return
@@ -1026,7 +1038,7 @@ async def collect(
                     _mark(p, s.live_id, "failed", len(recs), "落盘后校验失败")
                     return
                 p.done += 1
-                _mark(p, s.live_id, "ok", len(recs), "")
+                _mark(p, s.live_id, "ok", len(recs), "", _elapsed_ms)
 
         try:
             await asyncio.gather(*(one(s) for s in sessions))
