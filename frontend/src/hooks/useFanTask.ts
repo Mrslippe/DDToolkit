@@ -121,6 +121,7 @@ async function tick(vtuber: string): Promise<void> {
          （2026-10-28 实测：用例里 `items: []` 就把 15 条用例连坐弄红）。 */
       stopPolling()
       emit({ state: 'done', progress: null, result: null, finishedAt: Date.now() })
+      notifyTopBar()          // 让顶栏立刻把"进行中"那颗胶囊撤掉，别等下一拍
       return
     }
     if (p.state === 'running') {
@@ -134,6 +135,7 @@ async function tick(vtuber: string): Promise<void> {
       progress: p, result: p, state, finishedAt: Date.now(),
       error: state === 'failed' ? (p.message || '采集失败（没有更多信息）') : null,
     })
+    notifyTopBar()
   } catch {
     /* 轮询失败不弹窗、不结束任务：下一拍再试（后端重启/网络抖动都靠这个兜住） */
   }
@@ -207,6 +209,7 @@ async function analyzeTick(vtuber: string): Promise<void> {
     if (!a) {
       stopPolling()
       emit({ state: 'done', progress: null, result: null, finishedAt: Date.now() })
+      notifyTopBar()          // 让顶栏立刻把"进行中"那颗胶囊撤掉，别等下一拍
       return
     }
     if (a.state === 'running') {
@@ -219,6 +222,7 @@ async function analyzeTick(vtuber: string): Promise<void> {
       progress: asProgress(a), result: asProgress(a), state, finishedAt: Date.now(),
       error: state === 'failed' ? (a.error || '分析失败（没有更多信息）') : null,
     })
+    notifyTopBar()
   } catch {
     /* 同采集：轮询失败不结束任务，下一拍再试 */
   }
@@ -267,6 +271,7 @@ export function dismissTask(): void {
   if (snap.state === 'running') return
   stopPolling()
   emit({ ...IDLE })
+  notifyTopBar()
 }
 
 /** 打开任务浮窗（顶栏通知点击 / 工作台「查看进度」都走它） */

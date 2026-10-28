@@ -21,7 +21,7 @@ import { useIsMaximized } from '../hooks/useIsMaximized'
 import { useShellHidden } from '../hooks/useShellHidden'
 import { useTrayStatus } from '../hooks/useTrayStatus'
 import { useLowSpaceNotice } from '../hooks/useLowSpaceNotice'
-import { openTaskWindow } from '../hooks/useFanTask'
+import { openTaskWindow, FAN_TASK_EVENT } from '../hooks/useFanTask'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
@@ -151,6 +151,27 @@ export default function TopBar() {
    *  ⚠️ 用 ref 而不是 state：轮询链是 `[]` 依赖的 effect，读 state 会**被闭包钉死在首帧**
    *  （同 `isShellHidden` 那条教训，devlog/095）。 */
   const noticesBusy = useRef(false)
+
+  /**
+   * 工作台任务发起/结束 → **立刻**拉一次通知（2026-10-28 第 3 条改进）。
+   *
+   * 根因：进度胶囊是**后端** `notices.progress-fan` 合成的，而顶栏靠上面那条轮询链取 ——
+   * 用户点完采集要等下一拍（空闲 10s / 忙 3s）才看见，主观就是"点了没反应"。
+   * 这条监听把延迟压到**一次请求**（几十毫秒）。
+   *
+   * ⚠️ 只刷"通知"这一份，不动 fetch-status 与那条链的并发保护：
+   *    一次性请求，不排程、不续链，失败了下次轮询自会补上。
+   */
+  useEffect(() => {
+    const onTaskChanged = () => {
+      void api.getNotices().then((nb) => {
+        setServerNotices(nb.notices)
+        noticesBusy.current = nb.manual_running
+      }).catch(() => { /* 后端不可达：保持上一份，等轮询自愈 */ })
+    }
+    window.addEventListener(FAN_TASK_EVENT, onTaskChanged)
+    return () => window.removeEventListener(FAN_TASK_EVENT, onTaskChanged)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
