@@ -1603,6 +1603,31 @@ export interface FanAnalyzeProgress {
   finished_at: number | null
 }
 
+/** 结果包摘要（2026-10-28）：每个 V 一份，切回该 V 时直接铺结果用 */
+export interface FanPackageMeta {
+  version: number
+  vtuber: string
+  subdir: string
+  window: number
+  since: string | null
+  until: string | null
+  live_ids: string[]
+  sessions: number
+  computed_at: string
+  overview: {
+    pool: number
+    tiers: Record<string, number>
+    /** uid → 层级（对比页的「层级迁移」要用） */
+    uid_tier: Record<string, string>
+    uids: string[]
+  }
+}
+
+/** 整包（含 payload）：切回某个 V 时前端恢复结果用 */
+export interface FanPackage extends FanPackageMeta {
+  payload: FanRanked
+}
+
 export interface FanCollectProgress {
   vtuber: string
   since: string
@@ -1792,6 +1817,8 @@ export interface FanCompareVtuber {
   pool: number
   sessions: number
   tiers: Record<string, number>
+  /** 该 V **自己的结果包**区间（2026-10-28：对比的基本单位是包，不再是请求参数） */
+  package?: { since: string | null; until: string | null; window: number; computed_at: string }
 }
 
 export interface FanComparePair {
@@ -1813,15 +1840,23 @@ export interface FanComparePair {
   tier_table: Record<string, Record<string, number>>
   tier_moves: Record<string, number>
   reading: string
+  /** 两份包的时间区间/窗口不同 ⇒ 交集人数仍可信，但相对量（Jaccard/lift/富集）不可比 */
+  ranges_differ?: boolean
+  comparable?: boolean
 }
 
 export interface FanCompareMulti {
+  /** `packages` = 对比读的是各 V 的结果包（2026-10-28） */
+  basis?: string
   window: number
   since: string | null
   until: string | null
+  /** 任一对配对的区间不同 */
+  ranges_differ?: boolean
   vtubers: FanCompareVtuber[]
   /** 对称方阵：非对角放 `{pair, jaccard, lift, shared}`，对角为 null */
-  matrix: ({ pair: number; jaccard: number; lift: number; shared: number } | null)[][]
+  matrix: ({ pair: number; jaccard: number; lift: number; shared: number;
+            comparable?: boolean } | null)[][]
   pairs: FanComparePair[]
   notes: string[]
   /** 还没采/没数据的主播（逐 V 标注，不拖垮整次请求） */

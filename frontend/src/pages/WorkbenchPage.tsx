@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { ChevronUp } from 'lucide-react'
 import { api } from '../api/api'
 import type {
-  FanActivity, FanCollectProgress, FanRanked, FanRankedRow, FanSessionPreview, FanSortBy, FanVtuber,
+  FanActivity, FanCollectProgress, FanPackage, FanPackageMeta, FanRanked, FanRankedRow,
+  FanSessionPreview, FanSortBy, FanVtuber,
 } from '../api/types'
 import FloatPill from '../components/common/FloatPill'
 import {
@@ -30,6 +31,7 @@ import {
   cancelCollect, dismissTask, startAnalyze as startAnalyzeTask,
   startCollect as startCollectTask, useFanTask,
 } from '../hooks/useFanTask'
+import { findPackage, refreshFanPackages, useFanPackagesIndex } from '../hooks/useFanPackages'
 import '../styles/workbench.css'
 
 /**
@@ -47,6 +49,16 @@ interface VPageState {
   tagFilter: string[]
 }
 const V_STATE = new Map<string, VPageState>()
+
+/**
+ * 清空"按 V 记住的页面状态" —— **只给用例用**（2026-10-28）。
+ *
+ * `V_STATE` 是模块级的（切 V 要保住上一份结果），不重置就会串到下一个用例：
+ * 表现是"这条用例里切到弥月，却看到了上一条留在 V_STATE 里的结果"。
+ */
+export function resetWorkbenchState(): void {
+  V_STATE.clear()
+}
 /** 上次查看的主播：切到别的页面再回来，应回到同一个 V（2026-10-25） */
 let LAST_PICKED = ''
 
@@ -172,6 +184,15 @@ export default function WorkbenchPage() {
   }, [])
 
   // 2) 换主播 ⇒ 重新取热力图与滑杆数据（模块没开时一个 /fan 端点都不许打）
+  /* 结果包（2026-10-28）：每个 V 一份已算好的结果，切回它时直接铺（用户第 1 条） */
+  /** 当前结果来自哪个包（null = 现算的，或还没结果）；用来显示「缓存 · 时刻」与覆盖确认 */
+  const [pkgMeta, setPkgMeta] = useState<FanPackageMeta | null>(null)
+  /** 交给滑杆的"把窗口设成这一组"指令（只认 tick 变化） */
+  const [restore, setRestore] = useState<
+    { start: number; size: number; since: string; until: string; tick: number } | null
+  >(null)
+  const restoringRef = useRef('')
+
   /* 切 V：先把上一个 V 的状态存起来，再恢复目标 V 的（2026-10-25） */
   const prevPicked = useRef<string | null>(null)
   // 用 layoutEffect：状态在**绘制前**就位，避免"先空一帧再填回来"的闪动
@@ -193,8 +214,59 @@ export default function WorkbenchPage() {
     setHasMore(saved?.hasMore ?? false)
     setTagFilter(saved?.tagFilter ?? [])
     setWin(null)          // 交给滑轨按 saved.start/size 重新 emit 正确日期
+    setPkgMeta(null)      // 包由下面那条 effect 在 activity 到位后决定要不要恢复
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked])
+
+  /**
+   * **切回某个 V 时恢复它的结果包**（2026-10-28 用户第 1 条）。
+   *
+   * 为什么等 `activity` 到位再恢复：包里有窗口大小但没有滑杆的 `start` 下标，
+   * 只能用包里的 `live_ids` 在 `activity.recent` 里反查 —— 没有 recent 就跳不准区间。
+   * 会话内已经分析过的（`V_STATE` 里有 ranked）优先：那是用户刚做的选择，别用旧包盖掉。
+   */
+  const pkgList = useFanPackagesIndex()
+  useEffect(() => {
+    if (!picked || !activity || activityOwner !== picked) return
+    if (V_STATE.get(picked)?.ranked) return
+    const meta = findPackage(picked)
+    if (!meta) return
+    const stamp = `${picked}|${meta.computed_at}`
+    if (restoringRef.current === stamp) return
+    restoringRef.current = stamp
+
+    const recent = activity.recent ?? []
+    const ids = new Set(meta.live_ids ?? [])
+    const idx = recent.findIndex(
+      (s) => ids.has(String((s as { live_id?: string }).live_id ?? '')),
+    )
+    const start = idx >= 0 ? idx : Math.max(0, recent.length - meta.window)
+    setWin({ start, size: meta.window, since: meta.since ?? '', until: meta.until ?? '' })
+    /* 日期区间也要跟着跳（用户第 1 条原话："时间区间也默认跳到这个结果对应的区间"）。
+       `win` 只喂数据请求；界面上那行"2026 整年 / 起止日"读的是 `pickedRange`。 */
+    if (meta.since && meta.until) setPickedRange({ from: meta.since, to: meta.until })
+    setRestore({ start, size: meta.window, since: meta.since ?? '', until: meta.until ?? '',
+                 tick: Date.now() })
+    setPkgMeta(meta)
+    analyzedRef.current = true
+    setRankedStale(false)
+    void (async () => {
+      try {
+        const full = await api.fanPackage(picked, true) as FanPackage
+        if (!full?.payload) return
+        setRanked(full.payload)
+        setRows(full.payload.items ?? [])
+        const total = full.payload.list_total ?? full.payload.pool?.size
+          ?? full.payload.total_in_pool
+        const n = full.payload.items?.length ?? 0
+        setHasMore(n > 0 && n < total)
+      } catch {
+        /* 包读不出来（被删/损坏）：退回现算，用户点「分析」即可 */
+        setPkgMeta(null)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, activity, activityOwner, pkgList.length])
 
   useEffect(() => {
     if (enabled !== true || !picked) return
@@ -239,6 +311,10 @@ export default function WorkbenchPage() {
     /* 分析在后台算完（2026-10-28）：结果已在后端 `_CACHE` 里 ⇒ 这里只是**取回来**。
        ⚠️ 仍然不自动分析采集结果 —— 这是"分析结束了要显示"，不是"采集完了自己分析"。 */
     if (task.kind === 'analyze') {
+      /* 刚算完 ⇒ 盘里已经写入了新包：刷新索引（切回这个 V 时才能直接铺），
+         并把「缓存于」标记清掉 —— 这是**新算的**，不是上次留下的。 */
+      void refreshFanPackages()
+      setPkgMeta(null)
       void loadRanked('strength', 0, false, tagFilterRef.current)
       return
     }
@@ -546,7 +622,8 @@ export default function WorkbenchPage() {
                            setPickedRange(null)
                          }} />
                 <WindowSlider sessions={activity.recent} onChange={onWindow}
-                              stateKey={picked} dataOwner={activityOwner} coverTick={coverTick} />
+                              stateKey={picked} dataOwner={activityOwner}
+                              coverTick={coverTick} restore={restore} />
                 {/* 采集 / 分析：**这张卡的最右下角**（用户 2026-10-19 第 1 条）——
                     它们属于"对这个窗口做什么"，不属于结果区。 */}
                 <div className="wb-hm-actions">
@@ -584,6 +661,17 @@ export default function WorkbenchPage() {
                   <FloatPill size="md" shape="text" disabled={!win || busy || anyTaskRunning}
                              onClick={() => {
             if (slice.length > BIG_WINDOW) { setBigWinAsk(slice.length); return }
+            /* 覆盖确认（2026-10-28 用户第 4 条）：一个 V 只有一个包位，
+               新分析会**整包覆盖**旧结果 —— 先把"覆盖哪一组"说清楚。 */
+            if (pkgMeta && (pkgMeta.window !== winSize
+                            || (pkgMeta.since ?? '') !== since
+                            || (pkgMeta.until ?? '') !== until)) {
+              const ok = window.confirm(
+                `将用 ${since} ~ ${until}（${winSize} 场）的新结果覆盖`
+                + ` ${pkgMeta.since || '不限'} ~ ${pkgMeta.until || '至今'}`
+                + `（${pkgMeta.window} 场 · ${pkgMeta.sessions} 场计入）的旧结果。\n\n继续？`)
+              if (!ok) return
+            }
             /* 分析也走**应用级任务**（2026-10-28，第四批）：这样它才有逐场进度、
                才能在顶栏显示、才能关掉浮窗继续跑。后端算完结果落进 `_CACHE`，
                所以 `finishedAt` 那一拍再 `loadRanked` 是**取缓存**、不会重算。
@@ -619,6 +707,14 @@ export default function WorkbenchPage() {
                     /* A2：区间变了但结果还留着 —— 必须明确标注，否则会被当成当前区间的结果 */
                     <span className="wb-stale" data-testid="ranked-stale">
                       区间已改，以下结果基于旧区间
+                    </span>
+                  )}
+                  {/* 结果来自**结果包**时标明"缓存于何时"（2026-10-28）：用户要能区分
+                      "这是刚算的" 还是 "这是上次留下的"，否则会拿旧结果当新结果。 */}
+                  {pkgMeta && (
+                    <span className="wb-stale" data-testid="pkg-badge"
+                          title={`结果包 · ${pkgMeta.window} 场 · ${pkgMeta.since || '不限'} ~ ${pkgMeta.until || '至今'}`}>
+                      缓存 {pkgMeta.computed_at.slice(5, 16)}
                     </span>
                   )}
                   <span className="wb-card-note" style={{ marginLeft: 8 }}>

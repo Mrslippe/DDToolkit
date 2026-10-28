@@ -23,6 +23,8 @@ const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
 const fanAnalyzeStart = vi.fn()
 const fanAnalyzeStatus = vi.fn()
+const fanPackages = vi.fn()
+const fanPackage = vi.fn()
 const fanSearch = vi.fn()
 const fanTags = vi.fn()
 const fanMember = vi.fn()
@@ -58,6 +60,8 @@ vi.mock('../api/api', () => ({
     fanRanked: (...a: unknown[]) => fanRanked(...a),
     fanAnalyzeStart: (...a: unknown[]) => fanAnalyzeStart(...a),
     fanAnalyzeStatus: (...a: unknown[]) => fanAnalyzeStatus(...a),
+    fanPackages: (...a: unknown[]) => fanPackages(...a),
+    fanPackage: (...a: unknown[]) => fanPackage(...a),
   fanSearch: (...a: unknown[]) => fanSearch(...a),
   fanTags: (...a: unknown[]) => fanTags(...a),
   fanMember: (...a: unknown[]) => fanMember(...a),
@@ -72,7 +76,8 @@ vi.mock('../api/api', () => ({
   resolveAsset: (p: string | null | undefined) => p ?? null,
 }))
 
-import WorkbenchPage from './WorkbenchPage'
+import WorkbenchPage, { resetWorkbenchState } from './WorkbenchPage'
+import { resetFanPackages } from '../hooks/useFanPackages'
 
 const VTUBERS = {
   items: [
@@ -139,6 +144,8 @@ beforeEach(() => {
   // 采集任务是**模块级 store**（2026-10-28，B 批）：不重置就会"上一条还在跑，
   // 这一条一挂载就看到一个进行中的任务"（实测 15 条用例连坐失败）。
   resetFanTask()
+  resetWorkbenchState()      // V_STATE 是模块级的：不清会串到下一个用例
+  resetFanPackages()         // 结果包索引也是模块级的
   fanVtubers.mockReset().mockResolvedValue(VTUBERS)
   fanSessions.mockReset().mockResolvedValue(PREVIEW)
   fanCollect.mockReset().mockResolvedValue({ ok: true, vtuber: '弥月Mizuki',
@@ -175,6 +182,9 @@ beforeEach(() => {
       error: '', started_at: 1, finished_at: 2,
     }], count: 1,
   })
+  /* 结果包：默认"没有包"（走现算）。需要恢复的用例自己覆盖这两个桩。 */
+  fanPackages.mockReset().mockResolvedValue({ items: [], count: 0 })
+  fanPackage.mockReset().mockRejectedValue(new Error('404'))
   fanMember.mockReset().mockResolvedValue({
     uid: '19871', name: '碳了个酸', avatar: '/fan/avatar/19871', type: '综合', strength: 0.9994,
     axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
@@ -489,11 +499,37 @@ describe('空态与页签（2026-10-23）', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
     const aOpts = fanAnalyzeStart.mock.calls[0][1] as { window?: number; ids?: string[] }
-    const rOpts = fanRanked.mock.calls.at(-1)![2] as { window?: number; ids?: string[] }
+    const rCalls = fanRanked.mock.calls
+    const rOpts = rCalls[rCalls.length - 1]![2] as { window?: number; ids?: string[] }
     expect(aOpts.window).toBeGreaterThan(0)
     expect(aOpts.window).toBe(rOpts.window)
     // 空清单在两处都表现为"不传"（URL 里同样没有 ids）⇒ 归一后必须相等
     expect(aOpts.ids ?? []).toEqual(rOpts.ids ?? [])
+  })
+
+  it('★ 切回某个 V 时直接铺它的结果包（不重算），并跳到包对应区间', async () => {
+    /* 用户第 1 条：每个 V 一份结果包；切回它默认展示这个结果、时间区间也跳过去。 */
+    const PKG = {
+      version: 1, vtuber: '弥月Mizuki', subdir: 'a', window: 25,
+      since: '2026-09-01', until: '2026-09-30',
+      live_ids: [], sessions: 25, computed_at: '2026-10-28 21:30:00',
+      overview: { pool: 3920, tiers: { 核心: 1 }, uid_tier: {}, uids: [] },
+      payload: { ...RANKED, items: RANKED.items, total_in_pool: 3920, sessions: 25 },
+    }
+    fanPackages.mockResolvedValue({ items: [PKG], count: 1 })
+    fanPackage.mockResolvedValue(PKG)
+
+    await mount()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    // 读包（with_payload=true），**不该**调用 /ranked 重算
+    expect(fanPackage).toHaveBeenCalledWith('弥月Mizuki', true)
+    expect(fanRanked).not.toHaveBeenCalled()
+    expect(q('[data-testid="ranked-table"] tbody')!.querySelectorAll('tr').length).toBe(2)
+    // 「缓存于」标记 + 区间跳到了包的区间
+    expect(q('[data-testid="pkg-badge"]')).toBeTruthy()
+    expect(document.body.textContent).toContain('2026-09-01')
   })
 
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {

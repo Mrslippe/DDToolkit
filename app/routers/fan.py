@@ -1791,7 +1791,8 @@ def compare_multi(
     ⚠️ 仍然**不返回分数比较**（跨 V 测量不变性已否证），只给层级与重叠。
     """
     from app.services.fan.cross_v import (bh_adjust, describe, overlap,
-                                          profile as cross_profile, tier_moves)
+                                          profile_from_tiers as cross_profile_from_tiers,
+                                          tier_moves)
 
     names = [x.strip() for x in (vtubers or "").split(",") if x.strip()]
     if not 2 <= len(names) <= 6:
@@ -1800,22 +1801,42 @@ def compare_multi(
         raise HTTPException(400, "主播重复了，请去掉重复项")
 
     since, until = _range_or_none(since, until)
+    try:
+        _pkg_root = resolve_data_dir()
+    except Exception:  # noqa: BLE001
+        _pkg_root = None
+
     profs = []
     info: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for n in names:
-        try:
-            payload = _compute(n, window, since, until)
-        except Exception as exc:  # noqa: BLE001 —— 该 V 还没采/没数据：**逐 V 标注**，不拖垮整次请求
-            missing.append({"name": n, "reason": str(exc)[:120]})
+        # 对比的**基本单位 = 各 V 的结果包**（2026-10-28 用户第 3 条）：
+        # 不再现算，直接读包 ⇒ 秒回；没有包就逐 V 标注"还没分析"，不拖垮整次请求。
+        v = _resolve(n, _LAST_DB.get("db"))
+        pkg = packages.load(_pkg_root, v.subdir) if _pkg_root is not None else None
+        if pkg is None:
+            missing.append({"name": v.name,
+                            "reason": "还没有分析结果包（先在工作台里分析一次）"})
             continue
-        prof = cross_profile(payload["window"])
+        ov = pkg.get("overview") or {}
+        prof = cross_profile_from_tiers(v.name, v.short, int(pkg.get("sessions") or 0),
+                                        ov.get("uid_tier") or {})
+        if not prof.tier:
+            missing.append({"name": v.name, "reason": "结果包里的名单是空的"})
+            continue
         profs.append(prof)
-        info.append({"name": prof.name, "short": prof.short, "pool": len(prof.pool),
-                     "sessions": prof.n_sessions, "tiers": prof.counts()})
+        info.append({
+            "name": prof.name, "short": prof.short, "pool": len(prof.pool),
+            "sessions": prof.n_sessions, "tiers": prof.counts(),
+            # 每个包自己的区间：两包区间不同时，**相对量（Jaccard/lift/富集）不可比**
+            "package": {"since": pkg.get("since"), "until": pkg.get("until"),
+                        "window": pkg.get("window"),
+                        "computed_at": pkg.get("computed_at")},
+        })
 
     if len(profs) < 2:
-        return {"window": window, "since": since, "until": until,
+        return {"basis": "packages", "ranges_differ": False,
+                "window": window, "since": since, "until": until,
                 "vtubers": info, "matrix": [], "pairs": [], "missing": missing,
                 "needs_analysis": [m["name"] for m in missing],
                 "notes": ["可分析的不足两个主播：先采集并分析缺失的主播，再来对比"]}
@@ -1829,9 +1850,15 @@ def compare_multi(
             pairs.append({"i": i, "j": j, "ov": ov})
     adj = bh_adjust(raw_p)
 
+    def _sig(idx: int) -> tuple:
+        """该 V 的包区间签名（窗口 + 起止）。签名不同 ⇒ 相对量不可比。"""
+        p = info[idx].get("package") or {}
+        return (p.get("since"), p.get("until"), p.get("window"))
+
     out_pairs = []
     for idx, item in enumerate(pairs):
         i, j, ov = item["i"], item["j"], item["ov"]
+        same_range = _sig(i) == _sig(j)
         out_pairs.append({
             "a": profs[i].short, "b": profs[j].short,
             "a_name": profs[i].name, "b_name": profs[j].name,
@@ -1846,6 +1873,11 @@ def compare_multi(
             "tier_table": ov.tiers,
             "tier_moves": tier_moves(profs[i], profs[j]),
             "reading": describe(ov),
+            # 2026-10-28：对比单位是各自的包 ⇒ 区间可能不同。
+            # 交集人数仍然可信（名单求交与区间无关），但 Jaccard / lift / 富集**不可比**
+            # —— 两份包来自不同窗口时，分母都不同。前端据此标灰并提示（用户选 b）。
+            "ranges_differ": not same_range,
+            "comparable": same_range,
         })
 
     # 方阵（对称）：非对角放该配对在 `pairs` 里的下标，前端点格子下钻
@@ -1854,21 +1886,33 @@ def compare_multi(
     for idx, item in enumerate(pairs):
         i, j = item["i"], item["j"]
         cell = {"pair": idx, "jaccard": out_pairs[idx]["jaccard"],
-                "lift": out_pairs[idx]["lift"], "shared": out_pairs[idx]["intersection"]}
+                "lift": out_pairs[idx]["lift"], "shared": out_pairs[idx]["intersection"],
+                "comparable": out_pairs[idx]["comparable"]}
         matrix[i][j] = cell
         matrix[j][i] = cell
 
+    diff_pairs = sum(1 for p in out_pairs if p["ranges_differ"])
+    notes = [
+        "只比层级，不比分数：跨 V 的绝对阈值不可移植",
+        "对比的基本单位是**各 V 自己的结果包**（2026-10-28）：没有包的主播要先在工作台分析一次",
+        f"共 {len(out_pairs)} 个配对，p 值已做 BH 校正（FDR）",
+    ]
+    if diff_pairs:
+        notes.append(
+            f"⚠️ {diff_pairs} 个配对的两份包**时间区间/窗口不同** ⇒ 交集人数可信，"
+            "但 Jaccard / lift / 富集与贫化**不可比**（分母不同），界面上已标灰"
+        )
+
     return {
+        "basis": "packages",
         "window": window, "since": since, "until": until,
         "vtubers": info,
         "missing": missing,
         "needs_analysis": [m["name"] for m in missing],
         "matrix": matrix,
         "pairs": out_pairs,
-        "notes": [
-            "只比层级，不比分数：跨 V 的绝对阈值不可移植",
-            f"共 {len(out_pairs)} 个配对，p 值已做 BH 校正（FDR）",
-        ],
+        "ranges_differ": diff_pairs > 0,
+        "notes": notes,
     }
 
 

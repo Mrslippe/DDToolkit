@@ -204,6 +204,18 @@ def profile(win: Window) -> VProfile:
                     assign_tiers(table, strength), strength)
 
 
+def profile_from_tiers(name: str, short: str, n_sessions: int,
+                       uid_tier: Mapping[str, str]) -> VProfile:
+    """从**结果包**的层级表构造画像（2026-10-28）。
+
+    对比页的基本单位改成"每个 V 的结果包" ⇒ 不再重算，直接从包里取。
+
+    ⚠️ `strength` 留空：对比**只**用层级与名单求交，不比分数
+    （跨 V 比绝对分位不合法，这是既有纪律；`tier_moves` 与 `describe` 也用不到它）。
+    """
+    return VProfile(name, short, int(n_sessions or 0), dict(uid_tier), {})
+
+
 def overlap(a: VProfile, b: VProfile, *, shared: Sequence[str] | None = None) -> Overlap:
     """两 V 名单的重叠 + 超几何零模型。
 

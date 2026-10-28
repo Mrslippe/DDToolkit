@@ -30,6 +30,11 @@ interface Props {
   dataOwner?: string
   /** 值变化时把窗口**覆盖整段**（手选日期后自动收敛到该范围，2026-10-19 用户口径） */
   coverTick?: number
+  /**
+   * 把窗口**直接设成这一组**（2026-10-28：切回某个 V 时恢复它结果包的区间）。
+   * 只认 `tick` 的变化 —— 与 `coverTick` 同一套纪律，否则每次 total 变化都会跳回旧区间。
+   */
+  restore?: { start: number; size: number; since: string; until: string; tick: number } | null
   onChange: (range: WindowRange) => void
 }
 
@@ -72,7 +77,7 @@ function clampNum(v: number, lo: number, hi: number): number {
 const SLIDER_STATE = new Map<string, { pos: number; size: number; scale: number; scroll?: number }>()
 
 export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
-                                        stateKey, dataOwner, coverTick, onChange }: Props) {
+                                        stateKey, dataOwner, coverTick, restore, onChange }: Props) {
   /** 数据与 key 是否配套（不配套时既不恢复也不回写） */
   const owned = !stateKey || !dataOwner || dataOwner === stateKey
   const total = sessions.length
@@ -250,6 +255,28 @@ export default function WindowSlider({ sessions, grades = [25, 50, 75, 150],
     if (el) el.scrollLeft = 0
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coverTick, total])
+
+  /* 恢复某个 V 的**结果包区间**（2026-10-28）：与 `coverTick` 同一套"只认 tick 变化"的纪律。
+   * ⚠️ 复原 `start` 之后必须**把视野也滚过去** —— 否则下一帧 `clamp()` 会把 start 拽回
+   * 可视区左边界（与"归位"那条踩过的坑一模一样）。 */
+  const lastRestore = useRef(0)
+  useEffect(() => {
+    if (!restore || !restore.tick || restore.tick === lastRestore.current || total < 1) return
+    lastRestore.current = restore.tick
+    const wantSize = Math.max(1, Math.min(restore.size, total))
+    const span = Math.max(0, total - wantSize)
+    const wantStart = Math.max(0, Math.min(restore.start, span))
+    setSize(wantSize)
+    setStart(wantStart)
+    const el = scrollRef.current
+    if (el) {
+      const stp = Math.max(3, (BAR + GAP) * scale)
+      const center = PAD + wantStart * stp + (wantSize * stp) / 2
+      const maxScroll = Math.max(0, (el.scrollWidth || 0) - el.clientWidth)
+      el.scrollLeft = Math.max(0, Math.min(maxScroll, center - el.clientWidth / 2))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restore?.tick, total])
 
   /* 通知外层 */
   useEffect(() => {

@@ -2388,6 +2388,18 @@ tr.wb-row-click:hover td { background: #fff8fa; }
   color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.25);
 }
 .wb-matrix-cell.is-active { outline: 2px solid var(--c-primary-deep); }
+/* 两包区间不同 ⇒ 这个格子里的比率**不可比**（2026-10-28）：
+   灰底 + 灰字，别让用户把 Jaccard 当可比数字读。 */
+.wb-matrix-cell.is-incomparable {
+  color: var(--c-text-sub);
+  text-shadow: none;
+  background: rgba(150, 150, 150, 0.12);
+}
+
+/* 不可比时把相对量**标灰**（交集人数仍然正常显示） */
+.wb-incomparable { color: var(--c-text-sub); text-decoration: line-through; }
+.wb-warn-line { color: var(--c-primary-deep); }
+.wb-pkg-ranges { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
 
 .wb-pair { display: flex; flex-direction: column; gap: 8px; }
 

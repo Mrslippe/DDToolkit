@@ -110,7 +110,9 @@ export default function ComparePanel({ current, options, window, since, until, o
           <h3 className="wb-card-title">
             {mode === 'multi' ? '选择主播' : '帖子评论'}
             <span className="wb-card-note" style={{ marginLeft: 8 }}>
-              基于：{current} · {window} 场 · {since || '不限'} ~ {until || '至今'}
+              {/* 2026-10-28：对比的**基本单位是各 V 自己的结果包**，
+                  所以这里不再写"基于当前窗口"——那是旧口径。 */}
+              对比单位：各主播自己的结果包
             </span>
           </h3>
           <div className="wb-seg" role="tablist" aria-label="对比模式">
@@ -159,6 +161,21 @@ export default function ComparePanel({ current, options, window, since, until, o
                   </span>
                 ))}
               </div>
+            )}
+            {/* 每个参与对比的 V 的**包区间**（2026-10-28）：两包区间不同时，
+                相对量不可比 —— 必须让用户看得见"冲突在哪"。 */}
+            {(data?.vtubers?.length ?? 0) > 0 && (
+              <ul className="wb-hint wb-pkg-ranges" data-testid="compare-ranges">
+                {data!.vtubers.map((v) => (
+                  <li key={v.short}>
+                    <b>{v.short}</b>
+                    {v.package
+                      ? ` · ${v.package.since || '不限'}~${v.package.until || '至今'}`
+                        + ` · ${v.package.window} 场 · 计入 ${v.sessions} 场`
+                      : ''}
+                  </li>
+                ))}
+              </ul>
             )}
             {error && <p className="wb-hint" role="alert" data-testid="compare-error">加载失败：{error}</p>}
             {loading && <p className="wb-hint">正在计算两两重叠…</p>}
@@ -212,10 +229,15 @@ export default function ComparePanel({ current, options, window, since, until, o
                           <td key={j}>
                             {cell === null ? <span className="wb-matrix-diag">—</span> : (
                               <button type="button"
-                                      className={`wb-matrix-cell${pairIdx === cell.pair ? ' is-active' : ''}`}
-                                      style={{ background: `rgba(201,64,111,${0.08 + 0.55 * (cell.jaccard / maxJ)})` }}
+                                      className={`wb-matrix-cell${pairIdx === cell.pair ? ' is-active' : ''}`
+                                        + `${cell.comparable === false ? ' is-incomparable' : ''}`}
+                                      style={{ background: cell.comparable === false
+                                        ? 'rgba(150,150,150,0.12)'
+                                        : `rgba(201,64,111,${0.08 + 0.55 * (cell.jaccard / maxJ)})` }}
                                       onClick={() => setPairIdx(cell.pair)}
-                                      title={`共享 ${cell.shared} 人 · lift ${cell.lift}`}>
+                                      title={cell.comparable === false
+                                        ? `共享 ${cell.shared} 人（两包区间不同 ⇒ 比率不可比）`
+                                        : `共享 ${cell.shared} 人 · lift ${cell.lift}`}>
                                 {(cell.jaccard * 100).toFixed(1)}%
                               </button>
                             )}
@@ -243,9 +265,17 @@ export default function ComparePanel({ current, options, window, since, until, o
                 <div className="wb-pair" data-testid="compare-pair">
                   <h4 className="wb-card-title" style={{ fontSize: 14 }}>{pair.a} × {pair.b}</h4>
                   <p className="wb-hint" data-testid="compare-pair-kpi">
-                    共享 {pair.intersection} 人 · Jaccard {(pair.jaccard * 100).toFixed(2)}%
-                    · lift {pair.lift}
+                    共享 {pair.intersection} 人
+                    <span className={pair.comparable === false ? 'wb-incomparable' : undefined}>
+                      {' · '}Jaccard {(pair.jaccard * 100).toFixed(2)}% · lift {pair.lift}
+                    </span>
                   </p>
+                  {pair.comparable === false && (
+                    <p className="wb-hint wb-warn-line" data-testid="compare-incomparable">
+                      ⚠️ 这两份包的时间区间 / 窗口不同 ⇒ **交集人数可信**，
+                      但 Jaccard、lift、富集与贫化不可比（分母不同）。
+                    </p>
+                  )}
                   <p className="wb-hint">
                     p（BH 校正）= {pair.p_adjusted.toExponential(2)}
                     {pair.is_enriched ? ' · 显著富集' : pair.is_depleted ? ' · 显著贫化' : ' · 不显著'}

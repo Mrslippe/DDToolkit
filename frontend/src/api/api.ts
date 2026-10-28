@@ -1,6 +1,7 @@
 import type {
   FanSortBy,
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanAnalyzeProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti, FanCommentScan, FanCommentOverlap } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanAnalyzeProgress, FanRanked,
+  FanPackage, FanPackageMeta, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti, FanCommentScan, FanCommentOverlap } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -1116,6 +1117,16 @@ export const api = {
   fanAnalyzeStatus: (name?: string) =>
     request<{ items: FanAnalyzeProgress[]; count: number }>(
       `/fan/analyze/status${name ? `?vtuber=${encodeURIComponent(name)}` : ''}`),
+  /**
+   * 所有 V 的**结果包摘要**（2026-10-28）：切 V 时用它决定"直接铺结果"还是"现算"。
+   * 不含 payload —— 几百 KB 的东西只在真要恢复时才拉。
+   */
+  fanPackages: () =>
+    request<{ items: FanPackageMeta[]; count: number }>('/fan/packages'),
+  /** 某个 V 的整包（`withPayload` = 连完整结果一起拿，用于切回时恢复） */
+  fanPackage: (name: string, withPayload = false) =>
+    request<FanPackage | FanPackageMeta>(
+      `/fan/${encodeURIComponent(name)}/package${withPayload ? '?with_payload=true' : ''}`),
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
   /** 导出名单 CSV（2026-10-28）。走后端保证与页面同口径；因为要带 token 头，走 fetch → Blob。 */
   fanRankedCsv: async (name: string, by: FanSortBy,
