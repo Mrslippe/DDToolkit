@@ -25,6 +25,15 @@ fn main() {
     //    —— 与"扩展根本没暂存"这件事毫无字面关系（干净 clone / `cargo test` 前必踩，
     //    2026-10-06 CI 实测）。这里先自己说一句人话，紧跟着才是 tauri-build 的报错。
     //    来源：`scripts/stage_extension.py`（`npm run stage:extension`，构建里自动跑）。
+    // ⚠️ 同一个坑的第二处：`bundle.resources` 里的 `binaries/backend/**/*`。
+    //    该目录是 **PyInstaller 的产物**（`npm run build:backend`），不是编译缓存 ——
+    //    删掉它（比如"清理构建产物"时顺手删了）后，`tauri:dev` / `tauri build` 会抛
+    //    `glob pattern binaries/backend/**/* path not found or didn't match any files.`，
+    //    完全看不出"缺 sidecar"。这里先给一句能照做的提示。
+    //    2026-10-28 实测：清理工作区时删了它，dev 直接起不来。
+    if !std::path::Path::new("binaries").join("backend").is_dir() {
+        println!("cargo:warning=binaries/backend/ 不存在 —— 先跑 `npm run build:backend`                  （PyInstaller 生成 sidecar；它不是缓存，删了 dev/build 都起不来）");
+    }
     if !std::path::Path::new("extension").join("manifest.json").exists() {
         println!("cargo:warning=extension/ 还没暂存 —— 先跑 `npm run stage:extension`；\
                   现在 bundle.resources 的 extension/**/* 匹配不到任何文件，构建会失败");
