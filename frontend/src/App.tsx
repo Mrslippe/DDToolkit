@@ -10,6 +10,7 @@ import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
 import WorkbenchPage from './pages/WorkbenchPage'
+import FanTaskDialog from './components/workbench/FanTaskDialog'
 import ErrorBoundary from './components/ErrorBoundary'
 import LegalNotice from './components/LegalNotice'
 import { api } from './api/api'
@@ -192,6 +193,10 @@ export default function App() {
             </Routes>
           </main>
         </div>
+        {/* 任务浮窗（2026-10-28，C 批）：挂在**应用级**而不是工作台页里 ——
+            用户可能已经切到别的页面，而"看进度/点分析"必须还能用。
+            它自己不自动弹，`openWindow` 只由顶栏通知或工作台「查看进度」置位。 */}
+        <FanTaskDialog />
       </ErrorBoundary>
       {/* ⚠️ **闸门放在 ErrorBoundary 之外**：壳层炸了也要先能读到协议（它不该被别人的错误吞掉） */}
       {agreement?.needed && (

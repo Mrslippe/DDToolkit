@@ -1576,6 +1576,13 @@ export interface FanCollectSessionDetail {
   state: 'running' | 'ok' | 'failed' | 'skipped' | string
   records: number
   reason: string
+  /**
+   * 场次标题（2026-10-28 起后端提供，来自库里的 `live_sessions.title`）。
+   * 老后端不返回 ⇒ 前端退回 `start_at` / `live_id` 前 8 位，不要显示成 `undefined`。
+   */
+  title?: string
+  /** 该场耗时（毫秒；2026-10-28 起后端提供） */
+  ms?: number
 }
 
 export interface FanCollectProgress {

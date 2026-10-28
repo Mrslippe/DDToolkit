@@ -43,11 +43,20 @@ export interface FanTaskSnapshot {
   finishedAt: number | null
   /** 结束那一刻的进度快照（清空 `progress` 后浮窗仍能显示结果摘要） */
   result: FanCollectProgress | null
+  /** 任务浮窗是否打开（2026-10-28 C 批：浮窗**不自动弹**，由用户点顶栏通知打开） */
+  openWindow: boolean
+  /**
+   * 「请求分析」的自增计数（C 批）。
+   * 为什么不放回调：浮窗挂在 `App` 上，而分析逻辑在工作台页里 —— 用回调会变成
+   * "全局注册一个可能已经卸载的函数"。改成计数：工作台监听它的变化，自己决定怎么分析。
+   */
+  analyzeRequest: number
 }
 
 const IDLE: FanTaskSnapshot = {
   kind: null, vtuber: '', since: '', until: '', state: 'idle',
   progress: null, error: null, finishedAt: null, result: null,
+  openWindow: false, analyzeRequest: 0,
 }
 
 /** 采集进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
@@ -165,6 +174,25 @@ export function dismissTask(): void {
   if (snap.state === 'running') return
   stopPolling()
   emit({ ...IDLE })
+}
+
+/** 打开任务浮窗（顶栏通知点击 / 工作台「查看进度」都走它） */
+export function openTaskWindow(): void {
+  emit({ openWindow: true })
+}
+
+/** 只关窗口，**不动任务**（任务继续跑，顶栏通知还在） */
+export function closeTaskWindow(): void {
+  if (!snap.openWindow) return
+  emit({ openWindow: false })
+}
+
+/**
+ * 请求分析（浮窗的「分析」按钮）：**只发信号**，真正的分析由工作台页执行。
+ * 同时把浮窗关掉 —— 分析开始后进度由工作台的结果区接管（用户口径：完成 = 回工作台）。
+ */
+export function requestAnalyze(): void {
+  emit({ analyzeRequest: snap.analyzeRequest + 1, openWindow: false })
 }
 
 /**

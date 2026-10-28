@@ -27,7 +27,7 @@ import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
 import {
-  cancelCollect, dismissTask, startCollect as startCollectTask, useFanTask,
+  cancelCollect, dismissTask, openTaskWindow, startCollect as startCollectTask, useFanTask,
 } from '../hooks/useFanTask'
 import '../styles/workbench.css'
 
@@ -327,6 +327,18 @@ export default function WorkbenchPage() {
     void loadRanked(byOf(tab), rows.length, true)
   }, [busy, hasMore, loadRanked, tab, rows.length])
 
+  /* 浮窗的「分析」按钮 → 这里才真正开始分析（C 批）。
+     走的是与页面「分析」按钮**同一条路**（同一套清屏 + loadRanked），不另开一套。
+     ⚠️ 采集运行中不响应：那时点分析等于打断采集（后端也只有一个任务位）。 */
+  const analyzeRequest = task.analyzeRequest
+  useEffect(() => {
+    if (!analyzeRequest || task.state === 'running') return
+    if (!picked || !since || !until) return
+    setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
+    void loadRanked('strength', 0, false, tagFilterRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyzeRequest])
+
   /** 对比页发现"这个 V 还没分析"时，用户确认后直接采它（不传切片 = 采区间内全部待采场次） */
   const startCollectFor = useCallback(async (name: string): Promise<void> => {
     setErr(null)
@@ -494,6 +506,15 @@ export default function WorkbenchPage() {
             <div className="wb-busy" data-testid="workbench-progress" aria-live="polite">
               <div className="wb-busy-head">
                 <b>{running ? '正在采集弹幕' : '正在分析'}</b>
+                {/* 打开任务浮窗（C 批）。顶栏通知（D 批）也会开同一个窗；
+                    这里留一个入口，避免"关掉浮窗就找不回来"。 */}
+                {running && (
+                  <button type="button" className="wb-btn wb-btn-ghost"
+                          data-testid="workbench-open-task"
+                          onClick={() => openTaskWindow()}>
+                    查看进度
+                  </button>
+                )}
                 {running && progress && progress.total > 0 && (
                   <span className="wb-busy-pct">{pct}%</span>
                 )}

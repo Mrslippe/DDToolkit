@@ -900,6 +900,23 @@
   min-height: 176px;
 }
 
+/* 任务浮窗（2026-10-28，C 批）：内容区可滚（逐场列表最长 8 条 + 失败明细），
+   底部三个按钮**固定右对齐**（用户口径：取消 / 完成 / 分析）。 */
+.wb-task-dialog { max-width: 520px; }
+.wb-task-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.wb-task-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 
 /* 主播切换器（2026-10-18）：**独立按钮、靠右固定**。
    不套在名字上 —— 触发器宽度会随名字长短变、箭头跟着跑；而且 `ui/select` 自带的内联类
