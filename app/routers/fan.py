@@ -81,6 +81,7 @@ from app.services.fan.avatars import fetch_avatar, prefetch
 from app.services.fan import member_index
 from app.services.fan.criterion import CRITERIA, fit as fit_criterion, score as score_criterion
 from app.services.fan.loader import resolve_data_dir
+from app.services.fan import packages
 from app.services.fan.pool import (POOL_MULT as POOL_SIZE_MULT, core_size_for,
                                    pool_size_for, tier_sizes_for, window_acv)
 from app.services.fan.tags import explain as explain_tags
@@ -349,6 +350,22 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     if hit is not None:
         return hit
 
+    # ② 结果包（2026-10-28）：**跨进程**的缓存 —— 重启后端/重开应用后切回这个 V 仍能秒开。
+    #    只认"同一组参数"（窗口 + 区间 + 场次清单），少比一格就是拿错数据。
+    try:
+        _root = resolve_data_dir()
+    except Exception:  # noqa: BLE001
+        _root = None
+    if _root is not None:
+        _pkg = packages.load(_root, v.subdir)
+        if _pkg is not None and packages.matches(
+            _pkg, window=window, since=since, until=until, live_ids=live_ids,
+        ):
+            _CACHE[key] = _pkg["payload"]
+            logger.info("fan: 命中结果包 %s（%s 场 · %s~%s）",
+                        v.name, _pkg.get("sessions"), since or "…", until or "…")
+            return _pkg["payload"]
+
     try:
         win = load_window(v, window, since=since, until=until, live_ids=live_ids,
                           on_progress=on_progress)
@@ -448,6 +465,14 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
     # 切片由 `load_window` 在读 raw 的同一遍里产出 ⇒ 这里只是登记，不再扫第二遍
     member_index.put(win.vtuber.subdir, [sr.live_id for sr in win.sessions], win.slices)
 
+    # ③ 写结果包（2026-10-28）：每个 V **一个包位**，重新分析就是整包覆盖。
+    #    写失败只记日志（`packages.save` 自己兜住），不能让缓存故障毁掉一次成功分析。
+    if _root is not None:
+        packages.save(
+            _root, vtuber=v.name, subdir=v.subdir, window=window,
+            since=since, until=until, live_ids=live_ids,
+            sessions=win.n, payload=payload,
+        )
     _CACHE[key] = payload
     logger.info("fan: 已计算 %s（%s 场 · 区间 %s~%s）→ %s 人入池",
                 v.name, win.n, since or "…", until or "…", len(table))
@@ -759,6 +784,41 @@ async def start_analyze(
     asyncio.create_task(run())
     return {"ok": True, "vtuber": v.name, "window": window,
             "since": since, "until": until, "state": "running"}
+
+
+@router.get("/fan/packages")
+def list_packages(_: None = Depends(require_module)) -> dict[str, Any]:
+    """所有 V 的**结果包摘要**（不含 payload）。
+
+    前端切 V 时读它决定：有包 ⇒ 直接铺结果并把滑杆/区间跳到包的那一组；
+    没包 ⇒ 走"现算"（空态 + 点分析）。
+    """
+    try:
+        root = resolve_data_dir()
+    except Exception:  # noqa: BLE001
+        return {"items": [], "count": 0}
+    items = packages.list_all(root)
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/fan/{vtuber}/package")
+def get_package(
+    vtuber: str,
+    with_payload: bool = Query(False, description="true = 连完整结果一起返回（前端恢复用）"),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """某个 V 的结果包。没有就 404 —— 前端据此走"现算"分支，不要编空结果。"""
+    v = _resolve(vtuber)
+    try:
+        root = resolve_data_dir()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(404, f"数据根不可用：{exc}") from exc
+    body = packages.load(root, v.subdir)
+    if body is None:
+        raise HTTPException(404, f"{v.name} 还没有分析结果包（先分析一次）")
+    if with_payload:
+        return body
+    return {k: val for k, val in body.items() if k != "payload"}
 
 
 @router.get("/fan/analyze/status")
@@ -1333,6 +1393,8 @@ def fan_purge(
     if not body.dry_run:
         _CACHE.clear()
         _PLAN_CACHE.clear()
+        # 删了数据，结果包也必须作废 —— 否则切回这个 V 会看到"基于已删数据"的结果
+        packages.delete(root, v.subdir)
         logger.info("fan: 已删除 %s 的已采数据（%s）· %d 文件 / %.1f MB",
                     v.name, body.scope, total_files, total_bytes / 1048576)
 

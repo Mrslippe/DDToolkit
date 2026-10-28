@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-ops panel</title>
+<!--
+  dsh-ops panel viewer (issue #205 §四/§五). This file carries NO run data: it reads
+  one JSON document beside it (or one dropped onto it) and renders it, and every
+  value reaches the page through textContent, so untrusted text is inert. Without
+  a server: drag the JSON in, or use the file button (file:// blocks fetch by CORS);
+  with one: `panel.html?data=<sessionId>.json`.
+-->
+<style>
+  :root { color-scheme: light dark; --line: color-mix(in srgb, canvastext 14%, transparent); --muted: color-mix(in srgb, canvastext 60%, transparent); --chip: color-mix(in srgb, canvastext 8%, transparent); }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.55 ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: canvastext; background: canvas; }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  h2 { font-size: 14px; margin: 18px 0 6px; }
+  #source { margin: 4px 0 0; font: 12px ui-monospace, Consolas, monospace; }
+  #source, #note, #picker p { color: var(--muted); }
+  #sessions-row select { font: inherit; color: inherit; background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+  #picker { margin: 24px auto; max-width: 620px; padding: 26px; border: 1px dashed var(--line); border-radius: 10px; text-align: center; }
+  #picker.drop { border-color: currentColor; background: var(--chip); }
+  nav { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav button { font: inherit; color: inherit; background: none; border: 0; padding: 7px 12px; border-radius: 6px 6px 0 0; cursor: pointer; }
+  nav button[data-active="true"] { background: var(--chip); font-weight: 600; }
+  main { padding: 14px 18px 40px; }
+  main section { max-width: 1080px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 4px 12px; margin: 0 0 18px; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  .row { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .muted { color: var(--muted); }
+  .row > .head { color: var(--muted); font: 12px ui-monospace, Consolas, monospace; display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; }
+  .lane { border-radius: 4px; padding: 1px 6px; background: var(--chip); }
+  .err { color: #c62828; }
+  .warn { border-radius: 6px; padding: 8px 10px; background: color-mix(in srgb, orange 12%, transparent); margin: 0 0 14px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--chip); border-radius: 8px; padding: 12px; max-height: 60vh; overflow: auto; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>dsh-ops panel</h1>
+  <p id="source">数据源:(未加载) — 本页不内联任何数据</p>
+  <p id="sessions-row" hidden><label for="sessions">会话:</label> <select id="sessions"></select> <span class="muted">(同目录下其它采集)</span></p>
+  <p id="note">把一个 panel JSON(如 <code>&lt;sessionId&gt;.json</code>)拖到本页,或用下面的文件选择器打开。</p>
+</header>
+<div id="picker"><p>拖拽 / 选择同目录下的 JSON 数据文件</p><input id="file" type="file" accept="application/json,.json"></div>
+<div id="view" hidden>
+  <nav id="tabs"></nav>
+  <main>
+    <section id="tab-overview"></section><section id="tab-conversation" hidden></section>
+    <section id="tab-trace" hidden></section><section id="tab-scoring" hidden></section>
+    <section id="tab-raw" hidden></section>
+  </main>
+</div>
+<script>
+(function () {
+  'use strict'
+  var TABS = [['overview', '概览'], ['conversation', '对话'], ['trace', '轨迹'], ['scoring', '判卷'], ['raw', '原始 JSON']]
+  var doc = null
+  var active = 'overview'
+  function $(id) { return document.getElementById(id) }
+  /* Every string that reaches the page goes through textContent here. */
+  function el(tag, text) {
+    var node = document.createElement(tag)
+    if (text !== undefined && text !== null) node.textContent = String(text)
+    return node
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild) }
+  function table(head, body) {
+    var node = document.createElement('table')
+    var thead = document.createElement('thead')
+    var headRow = document.createElement('tr')
+    head.forEach(function (cell) { headRow.appendChild(el('th', cell)) })
+    thead.appendChild(headRow)
+    node.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    body.forEach(function (cells) {
+      var tr = document.createElement('tr')
+      cells.forEach(function (cell) { tr.appendChild(el('td', cell)) })
+      tbody.appendChild(tr)
+    })
+    node.appendChild(tbody)
+    return node
+  }
+  function definitions(pairs) {
+    var node = document.createElement('dl')
+    for (var i = 0; i < pairs.length; i += 1) {
+      node.appendChild(el('dt', pairs[i][0]))
+      node.appendChild(el('dd', pairs[i][1]))
+    }
+    return node
+  }
+  function block(head, text) {
+    var node = document.createElement('div')
+    node.className = 'row'
+    var top = el('div', head)
+    top.className = 'head'
+    node.appendChild(top)
+    if (text !== undefined && text !== null && text !== '') {
+      var content = el('div', text)
+      content.className = 'body'
+      node.appendChild(content)
+    }
+    return node
+  }
+  function text(value) { return value === undefined || value === null || value === '' ? '—' : String(value) }
+  function stamp(ms) { return typeof ms === 'number' && isFinite(ms) ? new Date(ms).toISOString() : '—' }
+  function renderOverview(root) {
+    var meta = doc.meta || {}
+    var metrics = doc.metrics || {}
+    var usage = metrics.usage || {}
+    var limits = doc.limits || {}
+    root.appendChild(definitions([
+      ['会话', text(meta.sessionId)], ['工作目录', text(meta.cwd)],
+      ['开始 / 结束', text(meta.startedAt) + ' → ' + text(meta.endedAt)],
+      ['插件版本', text(meta.pluginVersion)],
+      ['平台 / Node', text(meta.platform) + ' / ' + text(meta.node)],
+      ['文档格式', text(doc.format) + ' · schemaVersion ' + text(doc.schemaVersion)],
+      ['数据源', text($('source').dataset.file)]
+    ]))
+    if (limits.truncated || limits.trimmed || limits.traceTruncated || limits.conversationTruncated) {
+      var warn = el('div', '本次采集触发了体积上限:被丢弃事件 ' + String(limits.droppedEvents || 0)
+        + ',归并时裁剪行 ' + String(limits.trimmedRows || 0) + '。原始数据不完整,请勿据此下结论。')
+      warn.className = 'warn'
+      root.appendChild(warn)
+    }
+    root.appendChild(table(['指标', '值'], [
+      ['轮次 turns', text(metrics.turns)], ['步数 steps', text(metrics.steps)],
+      ['报告 usage 的步数', text(metrics.stepsWithUsage) + (metrics.usageReported === false ? '(不完整 ⇒ token 只是下界)' : '')],
+      ['工具调用 toolCalls', text(metrics.toolCalls)], ['工具错误 toolErrors', text(metrics.toolErrors)],
+      ['事件数 eventCount', text(metrics.eventCount)], ['结束原因 turnEndReason', text(metrics.turnEndReason)]
+    ]))
+    root.appendChild(el('h2', 'usage 分桶'))
+    root.appendChild(table(['桶', 'tokens'], [
+      ['inputTokens', text(usage.inputTokens)], ['outputTokens', text(usage.outputTokens)],
+      ['cacheReadTokens', text(usage.cacheReadTokens)], ['cacheWriteTokens', text(usage.cacheWriteTokens)],
+      ['reasoningTokens(仅上报时)', text(usage.reasoningTokens)], ['grandTotal', text(usage.grandTotal)]
+    ]))
+    root.appendChild(el('h2', '按工具'))
+    var byName = metrics.toolCallsByName || {}
+    var names = Object.keys(byName).sort()
+    root.appendChild(names.length === 0 ? el('p', '没有工具调用。')
+      : table(['工具', '次数'], names.map(function (name) { return [name, byName[name]] })))
+  }
+  function renderConversation(root) {
+    var rows = doc.conversation || []
+    if (rows.length === 0) { root.appendChild(el('p', '没有对话消息。')); return }
+    for (var i = 0; i < rows.length; i += 1) {
+      var item = rows[i]
+      var holder = block('#' + String(item.seq) + ' · ' + text(item.role) + ' · ' + stamp(item.time)
+        + (item.turn === undefined ? '' : ' · turn ' + String(item.turn) + ' / step ' + String(item.step))
+        + (item.isError === true ? ' · isError' : ''), item.text)
+
+      if (item.truncated === true) {
+        var cut = el('div', '文本被截断:' + String(item.droppedChars || 0) + ' 字符未落盘(受 textLimit 限制)')
+        cut.className = 'warn'
+        holder.appendChild(cut)
+      }
+      if (item.reasoning) {
+        var think = el('div', 'thinking: ' + String(item.reasoning).slice(0, 400))
+        think.className = 'body muted'
+        holder.appendChild(think)
+      }
+      if (item.toolCalls && item.toolCalls.length > 0) holder.appendChild(el('div', 'tool calls: ' + item.toolCalls.join(', ')))
+      root.appendChild(holder)
+    }
+  }
+  function renderTrace(root) {
+    var rows = doc.trace || []
+    if (rows.length === 0) { root.appendChild(el('p', '没有轨迹。')); return }
+    for (var i = 0; i < rows.length; i += 1) {
+      var item = rows[i]
+      var holder = block('#' + String(item.seq) + ' · ' + text(item.kind) + ' · ' + stamp(item.time)
+        + (item.name ? ' · ' + item.name : '') + (item.durationMs === undefined ? '' : ' · ' + String(item.durationMs) + 'ms'), item.text)
+      var lane = el('span', text(item.lane))
+      lane.className = 'lane' + (item.lane === 'error' || item.isError === true ? ' err' : '')
+      holder.firstChild.appendChild(lane)
+      root.appendChild(holder)
+    }
+  }
+  function renderScoring(root) {
+    var verify = doc.verify || {}
+    root.appendChild(definitions([
+      ['检查项 checks', text(verify.checks)], ['通过 passed', text(verify.passed)],
+      ['失败 failed', text(verify.failed)], ['degraded', text(verify.degraded)]
+    ]))
+    ;(verify.notes || []).forEach(function (line) {
+      var note = el('p', line)
+      note.className = 'muted'
+      root.appendChild(note)
+    })
+  }
+  function setTab(name) {
+    active = name
+    for (var i = 0; i < TABS.length; i += 1) $('tab-' + TABS[i][0]).hidden = TABS[i][0] !== name
+    var buttons = $('tabs').getElementsByTagName('button')
+    for (var j = 0; j < buttons.length; j += 1) buttons[j].setAttribute('data-active', buttons[j].dataset.tab === name ? 'true' : 'false')
+  }
+  function render() {
+    var tabs = $('tabs')
+    clear(tabs)
+    for (var i = 0; i < TABS.length; i += 1) clear($('tab-' + TABS[i][0]))
+    for (var i2 = 0; i2 < TABS.length; i2 += 1) {
+      (function (name, label) {
+        var button = el('button', label)
+        button.dataset.tab = name
+        button.addEventListener('click', function () { setTab(name) })
+        tabs.appendChild(button)
+      }(TABS[i2][0], TABS[i2][1]))
+    }
+    renderOverview($('tab-overview'))
+    renderConversation($('tab-conversation'))
+    renderTrace($('tab-trace'))
+    renderScoring($('tab-scoring'))
+    $('tab-raw').appendChild(el('pre', JSON.stringify(doc, null, 2)))
+    setTab(active)
+    $('picker').hidden = true
+    $('view').hidden = false
+  }
+  function fail(message) {
+    var note = el('p', message)
+    note.className = 'warn'
+    $('note').appendChild(note)
+  }
+  function accept(raw, name) {
+    var parsed
+    try { parsed = JSON.parse(raw) } catch (error) { fail('不是合法的 JSON: ' + error.message); return }
+    if (!parsed || typeof parsed !== 'object') { fail('JSON 不是一份 panel 文档'); return }
+    doc = parsed
+    $('source').dataset.file = name
+    $('source').textContent = '数据源:' + name + '(只读) · session ' + text((doc.meta || {}).sessionId)
+    render()
+  }
+  function readFile(file) {
+    if (!file) return
+    var reader = new FileReader()
+    reader.onload = function () { accept(String(reader.result), file.name) }
+    reader.onerror = function () { fail('读取失败:' + file.name) }
+    reader.readAsText(file)
+  }
+  $('file').addEventListener('change', function (event) { readFile(event.target.files && event.target.files[0]) })
+  var picker = $('picker')
+  function on(type, className) {
+    picker.addEventListener(type, function (event) { event.preventDefault(); picker.className = className })
+  }
+  on('dragenter', 'drop'); on('dragover', 'drop'); on('dragleave', ''); on('drop', '')
+  picker.addEventListener('drop', function (event) {
+    readFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0])
+  })
+  var current = null
+  var pending = null
+  function parseRequested() {
+    var value = new URLSearchParams(window.location.search).get('data')
+    return value && /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/.test(value) ? value : null
+  }
+  function remember(name) {
+    current = name
+    var select = $('sessions')
+    var found = false
+    for (var i = 0; i < select.options.length; i += 1) {
+      if (select.options[i].value === name) { select.value = name; found = true; break }
+    }
+    if (!found && name) { var option = el('option', name); option.value = name; select.appendChild(option); select.value = name }
+    try {
+      var url = new URL(window.location.href)
+      url.searchParams.set('data', name)
+      history.replaceState(null, '', url.pathname + url.search)
+    } catch (error) { /* file:// has no history state to replace */ }
+  }
+  function load(name) {
+    if (!name) return
+    pending = name
+    fetch(name, { cache: 'no-store' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      return response.text()
+    }).then(function (raw) { pending = null; remember(name); accept(raw, name) }).catch(function (error) {
+      pending = null
+      fail('无法读取 ' + name + ':' + error.message + '(file:// 下浏览器会拦截,请改用拖拽或文件选择)')
+    })
+  }
+  function loadSessions() {
+    if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return
+    fetch('/api/sessions', { cache: 'no-store' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      return response.json()
+    }).then(function (index) {
+      var rows = index && Array.isArray(index.sessions) ? index.sessions : []
+      if (rows.length === 0) return
+      var select = $('sessions')
+      clear(select)
+      rows.forEach(function (row) {
+        var option = el('option', text(row.sessionId) + ' · ' + stamp(row.mtimeMs))
+        option.value = row.file
+        select.appendChild(option)
+      })
+      $('sessions-row').hidden = false
+      $('note').textContent = '服务模式:默认显示最新会话;用上方下拉切换同目录其它会话,也可以把 JSON 拖到本页。'
+      var wanted = pending || current || parseRequested()
+      if (wanted) {
+        select.value = wanted
+        if (!pending && !current) load(wanted)
+      } else {
+        select.value = rows[0].file
+        load(rows[0].file)
+      }
+    }).catch(function () { /* a plain static server has no /api/sessions; keep the drag/select flow */ })
+  }
+  $('sessions').addEventListener('change', function (event) { load(event.target.value) })
+  loadSessions()
+  var requested = parseRequested()
+  if (requested) load(requested)
+}())
+</script>
+</body>
+</html>
