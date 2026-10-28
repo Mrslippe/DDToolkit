@@ -121,3 +121,12 @@ docs/.obsidian/
 .tmp/
 .uv-cache/
 
+
+# 本地临时产物（2026-10-28 清理）：截图/调试页/临时目录/发版日志
+_tmp_*
+_test_tmp/
+_ui_probe_tmp/
+_*.log
+.tmp/
+.uv-cache/
+dist-release/
