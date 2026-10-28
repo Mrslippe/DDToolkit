@@ -81,6 +81,8 @@ function notifyTopBar(): void {
 let snap: FanTaskSnapshot = IDLE
 const subs = new Set<() => void>()
 let timer: ReturnType<typeof setInterval> | null = null
+/** 连续"后端没有任务条目"的次数（见 `tick`：一次空不判死）。 */
+let emptyProbes = 0
 
 function emit(patch: Partial<FanTaskSnapshot>): void {
   snap = { ...snap, ...patch }
@@ -117,13 +119,17 @@ async function tick(vtuber: string): Promise<void> {
     const p = r.items[0] ?? null
     if (!p) {
       /* 后端没有这个任务条目 = 从未开始、或已被清掉（重启/清缓存）。
-         ⚠️ 必须**结束轮询**：否则界面会永远停在一个"进行中"的假任务上
-         （2026-10-28 实测：用例里 `items: []` 就把 15 条用例连坐弄红）。 */
+         ⚠️ **一次空响应不判死**（2026-10-28）：任务刚发起时后端可能还没登记，
+         单次空就结束会让界面闪一下"完成"、甚至让页面误以为采集结束了。
+         连续两拍都空才收摊。 */
+      emptyProbes += 1
+      if (emptyProbes < 2) return
       stopPolling()
       emit({ state: 'done', progress: null, result: null, finishedAt: Date.now() })
-      notifyTopBar()          // 让顶栏立刻把"进行中"那颗胶囊撤掉，别等下一拍
+      notifyTopBar()
       return
     }
+    emptyProbes = 0
     if (p.state === 'running') {
       emit({ progress: p })
       return
@@ -183,6 +189,7 @@ export async function startCollect(opts: {
   emit({ openWindow: true })
   notifyTopBar()
   startPolling(opts.vtuber)
+  void tick(opts.vtuber)      // 立刻探一次：首个进度不用等 1 秒（2026-10-28）
 }
 
 /** 取消当前采集（后端立即中断；失败就把原因抛给调用方显示） */
@@ -207,11 +214,14 @@ async function analyzeTick(vtuber: string): Promise<void> {
     const r = await api.fanAnalyzeStatus(vtuber)
     const a = r.items[0] ?? null
     if (!a) {
+      emptyProbes += 1
+      if (emptyProbes < 2) return       // 同采集：一次空不判死
       stopPolling()
       emit({ state: 'done', progress: null, result: null, finishedAt: Date.now() })
-      notifyTopBar()          // 让顶栏立刻把"进行中"那颗胶囊撤掉，别等下一拍
+      notifyTopBar()
       return
     }
+    emptyProbes = 0
     if (a.state === 'running') {
       emit({ progress: asProgress(a) })
       return
@@ -264,6 +274,7 @@ export async function startAnalyze(opts: {
   notifyTopBar()
   stopPolling()
   timer = setInterval(() => { void analyzeTick(opts.vtuber) }, POLL_MS)
+  void analyzeTick(opts.vtuber)   // 同上：首个进度立刻探
 }
 
 /** 关掉浮窗/收起提示时清空（**只对已结束的任务生效**，运行中不许清） */
@@ -299,6 +310,7 @@ export function requestAnalyze(): void {
  */
 export function resetFanTask(): void {
   stopPolling()
+  emptyProbes = 0          // ⚠️ 这个计数是模块级的，不重置会跨用例累积
   snap = IDLE
   for (const fn of [...subs]) fn()
 }

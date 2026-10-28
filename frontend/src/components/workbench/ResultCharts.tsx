@@ -158,20 +158,57 @@ function EChart({ option }: { option: EChartsCoreOption }) {
   useEffect(() => {
     const host = box.current
     if (!host) return
+    if (!document.createElement('canvas').getContext('2d')) return   // jsdom：没有 canvas
+
     let raf = 0
-    let tries = 0
-    const boot = () => {
-      if (!host.isConnected) return
-      if (!host.offsetWidth && tries < 20) { tries += 1; raf = requestAnimationFrame(boot); return }
-      if (!document.createElement('canvas').getContext('2d')) return   // jsdom
+    let initRo: ResizeObserver | null = null
+    let sizeRo: ResizeObserver | null = null
+    let done = false
+
+    const init = (): boolean => {
+      if (done || !host.isConnected || !host.offsetWidth) return false
+      done = true
       api.current = echarts.init(host)
       // 先空 → 再真：ECharts 才会走原生入场动画（饼图 expansion / 折线描边 / 柱状生长）
       api.current.setOption(emptyData(option), true)
       lastOpt.current = option
       requestAnimationFrame(() => { api.current?.setOption(option, false) })
+      initRo?.disconnect()
+      // 之后容器尺寸再变（切页签、窗口缩放、侧栏收起）要跟着 resize，否则图会被拉伸/裁掉
+      if (typeof ResizeObserver !== 'undefined') {
+        sizeRo = new ResizeObserver(() => api.current?.resize())
+        sizeRo.observe(host)
+      }
+      return true
     }
-    raf = requestAnimationFrame(boot)
-    return () => cancelAnimationFrame(raf)
+
+    /*
+     * ⚠️ **宽度为 0 时绝不 init**（2026-10-28 修）。
+     *
+     * 原实现是"重试 20 帧，还没宽度就照样 init" —— 那会在隐藏状态（窗口最小化、
+     * 结果区还在 0 宽容器里、路由切换动画中）留下一个 **0×0 的画布**，之后再也不会
+     * resize ⇒ 用户看到的就是"卡片框和标题都在、里面**永远空白**"。
+     *
+     * 现在改成：等它**第一次有宽度**再 init（ResizeObserver + 帧重试双保险）。
+     */
+    if (!init()) {
+      if (typeof ResizeObserver !== 'undefined') {
+        initRo = new ResizeObserver(() => { init() })
+        initRo.observe(host)
+      }
+      let tries = 0
+      const retry = () => {
+        if (init() || tries >= 600 || !host.isConnected) return   // 600 帧 ≈ 10s 兜底
+        tries += 1
+        raf = requestAnimationFrame(retry)
+      }
+      raf = requestAnimationFrame(retry)
+    }
+    return () => {
+      cancelAnimationFrame(raf)
+      initRo?.disconnect()
+      sizeRo?.disconnect()
+    }
     // 只在挂载时初始化：后续数据更新走 key 重建（dataStamp），不需要重新 init
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

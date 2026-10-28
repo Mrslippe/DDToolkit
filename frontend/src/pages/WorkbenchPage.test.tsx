@@ -21,6 +21,8 @@ const fanCollect = vi.fn()
 const fanCollectStatus = vi.fn()
 const fanCollectCancel = vi.fn()
 const fanRanked = vi.fn()
+const fanAnalyzeStart = vi.fn()
+const fanAnalyzeStatus = vi.fn()
 const fanSearch = vi.fn()
 const fanTags = vi.fn()
 const fanMember = vi.fn()
@@ -54,6 +56,8 @@ vi.mock('../api/api', () => ({
     fanCollectStatus: (...a: unknown[]) => fanCollectStatus(...a),
     fanCollectCancel: (...a: unknown[]) => fanCollectCancel(...a),
     fanRanked: (...a: unknown[]) => fanRanked(...a),
+    fanAnalyzeStart: (...a: unknown[]) => fanAnalyzeStart(...a),
+    fanAnalyzeStatus: (...a: unknown[]) => fanAnalyzeStatus(...a),
   fanSearch: (...a: unknown[]) => fanSearch(...a),
   fanTags: (...a: unknown[]) => fanTags(...a),
   fanMember: (...a: unknown[]) => fanMember(...a),
@@ -159,6 +163,18 @@ beforeEach(() => {
   })
   fanSearch.mockReset().mockResolvedValue({ items: [], total_match: 0 })
   fanTags.mockReset().mockResolvedValue({ items: [] })
+  /* 分析任务：默认**一次探测就已完成**（后端算完落缓存的那种形态）——
+     这样「点分析 → 取结果」在用例里只需几个 microtask，不必真等 1 秒轮询。 */
+  fanAnalyzeStart.mockReset().mockResolvedValue({
+    ok: true, vtuber: '弥月Mizuki', window: 25, state: 'running',
+  })
+  fanAnalyzeStatus.mockReset().mockResolvedValue({
+    items: [{
+      vtuber: '弥月Mizuki', window: 25, since: '2026-09-01', until: '2026-09-30',
+      state: 'done', phase: '', done: 25, total: 25, current: '',
+      error: '', started_at: 1, finished_at: 2,
+    }], count: 1,
+  })
   fanMember.mockReset().mockResolvedValue({
     uid: '19871', name: '碳了个酸', avatar: '/fan/avatar/19871', type: '综合', strength: 0.9994,
     axis_percentiles: { attendance: 1, interaction: 1, payment: 1 },
@@ -404,6 +420,42 @@ describe('空态与页签（2026-10-23）', () => {
     expect(q('[data-testid="workbench-progress"]')).toBeNull()
     expect(q('[data-testid="chart-empty"]')).toBeTruthy()
     expect((q('[data-testid="result-empty"]')!.textContent ?? '')).toContain('正在采集弹幕')
+  })
+
+  it('★ 分析任务结束后结果区必须有内容（2026-10-28 回归：图二空白）', async () => {
+    /* 复现路径：点「分析」→ 后台任务 → 轮询到 done → finishedAt 边沿 → loadRanked。
+       用户实测这里出现过"卡片在、里面全空"，所以这条用例**断言 DOM 里真的有行**，
+       而不是只断言接口被调用过。 */
+    fanAnalyzeStatus.mockResolvedValue({
+      items: [{
+        vtuber: '弥月Mizuki', window: 25, since: '2026-09-01', until: '2026-09-30',
+        state: 'running', phase: 'load', done: 1, total: 25, current: '09-01 20:00',
+        error: '', started_at: 1, finished_at: null,
+      }], count: 1,
+    })
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(fanAnalyzeStart).toHaveBeenCalledTimes(1)
+
+    // 任务完成（下一拍轮询读到 done）
+    fanAnalyzeStatus.mockResolvedValue({
+      items: [{
+        vtuber: '弥月Mizuki', window: 25, since: '2026-09-01', until: '2026-09-30',
+        state: 'done', phase: '', done: 25, total: 25, current: '',
+        error: '', started_at: 1, finished_at: 2,
+      }], count: 1,
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 1200)) })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    // 收尾必须真的去取结果（缓存命中），并且 DOM 里有行
+    expect(fanRanked).toHaveBeenCalled()
+    const table = q('[data-testid="ranked-table"]')
+    expect(table).not.toBeNull()
+    expect(table!.querySelectorAll('tbody tr').length).toBe(2)   // RANKED.items 两条
   })
 
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
