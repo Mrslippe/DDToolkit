@@ -129,7 +129,9 @@ export default function WorkbenchPage() {
   const progress = task.kind === 'collect' ? task.progress : null
   const [ranked, setRanked] = useState<FanRanked | null>(null)
   /** 当前 `ranked` 数据属于哪个页签：切页签后数据未到时，图表区不渲染（避免挂载两次） */
-  const [rankedTab, setRankedTab] = useState<ResultTab>('overview')
+  /* 结果区图表**不再**按"数据是否跟上页签"门控（2026-10-28 删掉 `rankedTab`）：
+     图表数据与排序口径 `by` 无关，切页签直接沿用旧结果即可；
+     旧门控的真实代价是"切页签那一刻图表区渲染成空占位" ⇒ 用户看到卡片消失。 */
   const [tab, setTab] = useState<ResultTab>('overview')
   /** 懒加载累积的行（切页签时清空） */
   const [rows, setRows] = useState<FanRankedRow[]>([])
@@ -366,6 +368,15 @@ export default function WorkbenchPage() {
    */
   const winSize = win?.size ?? 75     // 75 = 后端 `DEFAULT_WINDOW`（滑杆还没有读数时的兜底）
 
+  /**
+   * 当前结果**基于哪一组参数**（窗口 + 区间 + 场次清单）。
+   *
+   * 用途：切页签时判断"能不能安全地重新取数" —— 参数没变时 `/ranked` 会命中结果包（毫秒级）；
+   * 参数变了（用户刚拖过区间但还没重新分析）再去请求，后端就得**重算几十秒**，
+   * 而重算期间图表区会被清空 —— 用户看到的就是"卡片不见了"（2026-10-28 用户报）。
+   */
+  const rankedBasisRef = useRef('')
+
   const loadRanked = useCallback(async (
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
@@ -375,6 +386,7 @@ export default function WorkbenchPage() {
     if (!picked || !since || !until) return
     analyzedRef.current = true      // 从这一刻起，切页签/改标签才允许跟着刷新
     setBusy(true)
+    const ids = slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)
     try {
       setRankedStale(false)
       const data = await withNetRetry(
@@ -385,12 +397,11 @@ export default function WorkbenchPage() {
              的缓存键不同 ⇒ 分析完这里又重算一遍（用户实测：分析完成后还要再等十秒）。 */
           window: winSize,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
-          ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
+          ids,
         }))
       setRanked(data)
-      // `by` 是后端口径名（strength/attendance/...），反查回页签
-      const tabOf = (Object.keys(TAB_BY) as RankedTab[]).find((t) => TAB_BY[t] === by)
-      if (tabOf) setRankedTab(tabOf)
+      // 记下"这份结果基于哪一组参数"：切页签/翻页时据此判断能不能安全重取（见 `rankedBasisRef`）
+      rankedBasisRef.current = `${winSize}|${since}|${until}|${ids.join(',')}`
       setRows((prev) => (append ? [...prev, ...data.items] : data.items))
       const total = data.list_total ?? data.pool?.size ?? data.total_in_pool
       // 一页空 = 到底（否则 `off + 0 < total` 永远成立，观察者会无限触发、
@@ -415,11 +426,25 @@ export default function WorkbenchPage() {
   }, [tagFilter.join('|')])
 
   /** 切页签：**没分析过就只切 UI**（2026-10-28），分析过才按新口径取数（命中缓存，很快） */
+  /**
+   * 切页签：**只在"参数没变"时才重新取数**（2026-10-28）。
+   *
+   * 参数没变 ⇒ 后端命中结果包，毫秒级，安全；
+   * 参数变了（用户刚拖过区间、还没重新分析）⇒ 请求会触发**几十秒重算**，
+   * 而重算期间图表被清空 —— 用户看到的就是"切个页签，卡片没了"。
+   * 这时只切 UI：图表数据与 `by` 无关，表格沿用旧结果并由 `rankedStale` 标注。
+   */
   const onTab = useCallback((t: ResultTab): void => {
     setTab(t)
     setHasMore(false)
-    if (analyzedRef.current) void loadRanked(byOf(t), 0, false, tagFilterRef.current)
-  }, [loadRanked])
+    const ids = slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean)
+    const cur = `${winSize}|${since}|${until}|${ids.join(',')}`
+    if (analyzedRef.current && cur === rankedBasisRef.current) {
+      void loadRanked(byOf(t), 0, false, tagFilterRef.current)
+    } else if (analyzedRef.current) {
+      setRankedStale(true)      // 结果基于旧参数：明确标出来，不偷算
+    }
+  }, [loadRanked, slice, winSize, since, until])
 
   // 标签目录随 /ranked 一起返回（2026-10-25）：不再单独发请求 ——
   // 之前那次请求命不中同一份计算缓存，会触发十几秒重算，筛选弹层在数据回来前只能空着。
@@ -778,12 +803,19 @@ export default function WorkbenchPage() {
                     since={since}
                     until={until}
                   />
-                ) : rankedTab === tab ? (
+                ) : (
+                  /* ⚠️ 不再用 `rankedTab === tab` 门控图表（2026-10-28）。
+                     那个门控的目的是"别用旧数据挂图再闪一次"，但它的代价是：
+                     切页签那一刻图表区渲染成**空占位**，用户看到的就是"卡片消失了"
+                     （尤其在他刚拖过时间区间、切页签又触发了一次请求的时候）。
+                     图表数据（`charts`/`pool`）与排序口径 `by` **无关** ⇒ 直接沿用旧结果，
+                     表格另有一条 stale 标注说明"结果基于旧区间"。 */
                   <ResultCharts items={ranked.items} pool={ranked.pool} tab={tab}
                                 attBins={ranked.att_bins} charts={ranked.charts}
+                                /* `dataStamp` 决定卡片**重挂载**，而重挂载是入场动画的唯一触发点
+                                   （2026-10-28：别把 `by` 从这里去掉 —— 去掉后切页签不再重挂载，
+                                   用户看到的就是"动画不见了"）。 */
                                 dataStamp={`${ranked.sessions}-${ranked.total_in_pool}-${ranked.by}`} />
-                ) : (
-                  <div className="wb-charts-pending" aria-hidden />
                 )}
                 {tab !== 'compare' && <RankedTable
                   vtuber={picked}

@@ -171,10 +171,15 @@ function EChart({ option }: { option: EChartsCoreOption }) {
       if (done || !host.isConnected || !host.offsetWidth) return false
       done = true
       api.current = echarts.init(host)
-      // 先空 → 再真：ECharts 才会走原生入场动画（饼图 expansion / 折线描边 / 柱状生长）
+      // 先空 → 再真：ECharts 才会走原生入场动画（饼图 expansion / 折线描边 / 柱状生长）。
+      // ⚠️ **两次 rAF**（2026-10-28）：只等一帧时，若 init 发生在 ResizeObserver 回调里
+      //    （宽度 0 被推迟初始化的情况），空数据那一步可能还没真正绘制就被真数据覆盖 ⇒
+      //   ECharts 认为"没有从空到有"，动画直接不播（用户报"动画又不见了"）。
       api.current.setOption(emptyData(option), true)
       lastOpt.current = option
-      requestAnimationFrame(() => { api.current?.setOption(option, false) })
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        api.current?.setOption(option, true)
+      }))
       initRo?.disconnect()
       // 之后容器尺寸再变（切页签、窗口缩放、侧栏收起）要跟着 resize，否则图会被拉伸/裁掉
       if (typeof ResizeObserver !== 'undefined') {

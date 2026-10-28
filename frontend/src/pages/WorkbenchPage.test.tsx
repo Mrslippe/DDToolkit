@@ -532,6 +532,23 @@ describe('空态与页签（2026-10-23）', () => {
     expect(document.body.textContent).toContain('2026-09-01')
   })
 
+  it('★ 切页签时请求还没回来，图表卡片不能消失（2026-10-28 用户报）', async () => {
+    /* 旧实现用 `rankedTab === tab` 门控图表，切页签的那一刻渲染的是**空占位**
+       —— 用户看到的就是"拖了时间区间再切页签，卡片直接不见"。
+       现在图表数据与 `by` 无关 ⇒ 请求在途时也沿用旧结果。 */
+    await analyse()
+    expect(q('[data-testid="chart-pie-card"]')).toBeTruthy()
+    // 让 /ranked 永远不返回：模拟"后端正在算"
+    fanRanked.mockReturnValue(new Promise(() => {}))
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="tab-payment"]')!.click()
+    })
+    await act(async () => { await Promise.resolve() })
+    // 切到「付费」后仍应渲染**付费页的图表卡**（而不是空占位），表格也还在
+    expect(q('[data-testid="chart-payshare"]')).toBeTruthy()
+    expect(q('[data-testid="ranked-table"]')).toBeTruthy()
+  })
+
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
     await analyse()
     const more = q<HTMLButtonElement>('[data-testid="ranked-more"]')!
