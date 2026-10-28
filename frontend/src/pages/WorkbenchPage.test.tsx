@@ -458,6 +458,44 @@ describe('空态与页签（2026-10-23）', () => {
     expect(table!.querySelectorAll('tbody tr').length).toBe(2)   // RANKED.items 两条
   })
 
+  it('★ 分析中：进度条左标必须是「分析进度」，不是「采集进度」（2026-10-28 用户报）', async () => {
+    fanAnalyzeStatus.mockResolvedValue({
+      items: [{
+        vtuber: '弥月Mizuki', window: 25, since: '2026-09-01', until: '2026-09-30',
+        state: 'running', phase: 'load', done: 3, total: 25, current: '09-01 20:00',
+        error: '', started_at: 1, finished_at: null,
+      }], count: 1,
+    })
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const row = q('[data-testid="result-thin-progress"]')!
+    expect(row.textContent).toContain('分析进度')
+    expect(row.textContent).not.toContain('采集进度')
+    expect(row.textContent).toContain('12%')      // 3/25
+  })
+
+  it('★ 分析任务与 /ranked 的窗口参数必须一致（缓存键一致）', async () => {
+    /* 这条 bug 咬过两次：`_compute` 的缓存键含 (window, live_ids)，
+       分析任务与页面取结果的参数一旦不同，就会把同一份数据算两遍
+       （症状：分析完成后还要再等十秒"读取结果"）。 */
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-load"]')!.click()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    const aOpts = fanAnalyzeStart.mock.calls[0][1] as { window?: number; ids?: string[] }
+    const rOpts = fanRanked.mock.calls.at(-1)![2] as { window?: number; ids?: string[] }
+    expect(aOpts.window).toBeGreaterThan(0)
+    expect(aOpts.window).toBe(rOpts.window)
+    // 空清单在两处都表现为"不传"（URL 里同样没有 ids）⇒ 归一后必须相等
+    expect(aOpts.ids ?? []).toEqual(rOpts.ids ?? [])
+  })
+
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
     await analyse()
     const more = q<HTMLButtonElement>('[data-testid="ranked-more"]')!

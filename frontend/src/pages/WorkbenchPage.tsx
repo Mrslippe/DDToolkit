@@ -283,6 +283,13 @@ export default function WorkbenchPage() {
    */
   const analyzedRef = useRef(false)
 
+  /**
+   * 窗口场次（用户滑杆选的那个）。**分析任务与 `/ranked` 必须用同一个值** ——
+   * 后端 `_compute` 的缓存键含 `window`，两边不同就会把同一份数据算两遍
+   * （2026-10-28 用户实测：分析完成后还要再等十秒）。
+   */
+  const winSize = win?.size ?? 75     // 75 = 后端 `DEFAULT_WINDOW`（滑杆还没有读数时的兜底）
+
   const loadRanked = useCallback(async (
     by: 'strength' | 'attendance' | 'interaction' | 'payment' = 'strength',
     off = 0,
@@ -297,6 +304,10 @@ export default function WorkbenchPage() {
       const data = await withNetRetry(
         () => api.fanRanked(picked, by, {
           since, until, limit: PAGE, offset: off, tags: tags ?? tagFilterRef.current,
+          /* ⚠️ `window` 必须显式传＝滑杆窗口（2026-10-28）：不传会落到后端默认值
+             （`DEFAULT_WINDOW`），与后台分析任务用的 `win.size` **不同** ⇒ `_compute`
+             的缓存键不同 ⇒ 分析完这里又重算一遍（用户实测：分析完成后还要再等十秒）。 */
+          window: winSize,
           // 传窗口清单：分析样本 = 滑杆窗口 = 采集对象
           ids: slice.map((s) => String((s as { live_id?: string }).live_id ?? '')).filter(Boolean),
         }))
@@ -316,7 +327,7 @@ export default function WorkbenchPage() {
     } finally {
       setBusy(false)
     }
-  }, [picked, since, until, slice])
+  }, [picked, since, until, slice, winSize])
 
   useEffect(() => {
     tagFilterRef.current = tagFilter
@@ -394,7 +405,13 @@ export default function WorkbenchPage() {
     try { await cancelCollect() } catch (e) { setErr(friendly(e as Error)) }
   }, [])
 
-  const running = task.state === 'running'
+  /**
+   * ⚠️ 这两个**必须分开**（2026-10-28 用户报：分析时进度条左标却写「采集进度」）：
+   * `task.state === 'running'` 对采集**和**分析都成立，用它当"正在采集"会让所有采集文案
+   * 在分析任务期间抢占显示。所以：`collectRunning` 只认采集任务，`anyTaskRunning` 只管禁用。
+   */
+  const collectRunning = task.kind === 'collect' && task.state === 'running'
+  const anyTaskRunning = task.state === 'running'
   /** 分析任务在跑（与"取数中"是两件事，文案必须分开，2026-10-28） */
   const taskAnalyzing = task.kind === 'analyze' && task.state === 'running'
   const analyzePct = taskAnalyzing && (task.progress?.total ?? 0) > 0
@@ -417,11 +434,11 @@ export default function WorkbenchPage() {
    * 与上下卡片留出间距；任务结束后**渐隐并收起高度**，让下方卡片平滑顶上来
    * （不能瞬间消失 —— 那会让卡片"跳"一下）。
    */
-  const barActive = running || busy || taskAnalyzing
-  const barPct: number | null = running && (progress?.total ?? 0) > 0 ? pct
+  const barActive = collectRunning || busy || taskAnalyzing
+  const barPct: number | null = collectRunning && (progress?.total ?? 0) > 0 ? pct
     : taskAnalyzing && analyzePct != null ? analyzePct
       : null
-  const barLabel = running ? '采集进度' : taskAnalyzing ? '分析进度' : '读取进度'
+  const barLabel = collectRunning ? '采集进度' : taskAnalyzing ? '分析进度' : '读取进度'
   const [barLeaving, setBarLeaving] = useState(false)
   const barWasActive = useRef(false)
   useEffect(() => {
@@ -439,7 +456,7 @@ export default function WorkbenchPage() {
     return () => window.clearTimeout(t)
   }, [barActive])
   /** 空态卡的正文提示：**按当前状态给下一步动作**（2026-10-28） */
-  const emptyHint = running ? '采集完成后点「分析」'
+  const emptyHint = collectRunning ? '采集完成后点「分析」'
     : taskAnalyzing ? '分析进行中，算完后这里会直接显示结果'
       : busy ? '正在读取结果…'
         : toCollect === null ? '先选一个场次窗口'
@@ -544,27 +561,27 @@ export default function WorkbenchPage() {
                         setPickedRange(r)
                         setCoverTick((t) => t + 1)     // 让滑杆把窗口覆盖到整段
                       }}
-                      disabled={running || busy} />
+                      disabled={anyTaskRunning || busy} />
                   </div>
-                  <PurgeButton name={picked} disabled={running || busy}
+                  <PurgeButton name={picked} disabled={anyTaskRunning || busy}
                                onPurged={() => {
                                  setRanked(null)
                                  withNetRetry(() => api.fanActivity(picked))
                                    .then(setActivity).catch(() => {})
                                }} />
-                  {running && (
+                  {collectRunning && (
                     <FloatPill size="md" shape="text" onClick={() => void cancel()}
                                data-testid="workbench-cancel">取消</FloatPill>
                   )}
                   <FloatPill size="md" shape="text" active
-                             disabled={!win || unknown || !toCollect || busy || running}
+                             disabled={!win || unknown || !toCollect || busy || anyTaskRunning}
                              onClick={() => void startCollect()}
                              data-testid="workbench-collect">
-                    {running ? '采集中…'
+                    {collectRunning ? '采集中…'
                       : unknown ? '预估中…'
                         : toCollect ? `采集 ${toCollect} 场` : '已全部采集'}
                   </FloatPill>
-                  <FloatPill size="md" shape="text" disabled={!win || busy || running}
+                  <FloatPill size="md" shape="text" disabled={!win || busy || anyTaskRunning}
                              onClick={() => {
             if (slice.length > BIG_WINDOW) { setBigWinAsk(slice.length); return }
             /* 分析也走**应用级任务**（2026-10-28，第四批）：这样它才有逐场进度、
@@ -573,7 +590,7 @@ export default function WorkbenchPage() {
                ⚠️ 与采集一致：**不自动弹浮窗**，进度在顶栏，点顶栏才开。 */
             setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
             void startAnalyzeTask({
-              vtuber: picked, window: win?.size ?? 75, since, until,
+              vtuber: picked, window: winSize, since, until,
               // 把窗口清单一起发过去：后端 `_compute` 的缓存键含 `live_ids`，
               // 与这里随后 `loadRanked` 发的 `ids` 一致才会命中缓存（否则等于算两遍）
               liveIds: slice.map((s) => String((s as { live_id?: string }).live_id ?? ''))
@@ -709,7 +726,7 @@ export default function WorkbenchPage() {
                 <h2 className="wb-card-title">
                   分析结果
                   <span className="wb-card-note" style={{ marginLeft: 8 }}>
-                    {running ? '正在采集弹幕…'
+                    {collectRunning ? '正在采集弹幕…'
                       : taskAnalyzing
                         ? `正在分析… ${task.progress?.done ?? 0}/${task.progress?.total || '?'} 场`
                         : busy ? `正在读取结果… 已用 ${busySecs} 秒`
