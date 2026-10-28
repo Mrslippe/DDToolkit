@@ -364,13 +364,26 @@ describe('空态与页签（2026-10-23）', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
   }
 
-  it('★ 空态只留一句引导，不显示采集胶囊', async () => {
+  it('★ 空态沿用有结果的卡片样式，内容换成空态文本（2026-10-28）', async () => {
     await mount()
     const empty = q('[data-testid="result-empty"]')
     expect(empty).toBeTruthy()
-    expect(empty!.textContent).toContain('请先选择时间范围进行分析')
+    // 卡片框在：图表两卡 + 名单卡（框架与有结果时一致）
+    expect(q('[data-testid="result-charts-empty"]')).toBeTruthy()
+    expect(q('[data-testid="chart-empty-tiers"]')).toBeTruthy()
+    expect(q('[data-testid="chart-empty-strength"]')).toBeTruthy()
+    expect(q('[data-testid="ranked-table-card"]')).toBeTruthy()
+    expect(q('[data-testid="ranked-empty"]')).toBeTruthy()
+    // 内容换成空态文本
+    const text = empty!.textContent ?? ''
+    expect(text).toContain('核心度分层')
+    expect(text).toContain('暂无数据')
+    expect(text).toContain('请先进行采集')
     // 采集信息只在「直播与采集」卡里，结果区空态不该出现
     expect(q('[data-testid="workbench-preview"]')).toBeNull()
+    // 空态下没有表格行，也没有搜索/导出这些"点了没反应"的按钮
+    expect(q('[data-testid="ranked-table"]')).toBeNull()
+    expect(q('[data-testid="export-csv"]')).toBeNull()
   })
 
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {

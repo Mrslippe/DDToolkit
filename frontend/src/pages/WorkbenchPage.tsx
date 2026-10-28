@@ -20,7 +20,7 @@ import ProfileCard from '../components/workbench/ProfileCard'
 import PurgeButton from '../components/workbench/PurgeButton'
 import RangeButton from '../components/workbench/RangeButton'
 import RankedTable from '../components/workbench/RankedTable'
-import ResultCharts, { type RankedTab, type ResultTab } from '../components/workbench/ResultCharts'
+import ResultCharts, { EMPTY_TEXT, type RankedTab, type ResultTab } from '../components/workbench/ResultCharts'
 import ResultTabs from '../components/workbench/ResultTabs'
 import ComparePanel from '../components/workbench/ComparePanel'
 import MemberDrawer from '../components/workbench/MemberDrawer'
@@ -675,8 +675,34 @@ export default function WorkbenchPage() {
               </div>
             </>
           ) : (
-            <div className="wb-empty" data-testid="result-empty">
-              <p>请先选择时间范围进行分析</p>
+            /* ── 空态（2026-10-28 用户口径）：**沿用有结果时的那套卡片样式**，只把卡片
+               内容换成空态文本。目的不是"好看"，而是让用户在没数据时也能看出
+               「分析完成后这里会出现哪些卡」，而不是看到一句孤零零的提示。
+               ⚠️ 对比页要先有名单才能对比 ⇒ 它单独一张卡，不去假装有矩阵。 */
+            <div data-testid="result-empty">
+              {tab === 'compare' ? (
+                <section className="wb-card wb-chart-card" data-testid="compare-empty">
+                  <h3 className="wb-card-title">对比</h3>
+                  <div className="wb-empty wb-empty-card">
+                    <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
+                    <p>请先进行采集，再分析一位主播，然后与其它主播对比重叠</p>
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <ResultCharts items={[]} pool={null} tab={tab} empty />
+                  <RankedTable
+                    rows={[]} total={0} hasMore={false} loading={false}
+                    onLoadMore={() => {}}
+                    vtuber={picked} since={since} until={until}
+                    ids={slice.map((s) => String((s as { live_id?: string }).live_id ?? ''))
+                      .filter(Boolean)}
+                    onOpenMember={setMemberUid}
+                    tagOptions={[]} tagFilter={[]} onTagFilter={() => {}}
+                    sessionMeta={[]} tab={tab} empty
+                  />
+                </>
+              )}
             </div>
           )}
         </section>

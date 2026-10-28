@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, resolveAsset } from '../../api/api'
 import type { FanRankedRow, FanSortBy } from '../../api/types'
 import type { ResultTab } from './ResultCharts'
+import { EMPTY_TEXT } from './ResultCharts'
 import { Download } from 'lucide-react'
 import MemberSearch from './MemberSearch'
 import TagFilter from './TagFilter'
@@ -37,6 +38,11 @@ interface Props {
   sessionMeta: { at: string; title?: string }[]
   /** 每场的时滞参照（p90） */
   lagRef?: number[]
+  /**
+   * 空态（2026-10-28）：还没分析时也保留这张卡的**外壳**（标题/边框），
+   * 正文换成空态文本，并且**不渲染**搜索/标签/导出（没数据时它们没有意义）。
+   */
+  empty?: boolean
 }
 
 /** 头像失败时退回昵称/uid 首字（开了「隐藏昵称」就只退回 uid 首位 —— 否则那一个
@@ -144,6 +150,7 @@ export default function RankedTable({
   rows, total, hasMore, loading, onLoadMore, tab = 'overview', by,
   vtuber, since, until, ids, onOpenMember,
   tagOptions, tagLoading, tagError, tagFilter, onTagFilter, sessionMeta, lagRef,
+  empty,
 }: Props) {
   /** 导出 CSV：走后端拿全量，与页面口径一致（2026-10-28） */
   const [exporting, setExporting] = useState(false)
@@ -181,6 +188,29 @@ export default function RankedTable({
     io.observe(el)
     return () => io.disconnect()
   }, [hasMore, loading, onLoadMore])
+
+  /**
+   * 空态（2026-10-28）：保留卡壳与「名单」标题，正文换成空态文本。
+   * ⚠️ 放在所有 hook 之后 —— 否则 `empty` 一变 hook 数量就变。
+   * ⚠️ 搜索/标签/导出在这里**不渲染**：没有数据时它们是三个点不动的按钮。
+   */
+  if (empty) {
+    return (
+      <section className="wb-card wb-table-card" data-testid="ranked-table-card"
+               data-empty="1">
+        <div className="wb-card-head">
+          <h3 className="wb-card-title">
+            名单
+            <span className="wb-card-note" style={{ marginLeft: 8 }}>尚未分析</span>
+          </h3>
+        </div>
+        <div className="wb-empty wb-empty-card" data-testid="ranked-empty">
+          <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
+          <p>{EMPTY_TEXT.hint}</p>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="wb-card wb-table-card" data-testid="ranked-table-card">

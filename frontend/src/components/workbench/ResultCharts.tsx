@@ -17,6 +17,40 @@ export type RankedTab = Exclude<ResultTab, 'compare'>
 const PINK = ['#c9406f', '#ffa2b4', '#fc7079', '#7c93b5', '#d9a5b3', '#a66c8a']
 const GREEN = '#52c41a'
 
+/**
+ * 各页签的**卡片目录**（2026-10-28，空态专用）。
+ *
+ * 为什么要有这张表：还没分析时 `charts` 是空的 ⇒ 卡片的标题也拼不出来。
+ * 而用户口径是「没分析时也采用有结果时的那套卡片样式，内容换成空态文本」——
+ * 所以标题必须**与有结果时逐字一致**，否则同一页签在"无数据/有数据"两种状态下
+ * 会长成两副样子（切一下页签就像换了个页面）。
+ *
+ * ⚠️ 改这里的标题/副标题时，**必须同步上面 `cards` 里真实卡片那一份**；
+ *    `ResultCharts.empty.test.tsx` 有一条用例专门比对两处是否齐全。
+ */
+export const EMPTY_CARDS: Record<RankedTab, { key: string; title: string; note: string }[]> = {
+  overview: [
+    { key: 'tiers', title: '核心度分层', note: '按三轴分位划入四类' },
+    { key: 'strength', title: '核心度分布', note: '横轴核心度 · 纵轴人数' },
+    { key: 'trend', title: '核心观众池变化', note: '每 5 场一格 · 新进 / 出池 / 未变动' },
+  ],
+  attendance: [
+    { key: 'att', title: '出席分布', note: '横轴出席场次 · 纵轴人数' },
+    { key: 'lag', title: '入场时滞分布', note: '横轴场均时滞（分钟）· 纵轴人数' },
+  ],
+  interaction: [
+    { key: 'msgshare', title: '弹幕量贡献', note: 'Top 8 + 其他' },
+    { key: 'msgpct', title: '场均弹幕分布', note: '横轴分位（对数）· 纵轴场均弹幕' },
+  ],
+  payment: [
+    { key: 'payshare', title: '付费贡献', note: 'Top 8 + 其他（鲸鱼单列）' },
+    { key: 'pay', title: '付费构成', note: '全池合计' },
+  ],
+}
+
+/** 空态卡片的正文（用户 2026-10-28 口径：卡片内容用空态文本填充） */
+export const EMPTY_TEXT = { title: '暂无数据', hint: '请先进行采集' }
+
 interface Props {
   items: FanRankedRow[]
   pool: {
@@ -44,6 +78,11 @@ interface Props {
     msg_split_top?: { labels: string[]; values: number[]; uids?: (string | null)[] }
     msg_pct?: { pcts: number[]; means: number[] }
   }
+  /**
+   * 空态（2026-10-28）：还没分析时也画**同样的卡片框**，内容换成空态文本。
+   * 只影响渲染分支，不碰任何取数逻辑。
+   */
+  empty?: boolean
 }
 
 interface Card {
@@ -165,7 +204,7 @@ const axisBase = (labels: string[], values: number[], name: string): EChartsCore
  * - **饼图永远排第一**（用户口径）；
  * - 每张图都是独立 `EChart`，宿主或 option 变化都会重建实例。
  */
-export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp }: Props) {
+export default function ResultCharts({ items, pool, tab, attBins, charts, dataStamp, empty }: Props) {
   const [page, setPage] = useState(0)
 
   /** 「隐藏昵称」（2026-10-28）：贡献榜那两张图的图例/饼图扇区文字换成 uid */
@@ -439,6 +478,41 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
     hoverEdge === 'left' ? 'is-left' : '',
     hoverEdge === 'right' ? 'is-right' : '',
   ].filter(Boolean).join(' ')
+
+  /**
+   * 空态：**同样的两卡一页框**（`.wb-charts` / `.wb-charts-page` / `.wb-card.wb-chart-card`），
+   * 只把内容换成空态文本。两处刻意的差别：
+   * ① 该页签的卡**一次全列出来** —— 空态没有"第几页"的概念，用户该一眼看到将来会出现哪些卡；
+   * ② **不渲染左右箭头**（没有第二页可翻）。
+   * ⚠️ 必须放在所有 hook 之后、`if (!pages.length) return null` 之前 ——
+   *    否则 `empty` 一变，hook 数量就变，React 会报错。
+   */
+  if (empty) {
+    const dir = EMPTY_CARDS[tab as RankedTab] ?? []
+    return (
+      <div className="wb-charts" data-testid="result-charts-empty">
+        <div className="wb-charts-viewport">
+          <div className="wb-charts-pages" data-page={0}>
+            <div className="wb-charts-page">
+              {dir.map((c) => (
+                <section className="wb-card wb-chart-card" key={c.key}
+                         data-testid={`chart-empty-${c.key}`}>
+                  <h3 className="wb-card-title">
+                    {c.title}
+                    {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
+                  </h3>
+                  <div className="wb-empty wb-empty-card">
+                    <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
+                    <p>{EMPTY_TEXT.hint}</p>
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!pages.length) return null
 
