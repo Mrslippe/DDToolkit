@@ -57,6 +57,8 @@ describe('useFanTask：任务状态在应用级', () => {
     expect(fanTaskRunning()).toBe(true)
     expect(s.progress?.total).toBe(30)
     expect(collect).toHaveBeenCalledWith('弥月Mizuki', '2026-09-01', '2026-09-30', ARGS.liveIds)
+    // 用户 2026-10-28 修订：点采集**直接弹窗**（关掉不影响任务）
+    expect(s.openWindow).toBe(true)
   })
 
   it('轮询一拍就更新进度（running ⇒ progress 换新）', async () => {
@@ -152,6 +154,7 @@ describe('useFanTask：分析任务（2026-10-28）', () => {
     expect(analyze).toHaveBeenCalled()
     expect(fanTask().kind).toBe('analyze')
     expect(fanTask().state).toBe('running')
+    expect(fanTask().openWindow).toBe(true)      // 与采集同一口径：发起即弹窗
     await vi.advanceTimersByTimeAsync(POLL_MS)
     const p = fanTask().progress!
     expect(p.done).toBe(3)

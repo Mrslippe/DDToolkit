@@ -62,6 +62,22 @@ const IDLE: FanTaskSnapshot = {
 /** 采集进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
 export const POLL_MS = 1000
 
+/**
+ * 顶栏刷新事件（2026-10-28，第 3 条改进）。
+ *
+ * 顶栏的进度胶囊来自**后端** `notices.progress-fan`，而顶栏是轮询/推送拿通知的 ——
+ * 于是"点了采集 → 顶栏出现"会差 1~3 秒（等下一拍）。任务一发起就广播这个事件，
+ * 顶栏收到后**立刻**拉一次通知，延迟就降到一次请求（几十毫秒）。
+ *
+ * ⚠️ 用 DOM 事件而不是 import 耦合：`TopBar` 已经在渲染树上层，反向依赖 store 的
+ * 内部函数没必要；事件也让"谁发起"与"谁听"解耦。
+ */
+export const FAN_TASK_EVENT = 'ddtoolkit:fan-task-changed'
+
+function notifyTopBar(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(FAN_TASK_EVENT))
+}
+
 let snap: FanTaskSnapshot = IDLE
 const subs = new Set<() => void>()
 let timer: ReturnType<typeof setInterval> | null = null
@@ -160,6 +176,10 @@ export async function startCollect(opts: {
     emit({ state: 'failed', error: msg, finishedAt: Date.now() })
     throw e
   }
+  /* 用户口径（2026-10-28 修订）：点采集后**直接弹窗**看细节。
+     关掉它不影响任务（轮询在本模块），顶栏胶囊照旧。 */
+  emit({ openWindow: true })
+  notifyTopBar()
   startPolling(opts.vtuber)
 }
 
@@ -235,6 +255,9 @@ export async function startAnalyze(opts: {
     emit({ state: 'failed', error: msg, finishedAt: Date.now() })
     throw e
   }
+  // 与采集同一口径：发起即弹窗（2026-10-28 用户修订）
+  emit({ openWindow: true })
+  notifyTopBar()
   stopPolling()
   timer = setInterval(() => { void analyzeTick(opts.vtuber) }, POLL_MS)
 }
