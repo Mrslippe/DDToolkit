@@ -27,7 +27,7 @@ import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
 import {
-  cancelCollect, dismissTask, openTaskWindow, startAnalyze as startAnalyzeTask,
+  cancelCollect, dismissTask, startAnalyze as startAnalyzeTask,
   startCollect as startCollectTask, useFanTask,
 } from '../hooks/useFanTask'
 import '../styles/workbench.css'
@@ -393,6 +393,30 @@ export default function WorkbenchPage() {
     ? Math.min(100, Math.round((progress.done / progress.total) * 100))
     : 0
 
+  /**
+   * 结果区的三枚读数胶囊（2026-10-28 第 1 条修订）：**空态也要显示** ——
+   * 用户截图里的那一行是整页骨架的一部分，采集/分析前后都该在。
+   * 抽成常量而不是复制两份：同一份数字，两种页面状态必须一致。
+   */
+  const statsPills = win ? (
+    <div className="wb-stats" data-testid="workbench-preview">
+      <div className="wb-stat">
+        <span className="wb-stat-label">窗口场次</span>
+        <span className="wb-stat-value">{win.size}</span>
+      </div>
+      <div className="wb-stat">
+        <span className="wb-stat-label">已有</span>
+        <span className="wb-stat-value">{alreadyInWin}</span>
+      </div>
+      <div className="wb-stat">
+        <span className="wb-stat-label">待采</span>
+        <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
+          {unknown ? '—' : toCollect}
+        </span>
+      </div>
+    </div>
+  ) : null
+
   // ── 模块关着：不是"错误"，是带下一步动作的空态 ──────────────────────────
   if (enabled === false) {
     return (
@@ -512,73 +536,7 @@ export default function WorkbenchPage() {
 
         {/* ── 结果区：结果的主展示区（用户 2026-10-19 第 2 条）── */}
         <section className="wb-card wb-result" data-testid="workbench-result">
-          {running || (busy && !ranked) ? (
-            /* 进行中：有大百分比就给，没有就只表示"在动"（**不编造数字**） */
-            <div className="wb-busy" data-testid="workbench-progress" aria-live="polite">
-              <div className="wb-busy-head">
-                <b>{running ? '正在采集弹幕' : '正在分析'}</b>
-                {/* 打开任务浮窗（C 批）。顶栏通知（D 批）也会开同一个窗；
-                    这里留一个入口，避免"关掉浮窗就找不回来"。 */}
-                {running && (
-                  <button type="button" className="wb-btn wb-btn-ghost"
-                          data-testid="workbench-open-task"
-                          onClick={() => openTaskWindow()}>
-                    查看进度
-                  </button>
-                )}
-                {running && progress && progress.total > 0 && (
-                  <span className="wb-busy-pct">{pct}%</span>
-                )}
-              </div>
-              <div className={`wb-bar wb-bar-lg${running ? '' : ' is-indeterminate'}`}
-                   role="progressbar" aria-valuemin={0} aria-valuemax={100}
-                   aria-valuenow={running ? pct : undefined}>
-                <span className="wb-bar-fill" style={{ width: running ? `${pct}%` : '100%' }} />
-              </div>
-              <p className="wb-hint">
-                {running && progress
-                  ? `已处理 ${progress.done}/${progress.total || '?'} 场`
-                    + (progress.failed > 0 ? ` · 失败 ${progress.failed}` : '')
-                    + (progress.skipped > 0 ? ` · 跳过 ${progress.skipped}` : '')
-                    + (progress.current ? ` · 当前 ${progress.current}` : '')
-                  : `正在分析 ${slice.length} 场（约 ${estimateSecs(slice.length)} 秒）`
-                    + `，已用 ${busySecs} 秒${slice.length > BIG_WINDOW ? ' —— 大窗口请耐心等待' : ''}。`}
-              </p>
-
-              {/* 采集细粒度进度（2026-10-27）：阶段 / 翻页 / 吞吐 / ETA / 逐场状态 */}
-              {running && progress && (
-                <>
-                  <p className="wb-hint wb-hint-detail" data-testid="collect-detail">
-                    {progress.phase ? `阶段：${{ fetch: '拉取', aggregate: '解析', write: '落盘', verify: '校验', enumerate: '列场次' }[progress.phase] ?? progress.phase}` : '准备中'}
-                    {progress.phase === 'fetch' && (progress.pages ?? 0) > 0
-                      ? ` · 第 ${progress.page || 1}/${progress.pages} 页` : ''}
-                    {progress.records ? ` · 已拉 ${progress.records.toLocaleString()} 条` : ''}
-                    {progress.throughput?.records_per_s
-                      ? ` · ${progress.throughput.records_per_s.toLocaleString()} 条/秒` : ''}
-                    {progress.eta_s != null ? ` · 预计剩余 ${Math.round(progress.eta_s)} 秒` : ''}
-                  </p>
-
-                  {(progress.sessions_detail?.length ?? 0) > 0 && (
-                    <ul className="wb-sess" data-testid="collect-sessions">
-                      {progress.sessions_detail!.slice(-8).map((x) => (
-                        <li key={x.live_id} className={`wb-sess-item is-${x.state}`}>
-                          <span className="wb-sess-dot" />
-                          <span className="wb-sess-when">{x.start_at || x.live_id.slice(0, 8)}</span>
-                          <span className="wb-sess-state">
-                            {x.state === 'ok' ? '完成' : x.state === 'failed' ? '失败' : '进行中'}
-                          </span>
-                          <span className="wb-sess-rec">
-                            {x.records ? `${x.records.toLocaleString()} 条` : ''}
-                          </span>
-                          {x.reason && <span className="wb-sess-reason">{x.reason}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </>
-              )}
-            </div>
-          ) : ranked ? (
+          {ranked ? (
             <>
               <div className="wb-card-head">
                 <h2 className="wb-card-title">
@@ -596,24 +554,7 @@ export default function WorkbenchPage() {
                     · 入池 {ranked.total_in_pool.toLocaleString()} 人
                   </span>
                 </h2>
-                {win && (
-                  <div className="wb-stats" data-testid="workbench-preview">
-                    <div className="wb-stat">
-                      <span className="wb-stat-label">窗口场次</span>
-                      <span className="wb-stat-value">{win.size}</span>
-                    </div>
-                    <div className="wb-stat">
-                      <span className="wb-stat-label">已有</span>
-                      <span className="wb-stat-value">{alreadyInWin}</span>
-                    </div>
-                    <div className="wb-stat">
-                      <span className="wb-stat-label">待采</span>
-                      <span className={`wb-stat-value${toCollect ? ' is-accent' : ''}`}>
-                        {unknown ? '—' : toCollect}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                {statsPills}
               </div>
               {/* 被跳过的场次：显示**时间 + 标题**（不再暴露 live_id）；超过 2 条收进下拉（2026-10-25） */}
             {(ranked.skipped?.length ?? ranked.warnings?.length ?? 0) > 0 && (
@@ -706,6 +647,31 @@ export default function WorkbenchPage() {
                「分析完成后这里会出现哪些卡」，而不是看到一句孤零零的提示。
                ⚠️ 对比页要先有名单才能对比 ⇒ 它单独一张卡，不去假装有矩阵。 */
             <div data-testid="result-empty">
+              {/* 整页骨架照旧：标题行（含读数胶囊）+ 页签行（2026-10-28 第 1 条修订） */}
+              <div className="wb-card-head">
+                <h2 className="wb-card-title">
+                  分析结果
+                  <span className="wb-card-note" style={{ marginLeft: 8 }}>
+                    {running ? '正在采集弹幕…'
+                      : busy ? `正在分析… 已用 ${busySecs} 秒 / 预计 ${estimateSecs(slice.length)} 秒`
+                        : '尚未分析'}
+                  </span>
+                </h2>
+                {/* ⚠️ 空态**不显示**三枚采集读数（2026-10-23 用户口径：采集相关信息只在
+                    「直播与采集」卡里，结果区空态不重复一遍）。2026-10-28 的骨架化没有推翻它。 */}
+              </div>
+              <ResultTabs value={tab} onChange={onTab} />
+              {/* 进行中**不换面板**（用户口径：即使正在采集也不改变布局），
+                  只在这一条细线上表示"在动"；细节去弹窗/顶栏看。 */}
+              {(running || busy) && (
+                <div className="wb-bar wb-bar-thin" role="progressbar"
+                     aria-valuemin={0} aria-valuemax={100}
+                     aria-valuenow={running && (progress?.total ?? 0) > 0 ? pct : undefined}
+                     data-testid="result-thin-progress">
+                  <span className="wb-bar-fill"
+                        style={{ width: running && (progress?.total ?? 0) > 0 ? `${pct}%` : '100%' }} />
+                </div>
+              )}
               {tab === 'compare' ? (
                 <section className="wb-card wb-chart-card" data-testid="compare-empty">
                   <h3 className="wb-card-title">对比</h3>

@@ -489,24 +489,27 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
    */
   if (empty) {
     const dir = EMPTY_CARDS[tab as RankedTab] ?? []
+    /* 用户口径（2026-10-28 第 1 条修订）：空态**只保留一张卡**，标题跟随当前页签的
+       第一张（总览→核心度分层 / 互动→弹幕量贡献…）。卡框与有结果时同一套样式，
+       副标题点明"分析后这里会出现几张图"，用户仍能预期页面最终长什么样。 */
+    const card = dir[0]
     return (
       <div className="wb-charts" data-testid="result-charts-empty">
         <div className="wb-charts-viewport">
           <div className="wb-charts-pages" data-page={0}>
-            <div className="wb-charts-page">
-              {dir.map((c) => (
-                <section className="wb-card wb-chart-card" key={c.key}
-                         data-testid={`chart-empty-${c.key}`}>
-                  <h3 className="wb-card-title">
-                    {c.title}
-                    {c.note && <span className="wb-card-note" style={{ marginLeft: 8 }}>{c.note}</span>}
-                  </h3>
-                  <div className="wb-empty wb-empty-card">
-                    <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
-                    <p>{EMPTY_TEXT.hint}</p>
-                  </div>
-                </section>
-              ))}
+            <div className="wb-charts-page is-single">
+              <section className="wb-card wb-chart-card" data-testid="chart-empty">
+                <h3 className="wb-card-title">
+                  {card?.title ?? '分析结果'}
+                  <span className="wb-card-note" style={{ marginLeft: 8 }}>
+                    {dir.length > 1 ? `分析完成后这里会出现 ${dir.length} 张图` : card?.note}
+                  </span>
+                </h3>
+                <div className="wb-empty wb-empty-card">
+                  <p className="wb-empty-title">{EMPTY_TEXT.title}</p>
+                  <p>{EMPTY_TEXT.hint}</p>
+                </div>
+              </section>
             </div>
           </div>
         </div>

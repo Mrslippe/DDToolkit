@@ -93,17 +93,23 @@ describe('空态卡片与真实卡片的标题必须一致', () => {
 })
 
 describe('空态渲染：卡片框在、内容换成文本、不摆假控件', () => {
-  it('图表卡：该页签的卡**一次全列**（不翻页）+ 空态文本 + 没有箭头', async () => {
+  it('图表卡：**只保留一张**（标题跟随页签）+ 空态文本 + 没有箭头', async () => {
     await mount(<ResultCharts items={[]} pool={null} tab="overview" empty />)
     await flush()
     expect(host.querySelector('[data-testid="result-charts-empty"]')).toBeTruthy()
-    // 空态没有"第几页"的概念 ⇒ 该页签的卡全列出来（用户一眼看到将来会出现什么）
-    expect(titles()).toEqual(EMPTY_CARDS.overview.map((x) => x.title))
-    expect(host.querySelectorAll('.wb-chart-card').length).toBe(EMPTY_CARDS.overview.length)
+    // 用户 2026-10-28 第 1 条修订：单卡、标题跟随当前页签的第一张
+    expect(host.querySelectorAll('.wb-chart-card').length).toBe(1)
+    expect(titles()).toEqual([EMPTY_CARDS.overview[0].title])
     expect(host.textContent).toContain(EMPTY_TEXT.title)
     expect(host.textContent).toContain(EMPTY_TEXT.hint)
     expect(host.querySelector('[data-testid="charts-prev"]')).toBeNull()
     expect(host.querySelector('[data-testid="charts-next"]')).toBeNull()
+  })
+
+  it('换页签 ⇒ 空态单卡标题跟着换', async () => {
+    await mount(<ResultCharts items={[]} pool={null} tab="payment" empty />)
+    await flush()
+    expect(titles()).toEqual([EMPTY_CARDS.payment[0].title])
   })
 
   it('名单卡：保留标题与卡壳，不渲染表格/搜索/导出', async () => {

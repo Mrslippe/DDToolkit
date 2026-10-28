@@ -265,8 +265,8 @@ describe('数据分析工作台', () => {
     expect(name).toBe('弥月Mizuki')
     expect(since).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(until).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    // 进度那一行要出现
-    expect(q('[data-testid="workbench-progress"]')).not.toBeNull()
+    // 进度：不再是页面内的"大面板"，而是空态骨架顶部那一条细线（2026-10-28 修订）
+    expect(q('[data-testid="result-thin-progress"]')).not.toBeNull()
   })
 
   it('采集中会轮询进度（running ⇒ 至少查一次状态）', async () => {
@@ -368,26 +368,42 @@ describe('空态与页签（2026-10-23）', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
   }
 
-  it('★ 空态沿用有结果的卡片样式，内容换成空态文本（2026-10-28）', async () => {
+  it('★ 空态沿用有结果的整页骨架，内容换成空态文本（2026-10-28 修订）', async () => {
     await mount()
     const empty = q('[data-testid="result-empty"]')
     expect(empty).toBeTruthy()
-    // 卡片框在：图表两卡 + 名单卡（框架与有结果时一致）
+    // 整页骨架：标题行「分析结果」+ 读数胶囊 + 页签行 + 单张图表空态卡 + 名单空态卡
+    expect(empty!.textContent).toContain('分析结果')
+    expect(empty!.textContent).toContain('尚未分析')
+    expect(q('[data-testid="workbench-preview"]')).toBeNull()   // 采集读数不重复（2026-10-23 口径）
+    expect(q('[data-testid="tab-overview"]')).toBeTruthy()
     expect(q('[data-testid="result-charts-empty"]')).toBeTruthy()
-    expect(q('[data-testid="chart-empty-tiers"]')).toBeTruthy()
-    expect(q('[data-testid="chart-empty-strength"]')).toBeTruthy()
+    expect(q('[data-testid="chart-empty"]')).toBeTruthy()          // **只保留一张**卡
     expect(q('[data-testid="ranked-table-card"]')).toBeTruthy()
     expect(q('[data-testid="ranked-empty"]')).toBeTruthy()
-    // 内容换成空态文本
+    // 内容换成空态文本；标题跟随页签（总览 → 核心度分层）
     const text = empty!.textContent ?? ''
     expect(text).toContain('核心度分层')
     expect(text).toContain('暂无数据')
     expect(text).toContain('请先进行采集')
-    // 采集信息只在「直播与采集」卡里，结果区空态不该出现
-    expect(q('[data-testid="workbench-preview"]')).toBeNull()
     // 空态下没有表格行，也没有搜索/导出这些"点了没反应"的按钮
     expect(q('[data-testid="ranked-table"]')).toBeNull()
     expect(q('[data-testid="export-csv"]')).toBeNull()
+    // 没在跑的时候不该有细进度线
+    expect(q('[data-testid="result-thin-progress"]')).toBeNull()
+  })
+
+  it('★ 采集中：布局仍是空态骨架，只多一条细进度线（不换大面板）', async () => {
+    await mount()
+    await act(async () => {
+      q<HTMLButtonElement>('[data-testid="workbench-collect"]')!.click()
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(q('[data-testid="result-thin-progress"]')).toBeTruthy()
+    // 老的大进度面板已退役（进度细节在弹窗与顶栏）
+    expect(q('[data-testid="workbench-progress"]')).toBeNull()
+    expect(q('[data-testid="chart-empty"]')).toBeTruthy()
+    expect((q('[data-testid="result-empty"]')!.textContent ?? '')).toContain('正在采集弹幕')
   })
 
   it('★ 名单懒加载：点「加载更多」带 offset 并追加行', async () => {
