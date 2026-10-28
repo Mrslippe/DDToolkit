@@ -473,6 +473,7 @@ def load_window(
     since: str | None = None,
     until: str | None = None,
     live_ids: "Sequence[str] | None" = None,
+    on_progress: "Callable[[int, int, str], None] | None" = None,
 ) -> Window:
     """加载最近 `n` 场的窗口。
 
@@ -589,6 +590,13 @@ def load_window(
     total = max(1, len(sessions) - 1)
     ok: list[SessionRef] = []
     for idx, sr in enumerate(sessions):
+        # 逐场进度回调（2026-10-28）：分析任务化要显示"正在读第 i/n 场"。
+        # ⚠️ 回调**不许影响加载** —— 进度是旁路信息，报错了也不该让一次分析失败。
+        if on_progress is not None:
+            try:
+                on_progress(idx + 1, len(sessions), sr.start_at)
+            except Exception:  # noqa: BLE001
+                pass
         raw = _read_json(_raw_file(raw_dir, sr.live_id), warnings, "raw")
         if raw is None:
             warnings.append(f"跳过 live_id={sr.live_id}：raw 无法解析")

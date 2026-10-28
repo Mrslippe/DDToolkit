@@ -339,7 +339,8 @@ def _chart_data(win, table, payload: dict) -> dict[str, Any]:
 
 def _compute(vtuber_name: str, window: int, since: str | None = None,
              until: str | None = None,
-             live_ids: list[str] | None = None) -> dict[str, Any]:
+             live_ids: list[str] | None = None,
+             on_progress: Any = None) -> dict[str, Any]:
     """加载并算出三轴 + 强度 + 类型 + 标签。按 `(主播, 窗口, 区间)` 记忆化。"""
     v = _resolve(vtuber_name, _LAST_DB.get("db"))
     #: 清单进缓存键：同一区间但不同窗口切片是不同的分析（用元组，可哈希）
@@ -349,7 +350,8 @@ def _compute(vtuber_name: str, window: int, since: str | None = None,
         return hit
 
     try:
-        win = load_window(v, window, since=since, until=until, live_ids=live_ids)
+        win = load_window(v, window, since=since, until=until, live_ids=live_ids,
+                          on_progress=on_progress)
     except FanDataNotFound as exc:
         raise HTTPException(
             404,
@@ -464,6 +466,7 @@ def reset_state() -> None:
     clear_cache()
     _TASKS.clear()
     _STOP.clear()
+    _ANALYZE.clear()
 
 
 def _primary(payload: dict[str, Any], by: str) -> dict[str, float]:
@@ -648,6 +651,17 @@ def tasks_snapshot() -> dict[str, Any] | None:
             "who": f"{prog.vtuber} {tail}".strip(),
             "started_at": float(getattr(prog, "started_at", 0) or 0),
         }
+    for ap in list(_ANALYZE.values()):
+        if ap.get("state") != "running":
+            continue
+        total = int(ap.get("total") or 0)
+        done = int(ap.get("done") or 0)
+        tail = f"{done}/{total} 场" if total > 0 else str(ap.get("current") or "")
+        return {
+            "label": "分析名单",
+            "who": f"{ap.get('vtuber') or ''} {tail}".strip(),
+            "started_at": float(ap.get("started_at") or 0),
+        }
     return None
 
 
@@ -683,6 +697,74 @@ def cancel_collect(
 
 
 # ── 名单 ────────────────────────────────────────────────────────────────────
+# ── 分析任务化（2026-10-28）────────────────────────────────────────────────
+#: 分析进度：`subdir → {state, phase, done, total, current, error, ...}`。
+#: 与 `_TASKS`（采集）分开：两条链的载荷不同，混在一个 dict 里迟早张冠李戴。
+_ANALYZE: dict[str, dict[str, Any]] = {}
+
+
+@router.post("/fan/{vtuber}/analyze")
+async def start_analyze(
+    vtuber: str,
+    window: int = Query(DEFAULT_WINDOW, ge=MIN_WINDOW, le=MAX_WINDOW),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """后台跑一次分析（任务浮窗要看**逐场进度**才有意义）。
+
+    `/ranked` 照旧可用（同步、吃 `_CACHE`）；这条只是给浮窗一个能读进度的入口，
+    跑完结果照样落进 `_CACHE` ⇒ 用户点「完成」回到工作台会直接命中，不会重复算一遍。
+    """
+    v = _resolve(vtuber)
+    since, until = _range_or_none(since, until)
+    for cp in list(_TASKS.values()):
+        if getattr(cp, "state", "") == "running":
+            raise HTTPException(409, "正在采集弹幕，等它结束再分析")
+    for ap in _ANALYZE.values():
+        if ap.get("state") == "running":
+            raise HTTPException(409, "已有分析任务在运行，等它结束")
+
+    prog: dict[str, Any] = {
+        "vtuber": v.name, "window": window, "since": since, "until": until,
+        "state": "running", "phase": "load", "done": 0, "total": 0, "current": "",
+        "error": "", "started_at": time.time(), "finished_at": None,
+    }
+    _ANALYZE[v.subdir] = prog
+
+    def _on_prog(i: int, n: int, label: str) -> None:
+        # 读完最后一场就进"算分位/类型/标签"阶段（这一步没有细粒度进度，如实只给阶段）
+        prog.update(done=i, total=n, current=label,
+                    phase="compute" if i >= n else "load")
+
+    async def run() -> None:
+        try:
+            await asyncio.to_thread(_compute, v.name, window, since, until, None, _on_prog)
+            prog.update(state="done", phase="", finished_at=time.time())
+        except HTTPException as exc:
+            prog.update(state="failed", error=str(exc.detail), finished_at=time.time())
+        except Exception as exc:  # noqa: BLE001 —— 失败必须写进进度，别让浮窗永远转圈
+            prog.update(state="failed", error=f"{type(exc).__name__}: {exc}",
+                        finished_at=time.time())
+
+    asyncio.create_task(run())
+    return {"ok": True, "vtuber": v.name, "window": window,
+            "since": since, "until": until, "state": "running"}
+
+
+@router.get("/fan/analyze/status")
+def analyze_status(
+    vtuber: str | None = Query(None),
+    _: None = Depends(require_module),
+) -> dict[str, Any]:
+    """分析进度（形状与 `/fan/collect/status` 一致：`{"items": [...]}`）。"""
+    items = list(_ANALYZE.values())
+    if vtuber:
+        v = _resolve(vtuber)
+        items = [p for p in items if p.get("vtuber") == v.name]
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/fan/avatar/{uid}")
 async def fan_avatar(uid: str) -> Response:
     """按 uid 代理 B 站头像，落盘缓存。
