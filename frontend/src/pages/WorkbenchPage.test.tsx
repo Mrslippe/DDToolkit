@@ -13,6 +13,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetFanTask } from '../hooks/useFanTask'
 
 const fanVtubers = vi.fn()
 const fanSessions = vi.fn()
@@ -131,6 +132,9 @@ function q<T extends Element = HTMLElement>(sel: string): T | null {
 }
 
 beforeEach(() => {
+  // 采集任务是**模块级 store**（2026-10-28，B 批）：不重置就会"上一条还在跑，
+  // 这一条一挂载就看到一个进行中的任务"（实测 15 条用例连坐失败）。
+  resetFanTask()
   fanVtubers.mockReset().mockResolvedValue(VTUBERS)
   fanSessions.mockReset().mockResolvedValue(PREVIEW)
   fanCollect.mockReset().mockResolvedValue({ ok: true, vtuber: '弥月Mizuki',

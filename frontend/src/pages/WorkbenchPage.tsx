@@ -26,6 +26,9 @@ import ComparePanel from '../components/workbench/ComparePanel'
 import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
+import {
+  cancelCollect, dismissTask, startCollect as startCollectTask, useFanTask,
+} from '../hooks/useFanTask'
 import '../styles/workbench.css'
 
 /**
@@ -66,8 +69,6 @@ const TAB_BY = {
 
 /** 对比页不请求名单；其余页签按 `TAB_BY` 取口径。 */
 const byOf = (t: ResultTab) => TAB_BY[(t === 'compare' ? 'overview' : t) as RankedTab]
-/** 进度轮询间隔。采集一场 2~18 秒，1 秒一刷够用且不打满后端 */
-const POLL_MS = 1000
 
 /**
  * 把底层错误翻成能指导下一步的话。
@@ -108,7 +109,11 @@ export default function WorkbenchPage() {
   const [activityOwner, setActivityOwner] = useState<string>('')
   const [win, setWin] = useState<WindowRange | null>(null)
   const [preview, setPreview] = useState<FanSessionPreview | null>(null)
-  const [progress, setProgress] = useState<FanCollectProgress | null>(null)
+  /* 采集任务由**应用级 store** 持有（2026-10-28，B 批）：
+     关浮窗、切页签都不打断轮询；工作台只是它的一个消费者。
+     ⚠️ 进度可能属于**另一个 V**（跑着跑着切走了）⇒ 显示时用 `task.vtuber`，不要用 `picked`。 */
+  const task = useFanTask()
+  const progress = task.kind === 'collect' ? task.progress : null
   const [ranked, setRanked] = useState<FanRanked | null>(null)
   /** 当前 `ranked` 数据属于哪个页签：切页签后数据未到时，图表区不渲染（避免挂载两次） */
   const [rankedTab, setRankedTab] = useState<ResultTab>('overview')
@@ -199,7 +204,6 @@ export default function WorkbenchPage() {
     /* ⚠️ A1（2026-10-19）：**不要 setWin(null)**。
        一清空统计条就整行消失、等新数据回来又出现 —— 用户说的"刷新"就是这个。
        保留旧窗口值；新 `recent` 到达后滑杆会重新 emit 一次，自然替换。 */
-    setProgress(null)
     setRankedStale(true)          // 旧结果保留，但标注"基于旧区间"
     withNetRetry(() => api.fanActivity(picked, 400, { since: range.from, until: range.to }))
       .then((r) => { if (alive) { setActivity(r); setActivityOwner(picked) } })
@@ -225,26 +229,19 @@ export default function WorkbenchPage() {
     return () => { alive = false; window.clearTimeout(timer) }
   }, [enabled, picked, since, until, retryTick])
 
-  // 4) 采集进度轮询：只在 running 时开
+  // 4) 采集**结束的边沿**（轮询本身已搬到 `hooks/useFanTask.ts`，关浮窗/切页都不停）：
+  //    结束时刷新活动读数 + 弹一次结果。`finishedAt` 是任务级的，只变一次。
+  const finishedAt = task.finishedAt
   useEffect(() => {
-    if (progress?.state !== 'running') return
-    const t = window.setInterval(() => {
-      api.fanCollectStatus(picked)
-        .then((r) => {
-          const p = r.items[0] ?? null
-          setProgress(p)
-          if (p && p.state !== 'running') {
-            withNetRetry(() => api.fanActivity(picked)).then(setActivity).catch(() => {})
-            /* ⚠️ **采集与分析解耦**（2026-10-19 用户第 2 条）：以前这里会自动 `loadRanked()`，
-               用户没点「分析」就自己开始算。现在只弹采集结果，要不要分析由用户决定。 */
-            setSummary(p)
-          }
-        })
-        .catch(() => { /* 轮询失败不弹窗，下一拍再试 */ })
-    }, POLL_MS)
-    return () => window.clearInterval(t)
+    if (!finishedAt) return
+    const p = task.result
+    if (!p) return
+    withNetRetry(() => api.fanActivity(picked)).then(setActivity).catch(() => {})
+    /* ⚠️ **采集与分析解耦**（2026-10-19 用户第 2 条 + 2026-10-28 复核）：
+       这里只弹采集结果，要不要分析由用户决定。 */
+    setSummary(p)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress?.state, picked])
+  }, [finishedAt])
 
   /* ★ **窗口内的场次以"切片"为准，不以日期区间为准**（2026-10-19 用户发现
      「窗口 75 场 / 已有 77 场」）。窗口是按场次切的 75 条，换成日期区间去库里数会把
@@ -334,10 +331,7 @@ export default function WorkbenchPage() {
   const startCollectFor = useCallback(async (name: string): Promise<void> => {
     setErr(null)
     try {
-      await api.fanCollect(name, since, until, [])
-      setProgress({ vtuber: name, since, until, state: 'running',
-                    total: 0, done: 0, failed: 0, skipped: 0,
-                    current: '', message: '', elapsed: 0 })
+      await startCollectTask({ vtuber: name, since, until, liveIds: [], total: 0 })
     } catch (e) {
       setErr(friendly(e as Error))
     }
@@ -350,12 +344,12 @@ export default function WorkbenchPage() {
     try {
       /* 发**窗口切片**的场次清单：日期区间可能含边界日的额外场次，
          只有按清单采才能保证"采的就是窗口里那几场"。 */
-      await api.fanCollect(picked, since, until,
-        slice.filter((s) => !s.c && (s as { live_id?: string }).live_id)
-          .map((s) => ({ live_id: String((s as { live_id?: string }).live_id), start_at: s.at })))
-      setProgress({ vtuber: picked, since, until, state: 'running',
-                    total: preview?.to_collect ?? 0, done: 0, failed: 0,
-                    skipped: 0, current: '', message: '', elapsed: 0 })
+      await startCollectTask({
+        vtuber: picked, since, until,
+        liveIds: slice.filter((s) => !s.c && (s as { live_id?: string }).live_id)
+          .map((s) => ({ live_id: String((s as { live_id?: string }).live_id), start_at: s.at })),
+        total: preview?.to_collect ?? 0,
+      })
     } catch (e) {
       setErr(friendly(e as Error))
     } finally {
@@ -364,10 +358,10 @@ export default function WorkbenchPage() {
   }, [picked, since, until, preview, slice])
 
   const cancel = useCallback(async (): Promise<void> => {
-    try { await api.fanCollectCancel(picked) } catch (e) { setErr(friendly(e as Error)) }
-  }, [picked])
+    try { await cancelCollect() } catch (e) { setErr(friendly(e as Error)) }
+  }, [])
 
-  const running = progress?.state === 'running'
+  const running = task.state === 'running'
   /* ★ **窗口内的场次以"切片"为准，不以日期区间为准**（2026-10-19 用户发现
      「窗口 75 场 / 已有 77 场」）。
      窗口是**按场次**切的 75 条，但换成日期区间去库里数，会把**边界那两天整天**都算进去 ——
@@ -719,7 +713,9 @@ export default function WorkbenchPage() {
         )}
 
         {/* 采集结果弹窗（2026-10-19 用户第 2 条）：成功 / 跳过 / 失败 + **逐场失败原因** */}
-        <AlertDialog open={summary !== null} onOpenChange={(o) => { if (!o) setSummary(null) }}>
+        <AlertDialog open={summary !== null} onOpenChange={(o) => {
+          if (!o) { setSummary(null); dismissTask() }   // 关掉弹窗 = 这一次任务收尾
+        }}>
           <AlertDialogContent data-testid="collect-dialog">
             <AlertDialogHeader>
               <AlertDialogTitle>
