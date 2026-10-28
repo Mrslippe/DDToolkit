@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import {
@@ -57,9 +56,10 @@ export default function FanTaskDialog() {
       <DialogContent className="wb-task-dialog" data-testid="fan-task-dialog">
         <DialogHeader>
           <DialogTitle>
+            {/* ⚠️ 标题里**不放转圈图标**（2026-10-28 用户反馈：和标题挤/叠在一起）。
+                弹窗里已经有「已处理 12/25 场」+ 顶部进度条，转圈是第三条重复信息。 */}
             {title}
             {s.vtuber ? ` · ${s.vtuber}` : ''}
-            {running && <Loader2 className="size-3 animate-spin" aria-hidden />}
           </DialogTitle>
         </DialogHeader>
 
@@ -146,11 +146,15 @@ export default function FanTaskDialog() {
                   onClick={() => { closeTaskWindow(); dismissTask() }}>
             完成
           </button>
-          <button type="button" className="wb-btn" data-testid="task-analyze"
-                  disabled={running || s.state !== 'done'}
-                  onClick={() => { requestAnalyze(); navigate('/workbench') }}>
-            分析
-          </button>
+          {/* 「分析」只在**采集**浮窗里出现（2026-10-28 用户反馈：分析浮窗右下角不该再有分析）。
+              分析任务自己跑完就是跑完了，重算请回工作台再点一次。 */}
+          {s.kind !== 'analyze' && (
+            <button type="button" className="wb-btn" data-testid="task-analyze"
+                    disabled={running || s.state !== 'done'}
+                    onClick={() => { requestAnalyze(); navigate('/workbench') }}>
+              分析
+            </button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

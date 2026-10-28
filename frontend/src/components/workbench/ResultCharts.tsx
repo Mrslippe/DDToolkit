@@ -497,7 +497,9 @@ export default function ResultCharts({ items, pool, tab, attBins, charts, dataSt
       <div className="wb-charts" data-testid="result-charts-empty">
         <div className="wb-charts-viewport">
           <div className="wb-charts-pages" data-page={0}>
-            <div className="wb-charts-page is-single">
+            {/* ⚠️ **不加 `is-single`**（2026-10-28 用户口径：空态那张卡保持**半宽**，
+                与图二一致）。两列网格里只放一个卡片，天然占左半边。 */}
+            <div className="wb-charts-page">
               <section className="wb-card wb-chart-card" data-testid="chart-empty">
                 <h3 className="wb-card-title">
                   {card?.title ?? '分析结果'}

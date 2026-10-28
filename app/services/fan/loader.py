@@ -47,7 +47,7 @@ from typing import Any, Sequence, Callable, Iterable
 
 from app.services.fan.spam import is_spam, is_spam_across_sessions, level_for
 from app.services.fan.spam2 import Trace, feed, verdict
-from app.core.timecn import cn_day
+from app.core.timecn import CN_TZ, cn_day
 from app.core import config as _core_config
 from app.core.config import settings
 
@@ -462,6 +462,20 @@ def _as_float(raw: dict, key: str, warnings: list[str], where: str) -> float:
 _GUARD_RANK = {"舰长": 1, "提督": 2, "总督": 3}
 
 
+def _progress_label(start_at: str) -> str:
+    """逐场进度回调里的场次标签：**东八区 `MM-DD HH:mm`**（2026-10-28）。
+
+    库里 `start_at` 是 **UTC 且带微秒**；原样透给前端会显示成
+    `2026-10-09 16:01:14.892000` —— 既不是当地时间，也没必要精确到微秒。
+    口径按 `app/core/timecn.py`：分天/展示用东八区。
+    """
+    try:
+        dt = datetime.strptime(start_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        return dt.astimezone(CN_TZ).strftime("%m-%d %H:%M")
+    except Exception:  # noqa: BLE001 —— 标签格式异常绝不该影响加载
+        return start_at[:16]
+
+
 def load_window(
     vtuber: VtuberRef | str,
     n: int = 75,
@@ -594,7 +608,7 @@ def load_window(
         # ⚠️ 回调**不许影响加载** —— 进度是旁路信息，报错了也不该让一次分析失败。
         if on_progress is not None:
             try:
-                on_progress(idx + 1, len(sessions), sr.start_at)
+                on_progress(idx + 1, len(sessions), _progress_label(sr.start_at))
             except Exception:  # noqa: BLE001
                 pass
         raw = _read_json(_raw_file(raw_dir, sr.live_id), warnings, "raw")

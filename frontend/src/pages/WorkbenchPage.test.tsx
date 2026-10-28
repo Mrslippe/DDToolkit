@@ -209,9 +209,9 @@ describe('数据分析工作台', () => {
     const sel = q<HTMLElement>('[data-testid="workbench-vtuber"]')
     expect(sel).not.toBeNull()
     expect(sel!.textContent).toContain('弥月')   // 优先选已有数据的那个
-    // 2026-10-23：结果区空态**不再显示采集读数**（用户：没有分析结果前不要展示采集信息）。
-    // 采集相关信息只在「直播与采集」卡里 —— 这里断言"空态没有预览条"即可。
-    expect(q('[data-testid="workbench-preview"]')).toBeNull()
+    // 2026-10-28（覆盖 2026-10-23 那条）：结果区空态**也显示**三枚采集读数 ——
+    // 用户口径变成"空态要与有结果时同一套骨架"，读数胶囊属于骨架的一部分。
+    expect(q('[data-testid="workbench-preview"]')).not.toBeNull()
     // 2026-10-19 起这一行是**滑轨区间选择器**（不再是窗口首尾日期）
     expect(document.querySelector('[data-testid="range-trigger"]')).not.toBeNull()
     // 区间按钮已移到「直播与采集」卡右下角那一行（2026-10-19 用户第 2 条），
@@ -375,7 +375,7 @@ describe('空态与页签（2026-10-23）', () => {
     // 整页骨架：标题行「分析结果」+ 读数胶囊 + 页签行 + 单张图表空态卡 + 名单空态卡
     expect(empty!.textContent).toContain('分析结果')
     expect(empty!.textContent).toContain('尚未分析')
-    expect(q('[data-testid="workbench-preview"]')).toBeNull()   // 采集读数不重复（2026-10-23 口径）
+    expect(q('[data-testid="workbench-preview"]')).toBeTruthy()    // 空态也显示读数（2026-10-28 口径，覆盖 2026-10-23）
     expect(q('[data-testid="tab-overview"]')).toBeTruthy()
     expect(q('[data-testid="result-charts-empty"]')).toBeTruthy()
     expect(q('[data-testid="chart-empty"]')).toBeTruthy()          // **只保留一张**卡
