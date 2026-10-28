@@ -3,17 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const collect = vi.fn()
 const status = vi.fn()
 const cancel = vi.fn()
+const analyze = vi.fn()
+const analyzeStatus = vi.fn()
 
 vi.mock('../api/api', () => ({
   api: {
     fanCollect: (...a: unknown[]) => collect(...a),
     fanCollectStatus: (...a: unknown[]) => status(...a),
     fanCollectCancel: (...a: unknown[]) => cancel(...a),
+    fanAnalyzeStart: (...a: unknown[]) => analyze(...a),
+    fanAnalyzeStatus: (...a: unknown[]) => analyzeStatus(...a),
   },
 }))
 
 import {
-  POLL_MS, cancelCollect, dismissTask, fanTask, fanTaskRunning, resetFanTask, startCollect,
+  POLL_MS, cancelCollect, dismissTask, fanTask, fanTaskRunning, resetFanTask, startAnalyze,
+  startCollect,
 } from './useFanTask'
 
 /** 一拍进度（后端 `FanCollectProgress` 的最小形状） */
@@ -123,5 +128,44 @@ describe('useFanTask：任务状态在应用级', () => {
     dismissTask()
     expect(fanTask().state).toBe('idle')
     expect(fanTask().kind).toBeNull()
+  })
+})
+
+describe('useFanTask：分析任务（2026-10-28）', () => {
+  const A = { vtuber: '弥月Mizuki', window: 75, since: '2026-09-01', until: '2026-09-30' }
+
+  function aprog(over: Record<string, unknown> = {}) {
+    return {
+      vtuber: '弥月Mizuki', window: 75, since: '2026-09-01', until: '2026-09-30',
+      state: 'running', phase: 'load', done: 3, total: 75, current: '2026-09-12 22:00',
+      error: '', started_at: 1, finished_at: null, ...over,
+    }
+  }
+
+  beforeEach(() => {
+    analyze.mockReset().mockResolvedValue({ ok: true, vtuber: '弥月Mizuki', window: 75, state: 'running' })
+    analyzeStatus.mockReset().mockResolvedValue({ items: [aprog()], count: 1 })
+  })
+
+  it('kind = analyze，逐场进度映射成浮窗认识的形状', async () => {
+    await startAnalyze(A)
+    expect(analyze).toHaveBeenCalled()
+    expect(fanTask().kind).toBe('analyze')
+    expect(fanTask().state).toBe('running')
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    const p = fanTask().progress!
+    expect(p.done).toBe(3)
+    expect(p.total).toBe(75)
+    expect(p.phase).toBe('load')
+    expect(p.current).toContain('09-12')
+  })
+
+  it('结束 ⇒ done，失败 ⇒ failed 且带原因；跨类型互斥', async () => {
+    await startAnalyze(A)
+    await expect(startCollect(ARGS)).rejects.toThrow('已有任务正在运行')
+    analyzeStatus.mockResolvedValue({ items: [aprog({ state: 'done', done: 75 })], count: 1 })
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(fanTask().state).toBe('done')
+    expect(fanTask().result?.done).toBe(75)
   })
 })

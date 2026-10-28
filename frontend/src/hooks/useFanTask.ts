@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { api } from '../api/api'
-import type { FanCollectProgress } from '../api/types'
+import type { FanAnalyzeProgress, FanCollectProgress } from '../api/types'
 
 /**
  * 工作台的**采集任务**（2026-10-28，B 批）。
@@ -167,6 +167,76 @@ export async function startCollect(opts: {
 export async function cancelCollect(): Promise<void> {
   if (snap.kind !== 'collect' || snap.state !== 'running') return
   await api.fanCollectCancel(snap.vtuber)
+}
+
+/** 分析进度 → 浮窗认识的形状（浮窗只画，不想为两种任务写两套模板） */
+function asProgress(a: FanAnalyzeProgress): FanCollectProgress {
+  return {
+    vtuber: a.vtuber, since: a.since ?? '', until: a.until ?? '',
+    state: a.state === 'done' ? 'done' : a.state === 'failed' ? 'failed' : 'running',
+    total: a.total, done: a.done, failed: 0, skipped: 0,
+    current: a.current, message: a.error, elapsed: 0, phase: a.phase,
+    sessions_detail: [],
+  }
+}
+
+async function analyzeTick(vtuber: string): Promise<void> {
+  try {
+    const r = await api.fanAnalyzeStatus(vtuber)
+    const a = r.items[0] ?? null
+    if (!a) {
+      stopPolling()
+      emit({ state: 'done', progress: null, result: null, finishedAt: Date.now() })
+      return
+    }
+    if (a.state === 'running') {
+      emit({ progress: asProgress(a) })
+      return
+    }
+    stopPolling()
+    const state: FanTaskState = a.state === 'done' ? 'done' : 'failed'
+    emit({
+      progress: asProgress(a), result: asProgress(a), state, finishedAt: Date.now(),
+      error: state === 'failed' ? (a.error || '分析失败（没有更多信息）') : null,
+    })
+  } catch {
+    /* 同采集：轮询失败不结束任务，下一拍再试 */
+  }
+}
+
+/**
+ * 发起分析（2026-10-28）。
+ *
+ * ⚠️ **分析没有取消**：后端是纯计算，没有 `_STOP` 那样的中断点；前端「取消」按钮
+ * 在分析任务上是灰的（见 `FanTaskDialog`）。要说清楚，别让用户以为点了会立刻停。
+ */
+export async function startAnalyze(opts: {
+  vtuber: string
+  window: number
+  since: string
+  until: string
+}): Promise<void> {
+  if (snap.state === 'running') throw new Error('已有任务正在运行，等它结束或先取消')
+  stopPolling()
+  const stub: FanCollectProgress = {
+    vtuber: opts.vtuber, since: opts.since, until: opts.until, state: 'running',
+    total: 0, done: 0, failed: 0, skipped: 0,
+    current: '', message: '', elapsed: 0, phase: 'load',
+  }
+  emit({
+    kind: 'analyze', vtuber: opts.vtuber, since: opts.since, until: opts.until,
+    state: 'running', progress: stub, error: null, finishedAt: null, result: null,
+  })
+  try {
+    await api.fanAnalyzeStart(opts.vtuber,
+      { window: opts.window, since: opts.since || undefined, until: opts.until || undefined })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    emit({ state: 'failed', error: msg, finishedAt: Date.now() })
+    throw e
+  }
+  stopPolling()
+  timer = setInterval(() => { void analyzeTick(opts.vtuber) }, POLL_MS)
 }
 
 /** 关掉浮窗/收起提示时清空（**只对已结束的任务生效**，运行中不许清） */

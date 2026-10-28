@@ -26,6 +26,8 @@ import {
 
 const PHASE_TEXT: Record<string, string> = {
   enumerate: '列场次', fetch: '拉取', aggregate: '解析', write: '落盘', verify: '校验',
+  // 分析侧只有两个阶段（2026-10-28）：读盘逐场、之后是纯计算（没细粒度进度，不编数字）
+  load: '读窗口', compute: '算分位 / 类型 / 标签',
 }
 
 export default function FanTaskDialog() {
@@ -132,7 +134,11 @@ export default function FanTaskDialog() {
 
         <div className="wb-task-foot">
           <button type="button" className="wb-btn wb-btn-ghost" data-testid="task-cancel"
-                  disabled={!running || busyCancel} onClick={() => void onCancel()}>
+                  disabled={!running || busyCancel || s.kind === 'analyze'}
+                  title={s.kind === 'analyze'
+                    ? '分析是纯计算，没有中断点：点取消也要等当前阶段算完（后端暂不提供取消）'
+                    : undefined}
+                  onClick={() => void onCancel()}>
             取消
           </button>
           <button type="button" className="wb-btn wb-btn-ghost" data-testid="task-done"

@@ -1585,6 +1585,24 @@ export interface FanCollectSessionDetail {
   ms?: number
 }
 
+/** 后台分析任务的进度（2026-10-28）：只有 `load`（逐场）与 `compute` 两个阶段 */
+export interface FanAnalyzeProgress {
+  vtuber: string
+  window: number
+  since: string | null
+  until: string | null
+  state: 'running' | 'done' | 'failed'
+  /** `load` = 逐场读盘（有 done/total）；`compute` = 建池/分位/类型/标签（无细粒度进度） */
+  phase: '' | 'load' | 'compute'
+  done: number
+  total: number
+  /** 当前在读的场次（开播时间） */
+  current: string
+  error: string
+  started_at: number
+  finished_at: number | null
+}
+
 export interface FanCollectProgress {
   vtuber: string
   since: string

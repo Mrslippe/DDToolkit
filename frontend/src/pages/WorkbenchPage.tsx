@@ -27,7 +27,8 @@ import MemberDrawer from '../components/workbench/MemberDrawer'
 import WindowSlider, { type WindowRange } from '../components/workbench/WindowSlider'
 import { withNetRetry } from '../utils/netRetry'
 import {
-  cancelCollect, dismissTask, openTaskWindow, startCollect as startCollectTask, useFanTask,
+  cancelCollect, dismissTask, openTaskWindow, startAnalyze as startAnalyzeTask,
+  startCollect as startCollectTask, useFanTask,
 } from '../hooks/useFanTask'
 import '../styles/workbench.css'
 
@@ -235,6 +236,12 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (!finishedAt) return
     const p = task.result
+    /* 分析在后台算完（2026-10-28）：结果已在后端 `_CACHE` 里 ⇒ 这里只是**取回来**。
+       ⚠️ 仍然不自动分析采集结果 —— 这是"分析结束了要显示"，不是"采集完了自己分析"。 */
+    if (task.kind === 'analyze') {
+      void loadRanked('strength', 0, false, tagFilterRef.current)
+      return
+    }
     if (!p) return
     withNetRetry(() => api.fanActivity(picked)).then(setActivity).catch(() => {})
     /* ⚠️ **采集与分析解耦**（2026-10-19 用户第 2 条 + 2026-10-28 复核）：
@@ -483,10 +490,14 @@ export default function WorkbenchPage() {
                   <FloatPill size="md" shape="text" disabled={!win || busy || running}
                              onClick={() => {
             if (slice.length > BIG_WINDOW) { setBigWinAsk(slice.length); return }
-            // 立刻回到"分析态"（2026-10-25 用户口径）：否则新窗口算完之前，
-            // 屏幕上一直是**旧窗口**的结果，看起来像"点了没反应"
+            /* 分析也走**应用级任务**（2026-10-28，第四批）：这样它才有逐场进度、
+               才能在顶栏显示、才能关掉浮窗继续跑。后端算完结果落进 `_CACHE`，
+               所以 `finishedAt` 那一拍再 `loadRanked` 是**取缓存**、不会重算。
+               ⚠️ 与采集一致：**不自动弹浮窗**，进度在顶栏，点顶栏才开。 */
             setTab('overview'); setRows([]); setHasMore(false); setRanked(null)
-            void loadRanked('strength', 0, false, tagFilterRef.current)
+            void startAnalyzeTask({
+              vtuber: picked, window: win?.size ?? 75, since, until,
+            }).catch((e: Error) => setErr(friendly(e)))
           }}
                              data-testid="workbench-load">
                     分析

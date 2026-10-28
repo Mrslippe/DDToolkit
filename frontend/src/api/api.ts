@@ -1,6 +1,6 @@
 import type {
   FanSortBy,
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti, FanCommentScan, FanCommentOverlap } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodApplyOut, VodCandidatesResult, VodClearOut, VodScanIn, VodScanResult, VodSourceList, VodAccountProfilesOut, XhsCookieSaved, FanVtuberList, FanSessionPreview, FanCollectProgress, FanAnalyzeProgress, FanRanked, FanSearchHit, FanMemberDetail, FanProfile, FanActivity, FanPurgeIn, FanPurgeResult, FanCompareMulti, FanCommentScan, FanCommentOverlap } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -1095,6 +1095,23 @@ export const api = {
   fanCollectCancel: (name: string) =>
     request<{ ok: boolean }>(
       `/fan/collect/cancel?vtuber=${encodeURIComponent(name)}`, { method: 'POST' }),
+  /**
+   * 后台跑一次分析（2026-10-28）：任务浮窗要看**逐场进度**才需要它。
+   * `/ranked` 照旧同步可用；这条跑完结果也落进后端 `_CACHE` ⇒ 回工作台直接命中缓存。
+   */
+  fanAnalyzeStart: (name: string, opts: { window?: number; since?: string; until?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts.window) qs.set('window', String(opts.window))
+    if (opts.since) qs.set('since', opts.since)
+    if (opts.until) qs.set('until', opts.until)
+    const tail = qs.toString() ? `?${qs.toString()}` : ''
+    return request<{ ok: boolean; vtuber: string; window: number; state: string }>(
+      `/fan/${encodeURIComponent(name)}/analyze${tail}`, { method: 'POST' })
+  },
+  /** 分析进度（形状与采集一致：`{items: [...]}`） */
+  fanAnalyzeStatus: (name?: string) =>
+    request<{ items: FanAnalyzeProgress[]; count: number }>(
+      `/fan/analyze/status${name ? `?vtuber=${encodeURIComponent(name)}` : ''}`),
   /** 名单。**`by` 必填** —— 后端不给默认口径（缺了 400） */
   /** 导出名单 CSV（2026-10-28）。走后端保证与页面同口径；因为要带 token 头，走 fetch → Blob。 */
   fanRankedCsv: async (name: string, by: FanSortBy,
